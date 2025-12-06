@@ -192,7 +192,7 @@ export default function MessageList({ messages, currentUser, roomId, socket }) {
                                     
                                     {/* Status Icon (Only for own messages) */}
                                     {isMe && (
-                                        <span className="inline-block ml-2 align-middle">
+                                        <span className="inline-block ml-2 align-middle translate-y-0.5">
                                             {msg.status === 'sending' && (
                                                 <span className="material-symbols-outlined text-[10px] animate-spin">progress_activity</span>
                                             )}

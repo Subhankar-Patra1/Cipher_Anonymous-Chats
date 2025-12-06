@@ -34,9 +34,15 @@ export default function MessageInput({ onSend, disabled }) {
     }, []);
 
     const handleSubmit = (e) => {
-        e.preventDefault();
+        if (e) e.preventDefault();
+        
+        // 1. Update handleSubmit() so it ALWAYS reads the actual DOM input
+        // Read current content from DOM to avoid stale state
+        const domHtml = editorRef.current?.innerHTML || "";
+        
+        // Use domHtml for checks
         // Parse HTML to Text with Unicode
-        let content = html;
+        let content = domHtml;
         if (!content.trim()) return;
 
         // Create temp element to extract text and handle emoji imgs
@@ -56,7 +62,11 @@ export default function MessageInput({ onSend, disabled }) {
 
         if (plainText) {
             onSend(plainText);
+            // 2. After sending, clear BOTH the state and the DOM editor
             setHtml('');
+            if (editorRef.current) {
+                editorRef.current.innerHTML = "";
+            }
             setShowEmoji(false);
             lastRange.current = null; // Reset selection
         }
@@ -82,22 +92,31 @@ export default function MessageInput({ onSend, disabled }) {
 
         document.execCommand('insertHTML', false, imageTag);
         
-        // Update stored selection after insert (optional, but good practice if keeping picker open)
-        // But with setShowEmoji(false) it matters less.
-        // If we kept picker open, we'd need to re-save the new range.
         saveSelection(); 
     };
 
     const handleChange = (evt) => {
-        setHtml(evt.target.value);
+        // 4. Fix handleChange to properly keep state in sync
+        const newHtml = evt.target.value ?? evt.target.innerHTML;
+        setHtml(newHtml);
         saveSelection(); // Save after typing
     };
 
     const handlePaste = (e) => {
+        // 3. Pasted text should be inserted exactly as typed
         e.preventDefault();
-        const text = e.clipboardData.getData('text/plain');
-        document.execCommand('insertText', false, text);
+        const text = e.clipboardData.getData("text");
+        document.execCommand('insertText', false, text); // insertTextAsIs implementation
         saveSelection();
+    };
+
+    const handleKeyDown = (e) => {
+        // 3. Fix Enter key behavior in the ContentEditable
+        if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+            e.preventDefault();
+            handleSubmit(); // DO NOT rely on event or state logic inside specific to event
+        }
+        // Shift + Enter = default newline behavior
     };
 
     return (
@@ -138,12 +157,7 @@ export default function MessageInput({ onSend, disabled }) {
                             onPaste={handlePaste}
                             onKeyUp={saveSelection} // Track arrow keys
                             onMouseUp={saveSelection} // Track clicks
-                            onKeyDown={(e) => {
-                                if (e.key === 'Enter' && !e.shiftKey) {
-                                    e.preventDefault();
-                                    handleSubmit(e);
-                                }
-                            }}
+                            onKeyDown={handleKeyDown}
                             className="w-full text-slate-100 pl-4 pr-2 py-3 focus:outline-none min-h-[48px] max-h-[150px] overflow-y-auto whitespace-pre-wrap break-words custom-scrollbar"
                             tagName="div"
                         />
