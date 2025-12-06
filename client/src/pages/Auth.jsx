@@ -64,6 +64,27 @@ export default function Auth() {
             if (!res.ok) throw new Error(data.error || 'Something went wrong');
             
             login(data.token, data.user);
+
+            // Check for pending invite
+            const pendingInvite = localStorage.getItem('pendingInvite');
+            if (pendingInvite) {
+                try {
+                    const { type, value } = JSON.parse(pendingInvite);
+                    localStorage.removeItem('pendingInvite');
+                    
+                    if (type === 'group') {
+                        navigate(`/dashboard?joinCode=${value}`);
+                    } else if (type === 'direct') {
+                        navigate(`/dashboard?chatUser=${value}`);
+                    } else {
+                        navigate('/');
+                    }
+                    return;
+                } catch (e) {
+                    console.error('Invalid pending invite', e);
+                }
+            }
+
             navigate('/');
         } catch (err) {
             setError(err.message);
