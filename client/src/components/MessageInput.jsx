@@ -81,7 +81,8 @@ export default function MessageInput({ onSend, disabled, replyTo, setReplyTo }) 
         plainText = plainText.trimEnd();
 
         if (plainText) {
-            onSend(plainText);
+            const content = plainText.toString(); // Ensure string
+            onSend(content);
             // 2. After sending, clear BOTH the state and the DOM editor
             setHtml('');
             if (editorRef.current) {

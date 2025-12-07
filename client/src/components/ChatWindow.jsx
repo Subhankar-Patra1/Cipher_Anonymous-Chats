@@ -93,25 +93,32 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
                         }
                     }
 
-                    // Check for optimistic message to replace
-                    // We match by content and user_id, ensuring unique replacement if possible
-                    // Ideally we'd use a tempId from client, but purely content matching for now is "okay" for this scope
-                    // taking the last one that matches
-                    const reversedIndex = [...prev].reverse().findIndex(m => 
-                        m.status === 'sending' && 
-                        m.content === processedMsg.content && 
-                        m.user_id === processedMsg.user_id
-                    );
+                    // Check for optimistic message to replace using tempId if available
+                    // Fallback to content matching if no tempId (backward compatibility)
+                    let optimisticIndex = -1;
+
+                    if (processedMsg.tempId) {
+                         optimisticIndex = prev.findIndex(m => m.id === processedMsg.tempId);
+                    } else {
+                        // Fallback: match by content and user_id (reversed to find latest)
+                        const reversedIndex = [...prev].reverse().findIndex(m => 
+                            m.status === 'sending' && 
+                            m.content === processedMsg.content && 
+                            m.user_id === processedMsg.user_id
+                        );
+                        if (reversedIndex !== -1) {
+                            optimisticIndex = prev.length - 1 - reversedIndex;
+                        }
+                    }
                     
-                    if (reversedIndex !== -1) {
-                        const index = prev.length - 1 - reversedIndex;
+                    if (optimisticIndex !== -1) {
                         const newMsgs = [...prev];
-                        // Preserve replyTo from the optimistic message if the server message doesn't have it (or if checking against temp)
+                        // Preserve replyTo from the optimistic message if the server message doesn't have it
                         const preservedMsg = { 
                             ...processedMsg, 
-                            replyTo: processedMsg.replyTo || prev[index].replyTo 
+                            replyTo: processedMsg.replyTo || prev[optimisticIndex].replyTo 
                         };
-                        newMsgs[index] = preservedMsg; // Replace with real message
+                        newMsgs[optimisticIndex] = preservedMsg; // Replace with real message
                         return newMsgs;
                     }
                     return [...prev, processedMsg];
@@ -153,8 +160,9 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
     const handleSend = (content, replyToMsg) => { // [MODIFY] accept replyToMsg
         if (socket && !isExpired) {
             // Optimistic Update
+            const tempId = `temp-${Date.now()}`;
             const tempMsg = {
-                id: `temp-${Date.now()}`,
+                id: tempId,
                 room_id: room.id,
                 user_id: user.id,
                 content,
@@ -169,7 +177,8 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
             socket.emit('send_message', { 
                 roomId: room.id, 
                 content,
-                replyToMessageId: replyToMsg ? replyToMsg.id : null // [NEW] send ID
+                replyToMessageId: replyToMsg ? replyToMsg.id : null,
+                tempId 
             });
             setReplyTo(null); // [NEW] Clear reply after sending
         }

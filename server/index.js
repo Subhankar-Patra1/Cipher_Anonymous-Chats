@@ -104,7 +104,7 @@ io.on('connection', async (socket) => {
         }
     });
 
-    socket.on('send_message', async ({ roomId, content, replyToMessageId }) => {
+    socket.on('send_message', async ({ roomId, content, replyToMessageId, tempId }) => {
         try {
             // Verify membership and expiry
             const roomRes = await db.query('SELECT * FROM rooms WHERE id = $1', [roomId]);
@@ -140,7 +140,8 @@ io.on('connection', async (socket) => {
                     reply_to_message_id: info.reply_to_message_id, // Send back explicitly
                     created_at: info.created_at,
                     username: socket.user.username,
-                    display_name: user ? user.display_name : socket.user.display_name
+                    display_name: user ? user.display_name : socket.user.display_name,
+                    tempId: tempId // Return the tempId to the client
                 };
 
                 io.to(`room:${roomId}`).emit('new_message', message);
