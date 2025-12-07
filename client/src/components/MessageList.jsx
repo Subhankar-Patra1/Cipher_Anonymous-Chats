@@ -182,30 +182,32 @@ export default function MessageList({ messages, currentUser, roomId, socket }) {
                                 )}
                                 
                                 <div className={`
-                                    px-4 py-2.5 shadow-md text-sm leading-relaxed break-words relative overflow-hidden
+                                    px-4 py-3 shadow-md text-sm leading-relaxed break-words relative overflow-hidden whitespace-pre-wrap
                                     ${isMe 
                                         ? 'bg-violet-600 text-white rounded-2xl rounded-tr-sm' 
                                         : 'bg-slate-800 text-slate-200 rounded-2xl rounded-tl-sm border border-slate-700'
                                     }
                                 `}>
-                                    {renderEmoji(msg.content)}
+                                    <p className="pr-10">
+                                        {renderEmoji(msg.content)}
+                                    </p>
                                     
                                     {/* Status Icon (Only for own messages) */}
                                     {isMe && (
-                                        <span className="inline-block ml-2 align-middle translate-y-0.5">
+                                        <div className="absolute bottom-1 right-3 flex items-center gap-1 text-violet-200/80">
                                             {msg.status === 'sending' && (
                                                 <span className="material-symbols-outlined text-[10px] animate-spin">progress_activity</span>
                                             )}
                                             {msg.status === 'sent' && ( // Default DB status
-                                                <span className="material-symbols-outlined text-[12px]">check</span>
+                                                <span className="material-symbols-outlined text-[14px]">check</span>
                                             )}
                                             {msg.status === 'delivered' && ( // If we implement delivered
-                                                <span className="material-symbols-outlined text-[12px]">check_circle</span> 
+                                                <span className="material-symbols-outlined text-[14px]">check_circle</span> 
                                             )}
                                             {msg.status === 'seen' && (
-                                                <span className="material-symbols-outlined text-[12px] text-white font-bold filled">check_circle</span>
+                                                <span className="material-symbols-outlined text-[14px] text-white font-bold filled">done_all</span>
                                             )}
-                                        </span>
+                                        </div>
                                     )}
                                 </div>
                                 

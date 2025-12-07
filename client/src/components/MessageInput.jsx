@@ -57,8 +57,28 @@ export default function MessageInput({ onSend, disabled }) {
             const textNode = document.createTextNode(alt);
             img.parentNode.replaceChild(textNode, img);
         }
+
+        // Fix: textContent ignores <br> tags, so we must manually replace them with newlines
+        // to prevent the "one long line" issue.
+        const brs = tempDiv.getElementsByTagName('br');
+        while (brs.length > 0) {
+            const br = brs[0];
+            const newline = document.createTextNode('\n');
+            br.parentNode.replaceChild(newline, br);
+        }
+
+        // Handle divs that might be used for lines in some browsers
+        // (Optional: depending on how contentEditable behaves)
         
-        const plainText = tempDiv.innerText.trim();
+        // IMPORTANT: use textContent to preserve \n from <br>, <div>, etc.
+        let plainText = tempDiv.textContent || "";
+
+        // normalize CRLF to LF
+        plainText = plainText.replace(/\r\n/g, "\n");
+
+        // do NOT collapse whitespace or replace "\n" with spaces
+        // just remove trailing whitespace:
+        plainText = plainText.trimEnd();
 
         if (plainText) {
             onSend(plainText);
