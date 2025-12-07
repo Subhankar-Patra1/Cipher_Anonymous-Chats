@@ -1,3 +1,9 @@
+const dns = require('dns');
+// Force IPv4 for database connection to avoid ENETUNREACH
+if (dns.setDefaultResultOrder) {
+    dns.setDefaultResultOrder('ipv4first');
+}
+
 require('dotenv').config();
 const express = require('express');
 const http = require('http');
