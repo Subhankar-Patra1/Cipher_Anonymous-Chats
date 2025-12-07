@@ -72,7 +72,11 @@ router.delete('/:id/for-everyone', async (req, res) => {
         const roomRes = await db.query('SELECT room_id FROM messages WHERE id = $1', [messageId]);
         if (roomRes.rows[0]) {
              const io = req.app.get('io');
-             io.to(`room:${roomRes.rows[0].room_id}`).emit('message_deleted', { messageId });
+             io.to(`room:${roomRes.rows[0].room_id}`).emit('message_deleted', { 
+                 messageId,
+                 is_deleted_for_everyone: true,
+                 content: ""
+             });
         }
 
         res.json({ success: true });

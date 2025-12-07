@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useNavigate } from 'react-router-dom';
+import SpinLoading from '../components/SpinLoading';
 
 export default function Auth() {
     const [view, setView] = useState('login'); // 'login', 'signup', 'recovery', 'success'
@@ -8,6 +9,8 @@ export default function Auth() {
     const [error, setError] = useState('');
     const [generatedRecoveryCode, setGeneratedRecoveryCode] = useState('');
     const [pendingLogin, setPendingLogin] = useState(null); // Store login data temporarily
+    const [isLoading, setIsLoading] = useState(false);
+    const [isSubmitting, setIsSubmitting] = useState(false);
     const { login } = useAuth();
     const navigate = useNavigate();
 
@@ -59,10 +62,17 @@ export default function Auth() {
     const handleSubmit = async (e) => {
         e.preventDefault();
         setError('');
+        setIsSubmitting(true);
 
         if (view === 'signup') {
-            if (usernameStatus === 'taken') return setError('Username is already taken');
-            if (!passwordValid) return setError('Password does not meet all requirements');
+            if (usernameStatus === 'taken') {
+                setIsSubmitting(false);
+                return setError('Username is already taken');
+            }
+            if (!passwordValid) {
+                setIsSubmitting(false);
+                return setError('Password does not meet all requirements');
+            }
         }
 
         try {
@@ -82,6 +92,7 @@ export default function Auth() {
                 setView('login');
                 setFormData(prev => ({ ...prev, password: '', recoveryCode: '', newPassword: '' }));
                 alert('Password reset successfully! Please login.'); // Simple feedback for now
+                setIsSubmitting(false);
                 return;
             }
 
@@ -102,6 +113,7 @@ export default function Auth() {
                 setGeneratedRecoveryCode(data.recoveryCode);
                 setPendingLogin({ token: data.token, user: data.user });
                 setView('success');
+                setIsSubmitting(false);
                 return;
             }
 
@@ -125,6 +137,7 @@ export default function Auth() {
             navigate('/');
         } catch (err) {
             setError(err.message);
+            setIsSubmitting(false);
         }
     };
 
@@ -209,12 +222,15 @@ export default function Auth() {
                             <button
                                 onClick={() => {
                                     if (pendingLogin) {
-                                        login(pendingLogin.token, pendingLogin.user);
-                                        // Navigation handled by PublicRoute in App.jsx
+                                        setIsLoading(true);
+                                        setTimeout(() => {
+                                            login(pendingLogin.token, pendingLogin.user);
+                                            // Navigation handled by PublicRoute in App.jsx
+                                        }, 2000);
                                     } else {
                                         navigate('/');
                                     }
-                                }} 
+                                }}  
                                 className="w-full bg-slate-800 hover:bg-slate-700 text-white font-bold py-3.5 rounded-xl transition-all duration-200"
                             >
                                 I have saved it, Continue
@@ -400,15 +416,24 @@ export default function Auth() {
                             
                             <button 
                                 type="submit" 
-                                disabled={view === 'signup' && (usernameStatus !== 'available' || !passwordValid)}
+                                disabled={isSubmitting || (view === 'signup' && (usernameStatus !== 'available' || !passwordValid))}
                                 className={`w-full font-bold py-3.5 rounded-xl transition-all duration-200 shadow-lg flex items-center justify-center gap-2 ${
-                                    view === 'signup' && (usernameStatus !== 'available' || !passwordValid)
+                                    isSubmitting || (view === 'signup' && (usernameStatus !== 'available' || !passwordValid))
                                     ? 'bg-slate-800 text-slate-500 cursor-not-allowed'
                                     : 'bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 text-white shadow-violet-500/20 transform hover:scale-[1.01] active:scale-[0.99]'
                                 }`}
                             >
-                                {view === 'login' ? 'Sign In' : view === 'signup' ? 'Create Account' : 'Reset Password'}
-                                <span className="material-symbols-outlined text-lg">arrow_forward</span>
+                                {isSubmitting ? (
+                                    <>
+                                        <span className="material-symbols-outlined text-lg animate-spin">progress_activity</span>
+                                        {view === 'login' ? 'Signing In...' : view === 'signup' ? 'Creating Account...' : 'Resetting...'}
+                                    </>
+                                ) : (
+                                    <>
+                                        {view === 'login' ? 'Sign In' : view === 'signup' ? 'Create Account' : 'Reset Password'}
+                                        <span className="material-symbols-outlined text-lg">arrow_forward</span>
+                                    </>
+                                )}
                             </button>
                         </form>
                     )}
@@ -436,6 +461,7 @@ export default function Auth() {
                 </div>
                 </div>
             </div>
+            {isLoading && <SpinLoading />}
         </div>
     );
 }

@@ -129,9 +129,9 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
             }
         };
 
-        const handleMessageDeleted = ({ messageId }) => {
+        const handleMessageDeleted = ({ messageId, is_deleted_for_everyone, content }) => {
             setMessages(prev => prev.map(msg => 
-                msg.id === messageId ? { ...msg, is_deleted_for_everyone: true } : msg
+                String(msg.id) === String(messageId) ? { ...msg, is_deleted_for_everyone: true, content: "" } : msg
             ));
         };
 

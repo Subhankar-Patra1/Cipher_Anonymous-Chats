@@ -240,7 +240,7 @@ export default function Dashboard() {
     };
 
     return (
-        <div className={`flex h-screen bg-gray-900 text-white overflow-hidden ${isResizing ? 'select-none cursor-col-resize' : ''}`}>
+        <div className={`flex h-screen bg-gray-900 text-white overflow-hidden ${isResizing ? 'select-none cursor-col-resize' : ''} animate-dashboard-entry`}>
             {/* Mobile: Sidebar hidden if activeRoom exists. Desktop: Always visible */}
             <div 
                 className={`
