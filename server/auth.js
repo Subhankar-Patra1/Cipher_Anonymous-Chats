@@ -41,7 +41,7 @@ router.post('/signup', async (req, res) => {
             return res.status(400).json({ error: 'Username taken' });
         }
         console.error("Signup error:", error);
-        res.status(500).json({ error: 'Server error' });
+        res.status(500).json({ error: error.message });
     }
 });
 
@@ -60,7 +60,7 @@ router.post('/login', async (req, res) => {
         res.json({ token, user: { id: user.id, username: user.username, display_name: user.display_name } });
     } catch (error) {
         console.error("Login error:", error);
-        res.status(500).json({ error: 'Server error' });
+        res.status(500).json({ error: error.message });
     }
 });
 
@@ -90,7 +90,7 @@ router.post('/recover-account', async (req, res) => {
         res.json({ success: true, message: 'Password updated successfully' });
     } catch (error) {
         console.error("Recovery error:", error);
-        res.status(500).json({ error: 'Server error' });
+        res.status(500).json({ error: error.message });
     }
 });
 
@@ -134,7 +134,7 @@ router.get('/search', async (req, res) => {
         res.json(rows);
     } catch (error) {
         console.error("Search error:", error);
-        res.status(500).json({ error: 'Server error' });
+        res.status(500).json({ error: error.message });
     }
 });
 
@@ -147,7 +147,7 @@ router.get('/check-username', async (req, res) => {
         res.json({ available: rows.length === 0 });
     } catch (error) {
         console.error("Check username error:", error);
-        res.status(500).json({ error: 'Server error' });
+        res.status(500).json({ error: error.message });
     }
 });
 
