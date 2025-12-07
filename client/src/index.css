@@ -134,20 +134,26 @@
 
 /* Reply Highlight Animation */
 .reply-highlight {
-  animation: replyPulse 1.6s ease-out;
+  animation: shake 0.5s ease-in-out both, replyPulse 1.6s ease-out both;
+}
+
+@keyframes shake {
+  0%, 100% { transform: translateX(0); }
+  10%, 30%, 50%, 70%, 90% { transform: translateX(-4px); }
+  20%, 40%, 60%, 80% { transform: translateX(4px); }
 }
 
 @keyframes replyPulse {
   0% {
-    box-shadow: 0 0 0 0 rgba(139, 92, 246, 0.8);
-    background-color: rgba(139, 92, 246, 0.1);
+    box-shadow: 0 0 0 0 rgba(167, 139, 250, 0.7);
+    background-color: rgba(139, 92, 246, 0.3);
   }
-  50% {
-    box-shadow: 0 0 0 8px rgba(139, 92, 246, 0.0);
-    background-color: rgba(139, 92, 246, 0.18);
+  30% {
+    box-shadow: 0 0 0 12px rgba(167, 139, 250, 0.0);
+    background-color: rgba(139, 92, 246, 0.6);
   }
   100% {
-    box-shadow: 0 0 0 0 rgba(139, 92, 246, 0.0);
+    box-shadow: 0 0 0 0 rgba(167, 139, 250, 0.0);
     background-color: transparent;
   }
 }
@@ -182,4 +188,34 @@
 
 .animate-dashboard-entry {
   animation: dashboardReveal 0.8s cubic-bezier(0.2, 0.8, 0.2, 1) forwards;
+}
+
+@keyframes slideInUp {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-slide-in-up {
+  animation: slideInUp 0.3s ease-out forwards;
+}
+
+@keyframes modalScale {
+  from {
+    opacity: 0;
+    transform: scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.animate-modal-scale {
+  animation: modalScale 0.2s ease-out forwards;
 }

@@ -53,8 +53,8 @@ export default function GroupInfoModal({ room, onClose, onLeave, onKick }) {
     const inviteLink = `${window.location.origin}/invite?code=${room.code}`;
 
     return (
-        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center z-50 animate-fade-in p-4">
-            <div className="bg-slate-900 rounded-2xl w-full max-w-2xl border border-slate-800 shadow-2xl flex flex-col max-h-[90vh]">
+        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+            <div className="bg-slate-900 rounded-2xl w-full max-w-2xl border border-slate-800 shadow-2xl flex flex-col max-h-[90vh] animate-modal-scale">
                 {/* Header */}
                 <div className="p-6 border-b border-slate-800/50 flex justify-between items-center bg-slate-900/50">
                     <div>

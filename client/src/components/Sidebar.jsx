@@ -74,7 +74,7 @@ export default function Sidebar({ rooms, activeRoom, onSelectRoom, onCreateRoom,
                     <button
                         key={room.id}
                         onClick={() => onSelectRoom(room)}
-                        className={`w-full text-left p-3 rounded-lg flex items-center gap-3 transition-all duration-200 group ${
+                        className={`w-full text-left p-3 rounded-lg flex items-center gap-3 transition-all duration-200 group hover:translate-x-1 ${
                             activeRoom?.id === room.id 
                             ? 'bg-violet-600/10 text-violet-300 border border-violet-500/20 shadow-sm' 
                             : 'text-slate-400 hover:bg-slate-800/50 hover:text-slate-200 border border-transparent'

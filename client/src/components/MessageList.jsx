@@ -144,7 +144,7 @@ const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone }) => {
     return (
         <div 
             id={`msg-${msg.id}`}
-            className={`flex ${isMe ? 'justify-end' : 'justify-start'} group max-w-full`}
+            className={`flex ${isMe ? 'justify-end' : 'justify-start'} group max-w-full animate-slide-in-up`}
         >
             <div className={`max-w-[75%] flex flex-col ${isMe ? 'items-end' : 'items-start'}`}>
                 {!isMe && (
@@ -170,7 +170,7 @@ const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone }) => {
                             <div 
                                 onClick={() => scrollToMessage(msg.replyTo.id)} 
                                 className={`
-                                    mb-2 p-2 rounded-lg cursor-pointer
+                                    mb-1 p-2 rounded-lg cursor-pointer
                                     border-l-4 border-violet-400
                                     transition-colors hover:bg-black/25
                                     ${isMe ? 'bg-black/15' : 'bg-black/15'}
@@ -406,7 +406,7 @@ export default function MessageList({ messages, setMessages, currentUser, roomId
                         }
 
                         return (
-                            <div key={msg.id || index} className="flex justify-center my-6 group/system">
+                            <div key={msg.id || index} className="flex justify-center my-6 group/system animate-slide-in-up">
                                 <div className="flex items-center gap-2 px-4 py-1.5 rounded-full bg-slate-900/40 border border-slate-800/50 backdrop-blur-sm transition-all hover:bg-slate-900/60 hover:border-slate-700">
                                     <span className={`material-symbols-outlined text-[16px] ${textColor}`}>
                                         {icon}

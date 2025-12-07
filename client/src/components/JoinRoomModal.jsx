@@ -9,8 +9,8 @@ export default function JoinRoomModal({ onClose, onJoin }) {
     };
 
     return (
-        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center z-50 animate-fade-in">
-            <div className="bg-slate-900 p-6 rounded-2xl w-full max-w-sm border border-slate-800 shadow-2xl transform transition-all scale-100">
+        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center z-50">
+            <div className="bg-slate-900 p-6 rounded-2xl w-full max-w-sm border border-slate-800 shadow-2xl animate-modal-scale">
                 <div className="flex justify-between items-center mb-6">
                     <h3 className="text-xl font-bold text-white">Join Room</h3>
                     <button onClick={onClose} className="text-slate-400 hover:text-white transition-colors">
