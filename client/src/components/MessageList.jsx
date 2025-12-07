@@ -144,7 +144,7 @@ const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone }) => {
     return (
         <div 
             id={`msg-${msg.id}`}
-            className={`flex ${isMe ? 'justify-end' : 'justify-start'} group max-w-full animate-slide-in-up`}
+            className={`flex ${isMe ? 'justify-end' : 'justify-start'} group max-w-full animate-slide-in-up ${showMenu ? 'z-[100] relative' : ''}`}
         >
             <div className={`max-w-[75%] flex flex-col ${isMe ? 'items-end' : 'items-start'}`}>
                 {!isMe && (
@@ -229,7 +229,7 @@ const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone }) => {
                                 border border-slate-700/70
                                 shadow-2xl shadow-black/60
                                 py-1
-                                z-50
+                                z-[9999]
                             `}
                         >
                             <button 
