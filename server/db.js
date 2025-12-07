@@ -58,6 +58,7 @@ const createTables = async () => {
 
             -- Migration for messages table
             ALTER TABLE messages ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'sent'; -- sent, delivered, seen
+            ALTER TABLE messages ADD COLUMN IF NOT EXISTS reply_to_message_id INTEGER REFERENCES messages(id);
         `);
         console.log("Tables created successfully");
     } catch (err) {

@@ -232,7 +232,7 @@ router.get('/:id/messages', async (req, res) => {
 
     try {
         const messagesRes = await db.query(`
-            SELECT m.id, m.room_id, m.user_id, m.content, m.type, m.status, 
+            SELECT m.id, m.room_id, m.user_id, m.content, m.type, m.status, m.reply_to_message_id, 
                    to_char(m.created_at, 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') as created_at,
                    u.display_name, u.username 
             FROM messages m 

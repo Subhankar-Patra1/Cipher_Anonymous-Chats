@@ -39,7 +39,33 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
             headers: { Authorization: `Bearer ${token}` }
         })
         .then(res => res.json())
-        .then(data => setMessages(data))
+        .then(data => {
+            // Hydrate reply data
+            const byId = new Map(data.map(m => [m.id, m]));
+            const hydrated = data.map(m => {
+                if (!m.reply_to_message_id) return m;
+
+                const original = byId.get(m.reply_to_message_id);
+                if (!original) return m;
+
+                const raw = original.content || "";
+                const normalized = raw.replace(/\s+/g, " ").trim();
+                const maxLen = 120;
+                const snippet = normalized.length > maxLen
+                    ? normalized.slice(0, maxLen) + "…"
+                    : normalized;
+
+                return {
+                    ...m,
+                    replyTo: {
+                        id: original.id,
+                        sender: original.display_name || original.username,
+                        text: snippet,
+                    },
+                };
+            });
+            setMessages(hydrated);
+        })
         .catch(err => console.error(err));
 
         // Join room
@@ -50,29 +76,45 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
             console.log('Received new_message:', msg, 'Current room:', room.id);
             if (msg.room_id === room.id) {
                 setMessages(prev => {
+                    // Hydrate msg if needed (for other users who get the message with just ID)
+                    let processedMsg = { ...msg };
+                    if (!processedMsg.replyTo && processedMsg.reply_to_message_id) {
+                        const original = prev.find(m => m.id === processedMsg.reply_to_message_id);
+                        if (original) {
+                            const raw = original.content || "";
+                            const normalized = raw.replace(/\s+/g, " ").trim();
+                            const maxLen = 120;
+                            const snippet = normalized.length > maxLen ? normalized.slice(0, maxLen) + "…" : normalized;
+                            processedMsg.replyTo = {
+                                id: original.id,
+                                sender: original.display_name || original.username,
+                                text: snippet
+                            };
+                        }
+                    }
+
                     // Check for optimistic message to replace
                     // We match by content and user_id, ensuring unique replacement if possible
                     // Ideally we'd use a tempId from client, but purely content matching for now is "okay" for this scope
                     // taking the last one that matches
                     const reversedIndex = [...prev].reverse().findIndex(m => 
                         m.status === 'sending' && 
-                        m.content === msg.content && 
-                        m.user_id === msg.user_id
+                        m.content === processedMsg.content && 
+                        m.user_id === processedMsg.user_id
                     );
                     
                     if (reversedIndex !== -1) {
                         const index = prev.length - 1 - reversedIndex;
                         const newMsgs = [...prev];
-                        // Preserve replyTo from the optimistic message if the server message doesn't have it
-                        // This fixes the issue where reply preview disappears on status change
+                        // Preserve replyTo from the optimistic message if the server message doesn't have it (or if checking against temp)
                         const preservedMsg = { 
-                            ...msg, 
-                            replyTo: msg.replyTo || prev[index].replyTo 
+                            ...processedMsg, 
+                            replyTo: processedMsg.replyTo || prev[index].replyTo 
                         };
                         newMsgs[index] = preservedMsg; // Replace with real message
                         return newMsgs;
                     }
-                    return [...prev, msg];
+                    return [...prev, processedMsg];
                 });
             } else {
                 console.log('Message not for this room');
@@ -115,7 +157,7 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
             socket.emit('send_message', { 
                 roomId: room.id, 
                 content,
-                replyTo: replyToMsg || null // [NEW] send to server
+                replyToMessageId: replyToMsg ? replyToMsg.id : null // [NEW] send ID
             });
             setReplyTo(null); // [NEW] Clear reply after sending
         }

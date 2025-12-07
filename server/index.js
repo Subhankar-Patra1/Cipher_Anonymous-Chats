@@ -91,7 +91,7 @@ io.on('connection', async (socket) => {
         }
     });
 
-    socket.on('send_message', async ({ roomId, content }) => {
+    socket.on('send_message', async ({ roomId, content, replyToMessageId }) => {
         try {
             // Verify membership and expiry
             const roomRes = await db.query('SELECT * FROM rooms WHERE id = $1', [roomId]);
@@ -107,10 +107,10 @@ io.on('connection', async (socket) => {
 
             if (member) {
                 const insertRes = await db.query(
-                    `INSERT INTO messages (room_id, user_id, content) 
-                     VALUES ($1, $2, $3) 
-                     RETURNING id, status, to_char(created_at, 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') as created_at`,
-                    [roomId, socket.user.id, content]
+                    `INSERT INTO messages (room_id, user_id, content, reply_to_message_id) 
+                     VALUES ($1, $2, $3, $4) 
+                     RETURNING id, status, reply_to_message_id, to_char(created_at, 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') as created_at`,
+                    [roomId, socket.user.id, content, replyToMessageId || null]
                 );
                 const info = insertRes.rows[0];
                 
@@ -124,7 +124,7 @@ io.on('connection', async (socket) => {
                     user_id: socket.user.id,
                     content,
                     status: info.status,
-                    status: info.status,
+                    reply_to_message_id: info.reply_to_message_id, // Send back explicitly
                     created_at: info.created_at,
                     username: socket.user.username,
                     display_name: user ? user.display_name : socket.user.display_name
