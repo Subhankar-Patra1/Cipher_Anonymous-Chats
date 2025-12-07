@@ -7,8 +7,15 @@ const pool = new Pool({
     ssl: { rejectUnauthorized: false } // Required for Supabase
 });
 
+
 pool.on('connect', (client) => {
     client.query("SET TIME ZONE 'UTC'");
+});
+
+// Add error handling for idle clients
+pool.on('error', (err, client) => {
+    console.error('Unexpected error on idle client', err);
+    process.exit(-1);
 });
 
 // Create tables

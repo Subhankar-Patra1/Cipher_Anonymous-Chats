@@ -58,9 +58,9 @@ CLIENT_URL=http://localhost:5173
 ```
 *Note: The server will automatically create the necessary tables on startup.*
 
-Start the server:
+Start the server (with auto-reload):
 ```bash
-npm start
+npm run dev
 ```
 
 ### 3. Frontend Setup
