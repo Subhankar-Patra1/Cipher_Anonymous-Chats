@@ -36,6 +36,15 @@ app.use('/api/rooms', roomRoutes);
 const messageRoutes = require('./messages');
 app.use('/api/messages', messageRoutes);
 
+// Global Error Handler
+app.use((err, req, res, next) => {
+    console.error("Global Error Handler:", err.name, err.message, err.stack);
+    if (res.headersSent) {
+        return next(err);
+    }
+    res.status(500).json({ error: err.message || 'Internal Server Error' });
+});
+
 app.get('/api/health', async (req, res) => {
     try {
         await db.query('SELECT 1');

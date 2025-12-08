@@ -24,6 +24,9 @@ const authenticate = (req, res, next) => {
 router.use(authenticate);
 
 router.post('/audio', upload.single('audio'), async (req, res) => {
+    console.log("Received audio upload request. Body keys:", Object.keys(req.body));
+    if (req.file) console.log("File received:", req.file.mimetype, req.file.size);
+    else console.error("No file in request!");
     try {
         const { roomId, durationMs, waveform, replyToMessageId, tempId } = req.body;
         const file = req.file;
