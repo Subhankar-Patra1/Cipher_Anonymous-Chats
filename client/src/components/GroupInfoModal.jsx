@@ -148,7 +148,7 @@ export default function GroupInfoModal({ room, onClose, onLeave, onKick }) {
                                                 {member.id === currentUser.id && <span className="text-[10px] bg-slate-800 px-1.5 py-0.5 rounded text-slate-500">You</span>}
                                             </p>
                                             <p className="text-[10px] text-slate-500 font-medium">
-                                                @{member.username} • <span className={member.role === 'owner' ? 'text-amber-500' : ''}>{member.role}</span>
+                                                {member.username.startsWith('@') ? member.username : `@${member.username}`} • <span className={member.role === 'owner' ? 'text-amber-500' : ''}>{member.role}</span>
                                             </p>
                                         </div>
                                     </div>
