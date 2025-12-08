@@ -1,14 +1,21 @@
 import { useEffect, useRef, useState } from 'react';
 import { linkifyText } from '../utils/linkify';
 import { useAuth } from '../context/AuthContext';
+import AudioPlayer from './AudioPlayer';
 
-
-
+const formatDuration = (ms) => {
+    if (!ms) return '0:00';
+    const totalSeconds = Math.floor(ms / 1000);
+    const minutes = Math.floor(totalSeconds / 60);
+    const seconds = totalSeconds % 60;
+    return `${minutes}:${seconds.toString().padStart(2, '0')}`;
+};
 
 const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone }) => {
     const [showMenu, setShowMenu] = useState(false);
     const menuRef = useRef(null);
     const { token, user } = useAuth(); 
+    const isAudio = msg.type === 'audio';
 
     const toggleMenu = (e) => {
         e.stopPropagation();
@@ -56,7 +63,18 @@ const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone }) => {
         setShowMenu(false);
     };
 
-
+    const handleDownload = (e) => {
+        e.stopPropagation();
+        if (msg.audio_url) {
+            const a = document.createElement('a');
+            a.href = msg.audio_url;
+            a.download = `voice-note-${msg.id}.webm`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+        }
+        setShowMenu(false);
+    };
 
     const isDeletedForMe = Array.isArray(msg.deleted_for_user_ids) && 
                            msg.deleted_for_user_ids.includes(String(user.id));
@@ -122,18 +140,36 @@ const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone }) => {
                                     ${isMe ? 'bg-black/15' : 'bg-black/15'}
                                 `}
                             >
-                                <div className="text-xs font-bold text-violet-300 mb-0.5">
+                                <div className="text-xs font-bold text-violet-300 mb-0.5 max-w-[200px] truncate">
                                     {msg.replyTo.sender}
                                 </div>
-                                <div className="text-xs opacity-80 line-clamp-2">
-                                    {msg.replyTo.text}
-                                </div>
+                                
+                                {msg.replyTo.type === 'audio' ? (
+                                    <div className="flex items-center gap-1 text-xs opacity-90">
+                                        <span className="material-symbols-outlined text-[14px]">mic</span>
+                                        <span>Voice message • {formatDuration(msg.replyTo.audio_duration_ms)}</span>
+                                    </div>
+                                ) : (
+                                    <div className="text-xs opacity-80 line-clamp-2">
+                                        {msg.replyTo.text}
+                                    </div>
+                                )}
                             </div>
                         )}
 
-                        <p className="pr-10">
-                            {linkifyText(msg.content)}
-                        </p>
+                        {isAudio ? (
+                            <div className="pr-6 pt-1 pb-1">
+                                <AudioPlayer 
+                                    src={msg.audio_url} 
+                                    durationMs={msg.audio_duration_ms} 
+                                    waveform={msg.audio_waveform} 
+                                />
+                            </div>
+                        ) : (
+                            <p className="pr-10">
+                                {linkifyText(msg.content)}
+                            </p>
+                        )}
                         
                         {isMe && (
                             <div className="absolute bottom-1 right-3 flex items-center gap-1 text-violet-200/80">
@@ -189,7 +225,9 @@ const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone }) => {
                                     onReply({
                                         id: msg.id,
                                         sender: msg.display_name || msg.username,
-                                        text: snippet
+                                        text: snippet,
+                                        type: msg.type,
+                                        audio_duration_ms: msg.audio_duration_ms
                                     });
                                     setShowMenu(false);
                                 }}
@@ -197,17 +235,28 @@ const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone }) => {
                                 <span className="material-symbols-outlined text-base">reply</span>
                                 <span>Reply</span>
                             </button>
-                            <button 
-                                className="w-full flex items-center gap-2 px-3 py-2.5 text-left text-sm text-slate-100 hover:bg-slate-800"
-                                onClick={(e) => {
-                                    e.stopPropagation();
-                                    navigator.clipboard.writeText(msg.content);
-                                    setShowMenu(false);
-                                }}
-                            >
-                                <span className="material-symbols-outlined text-base">content_copy</span>
-                                <span>Copy Text</span>
-                            </button>
+                            
+                            {isAudio ? (
+                                <button 
+                                    className="w-full flex items-center gap-2 px-3 py-2.5 text-left text-sm text-slate-100 hover:bg-slate-800"
+                                    onClick={handleDownload}
+                                >
+                                    <span className="material-symbols-outlined text-base">download</span>
+                                    <span>Download</span>
+                                </button>
+                            ) : (
+                                <button 
+                                    className="w-full flex items-center gap-2 px-3 py-2.5 text-left text-sm text-slate-100 hover:bg-slate-800"
+                                    onClick={(e) => {
+                                        e.stopPropagation();
+                                        navigator.clipboard.writeText(msg.content);
+                                        setShowMenu(false);
+                                    }}
+                                >
+                                    <span className="material-symbols-outlined text-base">content_copy</span>
+                                    <span>Copy Text</span>
+                                </button>
+                            )}
                             
                              <button
                                 className="w-full flex items-center gap-2 px-3 py-2.5 text-left text-sm text-red-400 hover:bg-slate-800"

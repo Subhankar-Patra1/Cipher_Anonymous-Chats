@@ -1,21 +1,95 @@
 import { useState, useEffect, useRef } from 'react';
 import EmojiPicker, { EmojiStyle } from 'emoji-picker-react';
 import ContentEditable from 'react-contenteditable';
+import useAudioRecorder from '../utils/useAudioRecorder';
 
-export default function MessageInput({ onSend, disabled, replyTo, setReplyTo }) {
+const formatDuration = (ms) => {
+    if (!ms) return '0:00';
+    const totalSeconds = Math.floor(ms / 1000);
+    const minutes = Math.floor(totalSeconds / 60);
+    const seconds = totalSeconds % 60;
+    return `${minutes}:${seconds.toString().padStart(2, '0')}`;
+};
+
+export default function MessageInput({ onSend, onSendAudio, disabled, replyTo, setReplyTo }) {
     const [html, setHtml] = useState('');
     const [showEmoji, setShowEmoji] = useState(false);
     const pickerRef = useRef(null);
     const editorRef = useRef(null);
-    const textCheckerRef = useRef(null); // Hidden div for parsing
-    const lastRange = useRef(null); // Keep track of cursor position
+    const lastRange = useRef(null);
+
+    // Audio Recorder
+    const { 
+        isRecording, 
+        duration, 
+        audioBlob, 
+        waveform: liveWaveform, 
+        startRecording, 
+        stopRecording, 
+        resetRecording 
+    } = useAudioRecorder();
+
+    const [isReviewing, setIsReviewing] = useState(false);
+    const [isPlayingPreview, setIsPlayingPreview] = useState(false);
+    const previewAudioRef = useRef(null);
+
+    // Effects for Preview Audio
+    useEffect(() => {
+        if (!isReviewing || !audioBlob) return;
+        
+        const url = URL.createObjectURL(audioBlob);
+        const audio = new Audio(url);
+        previewAudioRef.current = audio;
+
+        audio.onended = () => setIsPlayingPreview(false);
+
+        return () => {
+            audio.pause();
+            URL.revokeObjectURL(url);
+        };
+    }, [isReviewing, audioBlob]);
+
+    const handleTogglePreview = () => {
+        if (!previewAudioRef.current) return;
+        if (isPlayingPreview) {
+            previewAudioRef.current.pause();
+        } else {
+            previewAudioRef.current.play();
+        }
+        setIsPlayingPreview(!isPlayingPreview);
+    };
+
+    const handleStartRecording = () => {
+        setIsReviewing(false);
+        startRecording();
+    };
+
+    const handleStopRecording = () => {
+        stopRecording();
+        setIsReviewing(true);
+    };
+
+    const handleCancelRecording = () => {
+        stopRecording(); // Ensure stopped
+        resetRecording();
+        setIsReviewing(false);
+        setIsPlayingPreview(false);
+    };
+
+    const handleSendRecording = () => {
+        if (audioBlob) {
+            // Normalized waveform 0-1 (already done by hook, but ensure)
+            onSendAudio(audioBlob, duration, liveWaveform); 
+            handleCancelRecording(); // Clean up state
+        }
+    };
+
 
     // Save selection whenever cursor moves
     const saveSelection = () => {
         const selection = window.getSelection();
         if (selection.rangeCount > 0) {
             const range = selection.getRangeAt(0);
-            // Ensure the selection is actually inside our editor
             if (editorRef.current && editorRef.current.contains(range.commonAncestorContainer)) {
                 lastRange.current = range.cloneRange();
             }
@@ -36,20 +110,13 @@ export default function MessageInput({ onSend, disabled, replyTo, setReplyTo }) 
     const handleSubmit = (e) => {
         if (e) e.preventDefault();
         
-        // 1. Update handleSubmit() so it ALWAYS reads the actual DOM input
-        // Read current content from DOM to avoid stale state
         const domHtml = editorRef.current?.innerHTML || "";
-        
-        // Use domHtml for checks
-        // Parse HTML to Text with Unicode
         let content = domHtml;
         if (!content.trim()) return;
 
-        // Create temp element to extract text and handle emoji imgs
         const tempDiv = document.createElement('div');
         tempDiv.innerHTML = content;
         
-        // Replace all images with their alt text (unicode)
         const images = tempDiv.getElementsByTagName('img');
         while (images.length > 0) {
             const img = images[0];
@@ -58,8 +125,6 @@ export default function MessageInput({ onSend, disabled, replyTo, setReplyTo }) 
             img.parentNode.replaceChild(textNode, img);
         }
 
-        // Fix: textContent ignores <br> tags, so we must manually replace them with newlines
-        // to prevent the "one long line" issue.
         const brs = tempDiv.getElementsByTagName('br');
         while (brs.length > 0) {
             const br = brs[0];
@@ -67,84 +132,125 @@ export default function MessageInput({ onSend, disabled, replyTo, setReplyTo }) 
             br.parentNode.replaceChild(newline, br);
         }
 
-        // Handle divs that might be used for lines in some browsers
-        // (Optional: depending on how contentEditable behaves)
-        
-        // IMPORTANT: use textContent to preserve \n from <br>, <div>, etc.
         let plainText = tempDiv.textContent || "";
-
-        // normalize CRLF to LF
         plainText = plainText.replace(/\r\n/g, "\n");
-
-        // do NOT collapse whitespace or replace "\n" with spaces
-        // just remove trailing whitespace:
         plainText = plainText.trimEnd();
 
         if (plainText) {
-            const content = plainText.toString(); // Ensure string
-            onSend(content);
-            // 2. After sending, clear BOTH the state and the DOM editor
+            onSend(plainText);
             setHtml('');
-            if (editorRef.current) {
-                editorRef.current.innerHTML = "";
-            }
+            if (editorRef.current) editorRef.current.innerHTML = "";
             setShowEmoji(false);
-            lastRange.current = null; // Reset selection
+            lastRange.current = null;
         }
     };
 
     const handleEmojiClick = (emojiData) => {
-        // Use Apple style URL from stable CDN
-        // Ensure we strip fe0f from the unified code to match CDN filenames
         const hex = emojiData.unified.split('-').filter(c => c !== 'fe0f').join('-');
         
         const imageUrl = `https://cdn.jsdelivr.net/npm/emoji-datasource-apple/img/apple/64/${hex}.png`;
         const imageTag = `<img src="${imageUrl}" alt="${emojiData.emoji}" class="w-6 h-6 inline-block align-bottom" style="margin: 0 1px;" draggable="false" />`;
         
-        // Restore selection if we have one
         if (lastRange.current) {
             const selection = window.getSelection();
             selection.removeAllRanges();
             selection.addRange(lastRange.current);
         } else if (editorRef.current) {
-            // Fallback to focus if no selection saved (should typically insert at start or end depending on browser)
             editorRef.current.focus();
         }
 
         document.execCommand('insertHTML', false, imageTag);
-        
         saveSelection(); 
     };
 
     const handleChange = (evt) => {
-        // 4. Fix handleChange to properly keep state in sync
         const newHtml = evt.target.value ?? evt.target.innerHTML;
         setHtml(newHtml);
-        saveSelection(); // Save after typing
+        saveSelection();
     };
 
     const handlePaste = (e) => {
-        // 3. Pasted text should be inserted exactly as typed
         e.preventDefault();
         const text = e.clipboardData.getData("text");
-        document.execCommand('insertText', false, text); // insertTextAsIs implementation
+        document.execCommand('insertText', false, text);
         saveSelection();
     };
 
     const handleKeyDown = (e) => {
-        // 3. Fix Enter key behavior in the ContentEditable
         if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
             e.preventDefault();
-            handleSubmit(); // DO NOT rely on event or state logic inside specific to event
+            handleSubmit();
         }
-        // Shift + Enter = default newline behavior
     };
+
+    // Render Recording UI if active
+    if (isRecording || isReviewing) {
+        return (
+            <div className="p-4 bg-slate-900/50 backdrop-blur-md border-t border-slate-800/50 z-10 relative">
+                <div className="flex gap-3 max-w-4xl mx-auto items-center justify-between h-[56px] px-4 rounded-2xl bg-slate-800/80 border border-slate-700">
+                    
+                    {/* Left Side: Status / Delete */}
+                    <div className="flex items-center gap-3">
+                        <div className={`w-3 h-3 rounded-full ${isRecording ? 'bg-red-500 animate-pulse' : 'bg-slate-400'}`} />
+                        <span className="text-slate-200 font-mono min-w-[50px]">{formatDuration(duration)}</span>
+                        
+                        {isRecording && (
+                           <div className="flex items-center gap-[2px] h-6 ml-2">
+                               {liveWaveform.map((v, i) => (
+                                   <div 
+                                       key={i}
+                                       className="w-[3px] bg-red-400 rounded-full transition-all duration-75"
+                                       style={{ height: `${20 + v * 80}%`, opacity: 0.5 + v * 0.5 }}
+                                   />
+                               ))}
+                           </div>
+                        )}
+                    </div>
+
+                    {/* Right Side: Controls */}
+                    <div className="flex items-center gap-3">
+                        <button 
+                            onClick={handleCancelRecording}
+                            className="p-2 text-slate-400 hover:text-red-400 transition-colors"
+                            title="Cancel"
+                        >
+                            <span className="material-symbols-outlined">delete</span>
+                        </button>
+
+                        {isRecording ? (
+                            <button 
+                                onClick={handleStopRecording}
+                                className="w-10 h-10 rounded-full bg-slate-700 hover:bg-slate-600 flex items-center justify-center text-red-400 transition-all border border-red-500/20"
+                            >
+                                <span className="material-symbols-outlined">stop_circle</span>
+                            </button>
+                        ) : (
+                            <>
+                                <button 
+                                    onClick={handleTogglePreview}
+                                    className="p-2 text-slate-300 hover:text-white transition-colors"
+                                    title={isPlayingPreview ? "Pause" : "Play Preview"}
+                                >
+                                    <span className="material-symbols-outlined">{isPlayingPreview ? 'pause' : 'play_arrow'}</span>
+                                </button>
+                                <button 
+                                    onClick={handleSendRecording}
+                                    className="w-10 h-10 rounded-full bg-violet-600 hover:bg-violet-500 flex items-center justify-center text-white shadow-lg shadow-violet-500/20 transition-all hover:scale-105 active:scale-95"
+                                >
+                                    <span className="material-symbols-outlined text-[20px]">send</span>
+                                </button>
+                            </>
+                        )}
+                    </div>
+                </div>
+            </div>
+        );
+    }
 
     return (
         <div className="p-4 bg-slate-900/50 backdrop-blur-md border-t border-slate-800/50 z-10 relative">
             <form onSubmit={handleSubmit} className="flex gap-3 max-w-4xl mx-auto items-end">
                 <div className="flex-1 flex flex-col gap-1">
-                    {/* [NEW] Reply Preview Bar - Moved INSIDE the flex-1 container */}
                     {replyTo && (
                         <div className="
                             w-full
@@ -153,13 +259,21 @@ export default function MessageInput({ onSend, disabled, replyTo, setReplyTo }) 
                             rounded-t-2xl rounded-b-md
                             px-4 py-2
                         ">
-                            <div className="flex flex-col max-w-[90%]">
-                                <span className="text-sm font-semibold text-violet-300">
-                                    {replyTo.sender}
-                                </span>
-                                <span className="text-sm text-slate-300 break-words line-clamp-2">
-                                    {replyTo.text}
-                                </span>
+                             <div className="flex items-center gap-2 max-w-[90%]">
+                                {replyTo.type === 'audio' ? (
+                                    <>
+                                         <span className="material-symbols-outlined text-violet-300 text-sm">mic</span>
+                                         <div className="flex flex-col">
+                                            <span className="text-sm font-semibold text-violet-300">{replyTo.sender}</span>
+                                            <span className="text-xs text-slate-300">Voice message</span>
+                                        </div>
+                                    </>
+                                ) : (
+                                    <div className="flex flex-col">
+                                        <span className="text-sm font-semibold text-violet-300">{replyTo.sender}</span>
+                                        <span className="text-sm text-slate-300 break-words line-clamp-2">{replyTo.text}</span>
+                                    </div>
+                                )}
                             </div>
 
                             <button
@@ -183,22 +297,9 @@ export default function MessageInput({ onSend, disabled, replyTo, setReplyTo }) 
                                 <EmojiPicker 
                                     theme="dark" 
                                     onEmojiClick={handleEmojiClick}
-                                    emojiStyle={EmojiStyle.APPLE} // Force Apple style in picker too
+                                    emojiStyle={EmojiStyle.APPLE}
                                     width="100%"
                                     height={350}
-                                    searchDisabled={false}
-                                    skinTonesDisabled={true}
-                                    style={{
-                                        '--epr-picker-border-color': '#1e293b',
-                                        '--epr-bg-color': '#0f172a',
-                                        '--epr-category-label-bg-color': '#0f172a',
-                                        '--epr-text-color': '#f1f5f9',
-                                        '--epr-search-input-bg-color': '#1e293b',
-                                        '--epr-search-input-text-color': '#f1f5f9',
-                                        '--epr-scrollbar-thumb-color': '#334155',
-                                        '--epr-scrollbar-thumb-hover-color': '#475569',
-                                        '--epr-preview-text-color': '#f1f5f9',
-                                    }}
                                 />
                             </div>
                         )}
@@ -210,14 +311,13 @@ export default function MessageInput({ onSend, disabled, replyTo, setReplyTo }) 
                                 disabled={disabled}
                                 onChange={handleChange}
                                 onPaste={handlePaste}
-                                onKeyUp={saveSelection} // Track arrow keys
-                                onMouseUp={saveSelection} // Track clicks
+                                onKeyUp={saveSelection}
+                                onMouseUp={saveSelection}
                                 onKeyDown={handleKeyDown}
                                 className="w-full text-slate-100 pl-4 pr-2 py-3 focus:outline-none min-h-[48px] max-h-[150px] overflow-y-auto whitespace-pre-wrap break-words custom-scrollbar"
                                 tagName="div"
                             />
                             
-                            {/* Placeholder logic using absolute positioning if empty */}
                             {!html && (
                                 <div className="absolute left-4 top-3 text-slate-500 pointer-events-none select-none">
                                     {disabled ? "Room expired..." : "Type a message..."}
@@ -242,19 +342,37 @@ export default function MessageInput({ onSend, disabled, replyTo, setReplyTo }) 
                     </div>
                 </div>
 
-                <button 
-                    type="submit" 
-                    className={`
-                        p-3 rounded-xl flex items-center justify-center transition-all duration-200 shrink-0
-                        ${disabled || !html.trim() 
-                            ? 'bg-slate-800 text-slate-500 cursor-not-allowed' 
-                            : 'bg-violet-600 hover:bg-violet-500 text-white shadow-lg shadow-violet-500/20 hover:scale-105 active:scale-95'
-                        }
-                    `}
-                    disabled={disabled || !html.trim()}
-                >
-                    <span className="material-symbols-outlined">send</span>
-                </button>
+                {html.trim() ? (
+                    <button 
+                        type="submit" 
+                        className={`
+                            p-3 rounded-xl flex items-center justify-center transition-all duration-200 shrink-0
+                            ${disabled 
+                                ? 'bg-slate-800 text-slate-500 cursor-not-allowed' 
+                                : 'bg-violet-600 hover:bg-violet-500 text-white shadow-lg shadow-violet-500/20 hover:scale-105 active:scale-95'
+                            }
+                        `}
+                        disabled={disabled}
+                    >
+                        <span className="material-symbols-outlined">send</span>
+                    </button>
+                ) : (
+                    <button 
+                        type="button" 
+                        onClick={handleStartRecording}
+                        className={`
+                            p-3 rounded-xl flex items-center justify-center transition-all duration-200 shrink-0
+                            ${disabled 
+                                ? 'bg-slate-800 text-slate-500 cursor-not-allowed' 
+                                : 'text-slate-400 hover:text-white hover:bg-slate-800'
+                            }
+                        `}
+                        disabled={disabled}
+                        title="Record voice message"
+                    >
+                         <span className="material-symbols-outlined">mic</span>
+                    </button>
+                )}
             </form>
         </div>
 

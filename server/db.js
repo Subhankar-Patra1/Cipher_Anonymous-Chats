@@ -64,6 +64,11 @@ const createTables = async () => {
             ALTER TABLE messages ADD COLUMN IF NOT EXISTS reply_to_message_id INTEGER REFERENCES messages(id);
             ALTER TABLE messages ADD COLUMN IF NOT EXISTS is_deleted_for_everyone BOOLEAN DEFAULT FALSE;
             ALTER TABLE messages ADD COLUMN IF NOT EXISTS deleted_for_user_ids TEXT[] DEFAULT '{}';
+            -- Audio fields
+            ALTER TABLE messages ADD COLUMN IF NOT EXISTS type TEXT DEFAULT 'text'; -- Ensure type exists (already in create but good for migration)
+            ALTER TABLE messages ADD COLUMN IF NOT EXISTS audio_url TEXT;
+            ALTER TABLE messages ADD COLUMN IF NOT EXISTS audio_duration_ms INTEGER;
+            ALTER TABLE messages ADD COLUMN IF NOT EXISTS audio_waveform TEXT; -- JSON stringified array
         `);
         console.log("Tables created successfully");
     } catch (err) {

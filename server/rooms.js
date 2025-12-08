@@ -234,6 +234,7 @@ router.get('/:id/messages', async (req, res) => {
         const messagesRes = await db.query(`
             SELECT m.id, m.room_id, m.user_id, m.content, m.type, m.status, m.reply_to_message_id, 
                    m.is_deleted_for_everyone, m.deleted_for_user_ids,
+                   m.audio_url, m.audio_duration_ms, m.audio_waveform,
                    to_char(m.created_at, 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') as created_at,
                    u.display_name, u.username 
             FROM messages m 
@@ -241,8 +242,24 @@ router.get('/:id/messages', async (req, res) => {
             WHERE m.room_id = $1 
             ORDER BY m.created_at ASC
         `, [roomId]);
-        res.json(messagesRes.rows);
+        const messages = messagesRes.rows.map(msg => {
+            let parsedWaveform = [];
+            if (msg.audio_waveform) {
+                try {
+                    parsedWaveform = JSON.parse(msg.audio_waveform);
+                } catch (e) {
+                    console.error("Failed to parse waveform for message", msg.id);
+                }
+            }
+            return {
+                ...msg,
+                audio_waveform: parsedWaveform
+            };
+        });
+
+        res.json(messages);
     } catch (error) {
+        console.error(error);
         res.status(500).json({ error: 'Server error' });
     }
 });
@@ -357,6 +374,31 @@ router.post('/:id/leave', async (req, res) => {
             type: 'system',
             created_at: new Date().toISOString()
         });
+
+        res.json({ success: true });
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ error: 'Server error' });
+    }
+});
+
+// Mark Room as Read
+router.post('/:id/read', async (req, res) => {
+    const roomId = req.params.id;
+
+    try {
+        // Verify membership first
+        const memberCheck = await db.query('SELECT * FROM room_members WHERE room_id = $1 AND user_id = $2', [roomId, req.user.id]);
+        if (memberCheck.rows.length === 0) {
+            return res.status(403).json({ error: 'Not a member' });
+        }
+
+        // Update last_read_at
+        await db.query(`
+            UPDATE room_members 
+            SET last_read_at = NOW() 
+            WHERE room_id = $1 AND user_id = $2
+        `, [roomId, req.user.id]);
 
         res.json({ success: true });
     } catch (error) {
