@@ -52,8 +52,15 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
         // Listen for messages
         const handleNewMessage = (msg) => {
             console.log('Received new_message:', msg, 'Current room:', room.id);
-            if (msg.room_id === room.id) {
+            // [MODIFIED] Robust comparison for room ID (string vs number)
+            if (String(msg.room_id) === String(room.id)) {
                 setMessages(prev => {
+                    // [MODIFIED] Check for strict duplicates by ID first
+                    // This handles the case where the sender receives their own message back from the server
+                    if (prev.some(m => m.id === msg.id)) {
+                        return prev;
+                    }
+
                     // Hydrate msg if needed (for other users who get the message with just ID)
                     let processedMsg = { ...msg };
                     if (!processedMsg.replyTo && processedMsg.reply_to_message_id) {
@@ -72,13 +79,13 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
                     }
 
                     // Check for optimistic message to replace using tempId if available
-                    // Fallback to content matching if no tempId (backward compatibility)
                     let optimisticIndex = -1;
 
                     if (processedMsg.tempId) {
                          optimisticIndex = prev.findIndex(m => m.id === processedMsg.tempId);
                     } else {
                         // Fallback: match by content and user_id (reversed to find latest)
+                        // [MODIFIED] Added timestamp check to be safer? No, rely on content/user for now as before.
                         const reversedIndex = [...prev].reverse().findIndex(m => 
                             m.status === 'sending' && 
                             m.content === processedMsg.content && 
