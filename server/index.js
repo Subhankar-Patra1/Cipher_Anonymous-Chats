@@ -49,8 +49,11 @@ app.get('/api/users/status', async (req, res) => {
         const ids = req.query.ids ? req.query.ids.split(',') : [];
         if (ids.length === 0) return res.json([]);
 
+        console.log(`[DEBUG] Fetching status for users: ${ids.join(',')}`);
+
         // Get Redis status
         const statuses = await redisClient.getOnlineStatus(ids);
+        console.log('[DEBUG] Redis statuses:', JSON.stringify(statuses));
         
         // Get DB fallbacks and privacy settings for these users
         const dbRes = await db.query('SELECT id, last_seen, share_presence FROM users WHERE id = ANY($1)', [ids]);
@@ -69,24 +72,15 @@ app.get('/api/users/status', async (req, res) => {
             };
 
             // Privacy Check
-            // NOTE: For 'contacts' privacy, we need to know the relation. 
-            // Since we don't have a contact list implementation yet, we treat 'contacts' same as 'everyone' OR 'nobody' depending on design. 
-            // The prompt says "only return to contacts (server check)". 
-            // For now, assuming anyone in a shared room is a "contact" is expensive to check here in batch.
-            // Simpler approach:
-            // If privacy is 'nobody', hide it.
-            // If privacy is 'contacts', for now we might default to showing it or hiding it. 
-            // Let's implement 'nobody' hiding logic:
-            
             if (dUser && dUser.share_presence === 'nobody') {
-                 // Unless it's ME requesting my own status? (We don't have requester ID easily here without middleware extraction if auth not enforced on this route, but it usually is)
-                 // Assuming auth middleware is used or we just hide it generally.
+                 console.log(`[DEBUG] Hiding status for user ${id} due to privacy settings`);
                  return { userId: parseInt(id), online: false, last_seen: null, sessionCount: 0 };
             }
             
             return finalStatus;
         });
 
+        console.log('[DEBUG] Final status result:', JSON.stringify(result));
         res.json(result);
     } catch (err) {
         console.error(err);
@@ -185,22 +179,33 @@ const JWT_SECRET = process.env.JWT_SECRET || 'supersecretkey';
 
 // Socket Auth Middleware
 io.use((socket, next) => {
+    console.log(`[DEBUG] Handshake attempt: SocketID=${socket.id}`);
     const token = socket.handshake.auth.token;
-    if (!token) return next(new Error('Authentication error'));
+    
+    if (!token) {
+        console.error(`[DEBUG] Socket connection rejected: No token provided. SocketID=${socket.id}`);
+        return next(new Error('Authentication error'));
+    }
 
     try {
         const decoded = jwt.verify(token, JWT_SECRET);
         socket.user = decoded;
+        console.log(`[DEBUG] Auth successful for user ${decoded.username} (${decoded.id}). SocketID=${socket.id}`);
         next();
     } catch (err) {
+        console.error(`[DEBUG] Socket connection rejected: Invalid token. SocketID=${socket.id} Error=${err.message}`);
         next(new Error('Authentication error'));
     }
+});
+
+io.engine.on("connection_error", (err) => {
+    console.log("[DEBUG] Connection error:", err.req.url, err.code, err.message, err.context);
 });
 
 app.set('io', io);
 
 io.on('connection', async (socket) => {
-    console.log('User connected:', socket.user.username);
+    console.log(`[DEBUG] io.on('connection') triggered for User: ${socket.user.username} (${socket.user.id}) SocketID=${socket.id}`);
     
     // Join user-specific channel for notifications
     socket.join(`user:${socket.user.id}`);
@@ -237,9 +242,11 @@ io.on('connection', async (socket) => {
     // 1. Add session
     const sessionId = require('crypto').randomUUID();
     const sessionCount = await redisClient.addSession(socket.user.id, sessionId);
+    console.log(`[DEBUG] User ${socket.user.id} (${socket.user.username}) connected. Session count: ${sessionCount}`);
     
     // 2. Broadcast online if first session
     if (sessionCount === 1) {
+        console.log(`[DEBUG] Broadcasting online for user ${socket.user.id}`);
         socket.broadcast.emit('presence:update', {
             userId: socket.user.id,
             online: true,
@@ -256,6 +263,7 @@ io.on('connection', async (socket) => {
     socket.on('disconnect', async () => {
         console.log('User disconnected:', socket.user.username);
         const remaining = await redisClient.removeSession(socket.user.id, sessionId);
+        console.log(`[DEBUG] User ${socket.user.id} disconnected. Remaining sessions: ${remaining}`);
         
         if (remaining === 0) {
             const lastSeen = await redisClient.setLastSeen(socket.user.id);
@@ -266,6 +274,7 @@ io.on('connection', async (socket) => {
                 console.error('Error updating last_seen in DB:', err);
             }
 
+            console.log(`[DEBUG] Broadcasting offline for user ${socket.user.id}`);
             socket.broadcast.emit('presence:update', {
                 userId: socket.user.id,
                 online: false,

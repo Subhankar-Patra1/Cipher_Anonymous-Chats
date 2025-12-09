@@ -36,14 +36,17 @@ export const PresenceProvider = ({ children, socket }) => {
 
         // 1. Heartbeat loop
         const sendHeartbeat = () => {
+            console.log('[DEBUG] Sending heartbeat for user', user?.id);
             socket.emit('presence:heartbeat');
         };
         
+        console.log('[DEBUG] Starting heartbeat loop for user', user?.id);
         sendHeartbeat(); // Immediate
         heartbeatRef.current = setInterval(sendHeartbeat, 25000); // Every 25s
 
         // 2. Listen for updates
         const handlePresenceUpdate = (payload) => {
+            console.log('[DEBUG] Presence update received:', payload);
             // payload: { userId, online, sessionCount, last_seen }
             setPresenceMap(prev => ({
                 ...prev,

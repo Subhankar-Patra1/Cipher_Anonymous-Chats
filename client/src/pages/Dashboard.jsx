@@ -73,7 +73,11 @@ export default function Dashboard() {
         });
 
         newSocket.on('connect', () => {
-            console.log('Connected to socket');
+            console.log('[DEBUG] Connected to socket via Dashboard', newSocket.id);
+        });
+
+        newSocket.on('connect_error', (err) => {
+            console.error('[DEBUG] Socket connection error:', err.message);
         });
 
         newSocket.on('room_added', (newRoom) => {
