@@ -233,7 +233,7 @@ router.get('/:id/messages', async (req, res) => {
     try {
         const messagesRes = await db.query(`
             SELECT m.id, m.room_id, m.user_id, m.content, m.type, m.status, m.reply_to_message_id, 
-                   m.is_deleted_for_everyone, m.deleted_for_user_ids,
+                   m.is_deleted_for_everyone, m.deleted_for_user_ids, m.edited_at,
                    m.audio_url, m.audio_duration_ms, m.audio_waveform,
                    m.gif_url, m.preview_url, m.width, m.height,
                    (aps.heard_at IS NOT NULL) as audio_heard,

@@ -11,7 +11,7 @@ const formatDuration = (ms) => {
     return `${minutes}:${seconds.toString().padStart(2, '0')}`;
 };
 
-const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone, onRetry, onMarkHeard, onEdit }) => {
+const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone, onRetry, onMarkHeard, onEdit, onImageLoad }) => { // [MODIFIED] Added onImageLoad
     const [showMenu, setShowMenu] = useState(false);
     const menuRef = useRef(null);
     const { token, user } = useAuth(); 
@@ -210,6 +210,7 @@ const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone, onRetr
                                         muted 
                                         loop 
                                         playsInline
+                                        onLoadedData={onImageLoad} // [NEW] Trigger scroll check on video load
                                         onClick={() => window.open(msg.gif_url, '_blank')}
                                     />
                                 ) : (
@@ -218,6 +219,7 @@ const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone, onRetr
                                         alt="GIF" 
                                         className="w-full h-auto object-cover rounded-lg cursor-pointer hover:opacity-90 transition-opacity"
                                         loading="lazy"
+                                        onLoad={onImageLoad} // [NEW] Trigger scroll check on image load
                                         onClick={() => window.open(msg.gif_url, '_blank')}
                                         title="Open full size"
                                     />
@@ -483,6 +485,25 @@ export default function MessageList({ messages, setMessages, currentUser, roomId
         }
     }, [messages]);
 
+    const handleImageLoad = () => {
+        // When an image loads, if we should be at bottom (e.g. initial load) OR if we were already near bottom, scroll down.
+        // We use a slightly larger threshold for "near bottom" here to account for multiple images content shift
+        const div = scrollRef.current;
+        if (!div) return;
+
+        // If this is the initial load phase (shouldScrollToBottom is true), force it.
+        // Or if user is already near the bottom.
+        if (shouldScrollToBottom.current) {
+             bottomRef.current?.scrollIntoView({ behavior: 'auto' });
+             shouldScrollToBottom.current = false; // We can probably mark as done now
+        } else {
+            const distanceToBottom = div.scrollHeight - div.scrollTop - div.clientHeight;
+             if (distanceToBottom < 500) { // Larger threshold for image loads
+                bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+             }
+        }
+    };
+
     const handleScroll = () => {
         const div = scrollRef.current;
         if (!div) return;
@@ -549,7 +570,8 @@ export default function MessageList({ messages, setMessages, currentUser, roomId
                             onDeleteForEveryone={(msg) => setConfirmDeleteMessage(msg)}
                             onRetry={onRetry}
                             onMarkHeard={handleMarkHeard}
-                            onEdit={onEdit} // [NEW] Pass onEdit
+                            onEdit={onEdit} 
+                            onImageLoad={handleImageLoad} // [NEW] Pass handleImageLoad
                         />
                     );
                 })}
