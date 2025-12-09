@@ -46,7 +46,7 @@ app.use('/api/gifs', tenorRoutes);
 // Presence API Routes
 app.get('/api/users/status', async (req, res) => {
     try {
-        const ids = req.query.ids ? req.query.ids.split(',') : [];
+        const ids = req.query.ids ? req.query.ids.split(',').map(id => parseInt(id)).filter(id => !isNaN(id)) : [];
         if (ids.length === 0) return res.json([]);
 
         console.log(`[DEBUG] Fetching status for users: ${ids.join(',')}`);
@@ -56,7 +56,7 @@ app.get('/api/users/status', async (req, res) => {
         console.log('[DEBUG] Redis statuses:', JSON.stringify(statuses));
         
         // Get DB fallbacks and privacy settings for these users
-        const dbRes = await db.query('SELECT id, last_seen, share_presence FROM users WHERE id = ANY($1)', [ids]);
+        const dbRes = await db.query('SELECT id, last_seen, share_presence FROM users WHERE id = ANY($1::int[])', [ids]);
         const dbUsers = {};
         dbRes.rows.forEach(u => dbUsers[u.id] = u);
 
