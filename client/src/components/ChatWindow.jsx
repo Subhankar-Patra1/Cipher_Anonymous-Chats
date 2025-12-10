@@ -3,7 +3,7 @@ import MessageList from './MessageList';
 import MessageInput from './MessageInput';
 import { useAuth } from '../context/AuthContext';
 import { usePresence } from '../context/PresenceContext';
-import ProfileCard from './ProfileCard'; // Will create next
+import ProfilePanel from './ProfilePanel';
 // [MODIFIED] Added timeAgo helper (already present, just ensuring it stays)
 
 const timeAgo = (dateString) => {
@@ -225,7 +225,15 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
         socket.on('message_deleted', handleMessageDeleted);
         socket.on('message_edited', handleMessageEdited);
         socket.on('typing:start', handleTypingStart);
+        socket.on('typing:start', handleTypingStart);
         socket.on('typing:stop', handleTypingStop);
+
+        // [NEW] Clear chat listener
+        socket.on('chat:cleared', ({ roomId }) => {
+            if (String(roomId) === String(room.id)) {
+                setMessages([]); 
+            }
+        });
 
         return () => {
             socket.off('new_message', handleNewMessage);
@@ -573,16 +581,16 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
             />
 
             {showProfileCard && room.type === 'direct' && (
-                <ProfileCard 
-                    targetUser={{
-                        id: room.other_user_id,
-                        display_name: room.name,
-                        username: room.username,
-                        avatar_url: room.avatar_url,
-                        avatar_thumb_url: room.avatar_thumb_url
-                    }}
+                <ProfilePanel 
+                    userId={room.other_user_id}
+                    roomId={room.id}
                     onClose={() => setShowProfileCard(false)}
-                    anchorRef={headerRef} // [NEW]
+                    onActionSuccess={(action) => {
+                        if (action === 'delete') {
+                            onBack(); // Go back to empty state
+                        }
+                        // 'clear' handled by socket
+                    }}
                 />
             )}
         </div>

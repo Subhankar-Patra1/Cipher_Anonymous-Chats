@@ -60,6 +60,7 @@ const createTables = async () => {
             ALTER TABLE users ADD COLUMN IF NOT EXISTS recovery_code_hash TEXT;
             ALTER TABLE users ADD COLUMN IF NOT EXISTS last_seen TIMESTAMPTZ;
             ALTER TABLE users ADD COLUMN IF NOT EXISTS share_presence TEXT DEFAULT 'everyone'; -- 'everyone'|'contacts'|'nobody'
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS bio TEXT DEFAULT '';
 
             -- Migration for messages table
             ALTER TABLE messages ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'sent'; -- sent, delivered, seen
@@ -83,6 +84,14 @@ const createTables = async () => {
                 heard_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 PRIMARY KEY (user_id, message_id)
             );
+
+            -- Migration for room_members (Chat Visibility)
+            ALTER TABLE room_members ADD COLUMN IF NOT EXISTS cleared_at TIMESTAMP DEFAULT NULL;
+            ALTER TABLE room_members ADD COLUMN IF NOT EXISTS is_hidden BOOLEAN DEFAULT FALSE;
+             
+            -- Migration for messages (Editing)
+            ALTER TABLE messages ADD COLUMN IF NOT EXISTS edited_at TIMESTAMP;
+            ALTER TABLE messages ADD COLUMN IF NOT EXISTS edit_version INTEGER DEFAULT 0;
         `);
         console.log("Tables created successfully");
     } catch (err) {

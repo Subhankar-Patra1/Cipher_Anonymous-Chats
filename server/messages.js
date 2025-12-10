@@ -143,6 +143,9 @@ router.post('/', async (req, res) => {
         const result = await db.query(query, params);
         const info = result.rows[0];
 
+        // Unhide chat for all members
+        await db.query('UPDATE room_members SET is_hidden = FALSE WHERE room_id = $1', [room_id]);
+
         // Fetch user info for broadcast
         const userRes = await db.query('SELECT display_name, avatar_thumb_url, avatar_url FROM users WHERE id = $1', [req.user.id]);
         const user = userRes.rows[0];

@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { usePresence } from '../context/PresenceContext';
 import StatusDot from './StatusDot';
 import ProfileShareModal from './ProfileShareModal';
-import ProfileCard from './ProfileCard';
+import ProfilePanel from './ProfilePanel';
 
 
 export default function Sidebar({ rooms, activeRoom, onSelectRoom, loadingRoomId, onCreateRoom, onJoinRoom, user, onLogout }) {
@@ -181,10 +181,10 @@ export default function Sidebar({ rooms, activeRoom, onSelectRoom, loadingRoomId
             )}
 
             {showMyProfile && (
-                <ProfileCard
-                    targetUser={user}
-                    anchorRef={myProfileRef}
+                <ProfilePanel
+                    userId={user.id}
                     onClose={() => setShowMyProfile(false)}
+                    // No actions for self in sidebar
                 />
             )}
         </div>

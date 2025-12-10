@@ -1,12 +1,41 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { QRCodeSVG } from 'qrcode.react';
+import PickerPanel from './PickerPanel';
+import ContentEditable from 'react-contenteditable';
 
 export default function GroupInfoModal({ room, onClose, onLeave, onKick, socket }) {
     const { token, user: currentUser } = useAuth();
     const [members, setMembers] = useState([]);
     const [loading, setLoading] = useState(true);
     const [copySuccess, setCopySuccess] = useState(''); // 'code' or 'link'
+
+    const [isEditingBio, setIsEditingBio] = useState(false);
+    const [editedBio, setEditedBio] = useState('');
+    const [bioLoading, setBioLoading] = useState(false);
+    const [localBio, setLocalBio] = useState(room.bio || '');
+    const [showEmoji, setShowEmoji] = useState(false);
+
+    // Refs for rich text editor
+    const editorRef = useRef(null);
+    const lastRange = useRef(null);
+
+    const saveSelection = () => {
+        const selection = window.getSelection();
+        if (selection.rangeCount > 0) {
+            const range = selection.getRangeAt(0);
+            if (editorRef.current && editorRef.current.contains(range.commonAncestorContainer)) {
+                lastRange.current = range.cloneRange();
+            }
+        }
+    };
+
+    // Sync localBio if room prop updates (e.g. from socket elsewhere)
+    useEffect(() => {
+        if (room.bio !== undefined) {
+            setLocalBio(room.bio);
+        }
+    }, [room.bio]);
 
     useEffect(() => {
         fetchMembers();
@@ -49,14 +78,116 @@ export default function GroupInfoModal({ room, onClose, onLeave, onKick, socket 
             }));
         };
 
+
+        const handleRoomUpdate = (data) => {
+            if (String(data.roomId) === String(room.id) && data.bio !== undefined) {
+                 setLocalBio(data.bio);
+            }
+        };
+
         socket.on('user:avatar:updated', handleAvatarUpdate);
         socket.on('user:avatar:deleted', handleAvatarDelete);
+        socket.on('room:updated', handleRoomUpdate);
 
         return () => {
             socket.off('user:avatar:updated', handleAvatarUpdate);
             socket.off('user:avatar:deleted', handleAvatarDelete);
+            socket.off('room:updated', handleRoomUpdate);
         };
-    }, [socket]);
+    }, [socket, room.id]);
+
+    // Sanitize BIO: Allow only text and <img> tags with specific visuals
+    const sanitizeBio = (html) => {
+        const tempDiv = document.createElement('div');
+        tempDiv.innerHTML = html;
+
+        // Recursively clean nodes
+        const clean = (node) => {
+            if (node.nodeType === 3) return; // Text node - OK
+            if (node.nodeType === 1) {
+                if (node.tagName.toLowerCase() === 'img') {
+                    // Check if it's our emoji
+                    const src = node.getAttribute('src');
+                    const isAppleEmoji = src && src.includes('emoji-datasource-apple');
+                    
+                    if (!isAppleEmoji) {
+                        node.remove();
+                        return;
+                    }
+                    // Keep just essential attributes
+                    const alt = node.getAttribute('alt');
+                    const cleanImg = document.createElement('img');
+                    cleanImg.src = src;
+                    cleanImg.alt = alt;
+                    cleanImg.className = "w-5 h-5 inline-block align-text-bottom mx-0.5 select-none pointer-events-none";
+                    cleanImg.draggable = false;
+                    node.replaceWith(cleanImg);
+                    return;
+                }
+                
+                // For other tags (div, p, span, br), unwrap or keep text content + br
+                if (node.tagName.toLowerCase() === 'br') return; // Keep breaks
+                
+                // Unwrap others
+                while (node.firstChild) {
+                    node.parentNode.insertBefore(node.firstChild, node);
+                }
+                node.parentNode.removeChild(node);
+            }
+        };
+
+        let sanitized = tempDiv.innerHTML
+            .replace(/<script\b[^>]*>([\s\S]*?)<\/script>/gm, "")
+            .replace(/on\w+="[^"]*"/g, ""); // strip handlers
+            
+        return sanitized; 
+    };
+
+    const handleSaveBio = async () => {
+        setBioLoading(true);
+
+        // Save sanitized HTML
+        const content = sanitizeBio(editedBio);
+
+        try {
+            const res = await fetch(`${import.meta.env.VITE_API_URL}/api/rooms/${room.id}/bio`, {
+                method: 'PUT',
+                headers: { 
+                    'Content-Type': 'application/json',
+                    Authorization: `Bearer ${token}` 
+                },
+                body: JSON.stringify({ bio: content })
+            });
+
+            if (res.ok) {
+                const data = await res.json();
+                setLocalBio(data.bio);
+                setIsEditingBio(false);
+                setShowEmoji(false);
+            }
+        } catch (error) {
+            console.error("Failed to update group bio", error);
+        } finally {
+            setBioLoading(false);
+        }
+    };
+
+    const handleEmojiClick = (emojiData) => {
+        const hex = emojiData.unified.split('-').filter(c => c !== 'fe0f').join('-');
+        const imageUrl = `https://cdn.jsdelivr.net/npm/emoji-datasource-apple/img/apple/64/${hex}.png`;
+        const imageTag = `<img src="${imageUrl}" alt="${emojiData.emoji}" class="w-5 h-5 inline-block align-text-bottom mx-0.5 select-none pointer-events-none" draggable="false" />`;
+        
+        if (lastRange.current) {
+            const selection = window.getSelection();
+            selection.removeAllRanges();
+            selection.addRange(lastRange.current);
+        } else if (editorRef.current) {
+            editorRef.current.focus();
+        }
+
+        document.execCommand('insertHTML', false, imageTag);
+        saveSelection();
+    };
 
     const copyToClipboard = (text, type) => {
         navigator.clipboard.writeText(text);
@@ -96,8 +227,96 @@ export default function GroupInfoModal({ room, onClose, onLeave, onKick, socket 
                     </button>
                 </div>
 
+
                 {/* Content */}
                 <div className="overflow-y-auto custom-scrollbar flex-1">
+
+                    {/* Group Description/Bio */}
+                    <div className="p-6 border-b border-slate-800/50 bg-slate-900/30">
+                        <div className="flex items-center justify-between mb-2">
+                             <h3 className="text-slate-500 text-xs font-bold uppercase tracking-wider">Group Description</h3>
+                             {isOwner && !isEditingBio && (
+                                <button 
+                                    onClick={() => {
+                                        setEditedBio(localBio || '');
+                                        setIsEditingBio(true);
+                                    }}
+                                    className="text-slate-500 hover:text-white transition-colors"
+                                >
+                                    <span className="material-symbols-outlined text-[16px]">edit</span>
+                                </button>
+                             )}
+                        </div>
+
+                         {isEditingBio ? (
+                            <div className="space-y-2 relative">
+                                <div className="bg-slate-800 rounded-lg p-3 border border-slate-700 focus-within:border-violet-500 transition-colors">
+                                    <ContentEditable
+                                        innerRef={editorRef}
+                                        html={editedBio}
+                                        disabled={bioLoading}
+                                        onChange={(evt) => {
+                                            setEditedBio(evt.target.value);
+                                            saveSelection();
+                                        }}
+                                        onKeyUp={saveSelection}
+                                        onMouseUp={saveSelection}
+                                        className="w-full text-slate-200 text-sm outline-none bg-transparent min-h-[80px] max-h-[150px] overflow-y-auto whitespace-pre-wrap break-words custom-scrollbar"
+                                        tagName="div"
+                                    />
+                                    {!editedBio && (
+                                        <div className="text-slate-500 text-sm pointer-events-none absolute top-3 left-3">Add a group description...</div>
+                                    )}
+                                </div>
+
+                                <div className="flex justify-between items-center">
+                                    <div className="relative">
+                                        <button 
+                                            onClick={() => setShowEmoji(!showEmoji)}
+                                            className={`p-2 transition-colors flex items-center justify-center rounded-lg ${showEmoji ? 'text-white bg-slate-800' : 'text-slate-400 hover:text-white'}`}
+                                            title="Insert Emoji"
+                                        >
+                                            <span className="material-symbols-outlined text-[20px]">sentiment_satisfied</span>
+                                        </button>
+                                         {showEmoji && (
+                                            <div className="absolute top-full left-0 mt-2 z-50 shadow-2xl rounded-lg w-[320px] h-[400px] overflow-hidden border border-slate-700">
+                                                <PickerPanel 
+                                                    onEmojiClick={handleEmojiClick}
+                                                    disableGifTab={true}
+                                                />
+                                            </div>
+                                        )}
+                                    </div>
+
+                                    <div className="flex justify-end gap-2">
+                                        <button 
+                                            onClick={() => {
+                                                setIsEditingBio(false);
+                                                setShowEmoji(false);
+                                            }}
+                                            className="px-3 py-1.5 text-xs font-medium text-slate-400 hover:text-white hover:bg-slate-800 rounded-lg transition-colors"
+                                            disabled={bioLoading}
+                                        >
+                                            Cancel
+                                        </button>
+                                        <button 
+                                            onClick={handleSaveBio}
+                                            className="px-3 py-1.5 text-xs font-bold text-white bg-violet-600 hover:bg-violet-500 rounded-lg transition-colors flex items-center gap-1"
+                                            disabled={bioLoading}
+                                        >
+                                            {bioLoading && <span className="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin"/>}
+                                            Save
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        ) : (
+                            <div 
+                                className="text-slate-300 text-sm leading-relaxed whitespace-pre-wrap break-words"
+                                dangerouslySetInnerHTML={{ __html: localBio || '<span class="text-slate-600 italic">No description</span>' }}
+                            />
+                        )}
+                    </div>
                     
                     {/* Share Section (Only for Groups) */}
                     {room.type === 'group' && (

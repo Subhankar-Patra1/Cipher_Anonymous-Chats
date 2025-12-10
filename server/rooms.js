@@ -203,7 +203,7 @@ router.get('/', async (req, res) => {
             (SELECT COUNT(*) FROM messages m WHERE m.room_id = r.id AND m.created_at > rm.last_read_at) as unread_count
             FROM rooms r 
             JOIN room_members rm ON r.id = rm.room_id 
-            WHERE rm.user_id = $1
+            WHERE rm.user_id = $1 AND (rm.is_hidden IS FALSE OR rm.is_hidden IS NULL)
             ORDER BY r.created_at DESC
         `, [req.user.id]);
         
@@ -248,7 +248,9 @@ router.get('/:id/messages', async (req, res) => {
             FROM messages m 
             JOIN users u ON m.user_id = u.id 
             LEFT JOIN audio_play_state aps ON m.id = aps.message_id AND aps.user_id = $2
+            JOIN room_members rm_curr ON rm_curr.room_id = m.room_id AND rm_curr.user_id = $2
             WHERE m.room_id = $1 
+            AND m.created_at > COALESCE(rm_curr.cleared_at, '1970-01-01')
             ORDER BY m.created_at ASC
         `, [roomId, req.user.id]);
         const messages = messagesRes.rows.map(msg => {
@@ -413,6 +415,129 @@ router.post('/:id/read', async (req, res) => {
     } catch (error) {
         console.error(error);
         res.status(500).json({ error: 'Server error' });
+    }
+});
+
+// Clear Messages (Clear for Me)
+router.post('/:id/clear', async (req, res) => {
+    const roomId = req.params.id;
+    const { scope } = req.body; // Expect scope="me"
+
+    try {
+        if (scope && scope !== 'me') {
+            return res.status(400).json({ error: 'Only scope="me" is supported' });
+        }
+
+        // Verify membership
+        const memberCheck = await db.query('SELECT * FROM room_members WHERE room_id = $1 AND user_id = $2', [roomId, req.user.id]);
+        if (memberCheck.rows.length === 0) return res.status(403).json({ error: 'Not a member' });
+
+        // Update cleared_at
+        await db.query(`
+            UPDATE room_members 
+            SET cleared_at = NOW() 
+            WHERE room_id = $1 AND user_id = $2
+        `, [roomId, req.user.id]);
+
+        // Emit event to this user's sessions only
+        const io = req.app.get('io');
+        io.to(`user:${req.user.id}`).emit('chat:cleared', { roomId, userId: req.user.id });
+
+        res.json({ ok: true });
+    } catch (error) {
+        console.error("Clear chat error:", error);
+        res.status(500).json({ error: 'Server error' });
+    }
+});
+
+// Delete Chat (Hide for Me)
+router.delete('/:id', async (req, res) => {
+    const roomId = req.params.id;
+    const scope = req.query.scope || req.body.scope || 'me';
+
+    try {
+        if (scope !== 'me') {
+            return res.status(400).json({ error: 'Only scope="me" is supported' });
+        }
+
+        // Verify membership
+        const memberCheck = await db.query('SELECT * FROM room_members WHERE room_id = $1 AND user_id = $2', [roomId, req.user.id]);
+        if (memberCheck.rows.length === 0) return res.status(403).json({ error: 'Not a member' });
+
+        // Soft delete (hide)
+        await db.query(`
+            UPDATE room_members 
+            SET is_hidden = TRUE 
+            WHERE room_id = $1 AND user_id = $2
+        `, [roomId, req.user.id]);
+
+        // Emit event
+        const io = req.app.get('io');
+        io.to(`user:${req.user.id}`).emit('chat:deleted', { roomId, userId: req.user.id });
+
+        res.json({ ok: true });
+    } catch (error) {
+        console.error("Delete chat error:", error);
+        res.status(500).json({ error: 'Server error' });
+    }
+});
+
+// Update Room Bio/Description
+router.put('/:id/bio', async (req, res) => {
+    const roomId = req.params.id;
+    const { bio } = req.body;
+    
+    if (typeof bio !== 'string') {
+        return res.status(400).json({ error: 'Invalid bio format' });
+    }
+
+    try {
+        // Verify membership and role? Allowed for owner or all members?
+        // "bio can be change anytime" - assuming all members for groups or maybe just owner.
+        // Let's stick to owner for groups to avoid chaos, but user for user profile.
+        // Actually for group info "bio can be change anytime" implies permissive.
+        // Let's allow owner only first for safety, or check if user meant "anyone".
+        // "for group... bio can be change anytime" - probably means easily accessible.
+        // I will allow OWNER only for now as standard practice, or all members if user complains.
+        
+        const memberCheck = await db.query('SELECT role FROM room_members WHERE room_id = $1 AND user_id = $2', [roomId, req.user.id]);
+        const member = memberCheck.rows[0];
+
+        if (!member) {
+            return res.status(403).json({ error: 'Not a member' });
+        }
+
+        // Fetch room type
+        const roomRes = await db.query('SELECT type FROM rooms WHERE id = $1', [roomId]);
+        const room = roomRes.rows[0];
+
+        if (room.type === 'group' && member.role !== 'owner') {
+             // Let's allow admins too if/when we have them. For now just owner.
+             return res.status(403).json({ error: 'Only owner can change group description' });
+        }
+        
+        // If it's a DM, who can change it? DM rooms don't usually have a shared bio.
+        // Using "Bio" for DM rooms might mean "Note" or just not applicable.
+        // Assuming this is for GROUPS as per request "for group... bio".
+        
+        if (room.type === 'direct') {
+            return res.status(400).json({ error: 'Direct chats do not have a shared bio' });
+        }
+
+        // Update DB
+        await db.query('UPDATE rooms SET bio = $1 WHERE id = $2', [bio, roomId]);
+
+        // Broadcast update
+        const io = req.app.get('io');
+        io.to(`room:${roomId}`).emit('room:updated', { 
+            roomId: parseInt(roomId),
+            bio
+        });
+
+        res.json({ success: true, bio });
+    } catch (error) {
+        console.error("Update room bio error:", error);
+        res.status(500).json({ error: "Failed to update bio" });
     }
 });
 

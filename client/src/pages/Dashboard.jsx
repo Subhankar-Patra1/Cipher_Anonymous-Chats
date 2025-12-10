@@ -133,6 +133,25 @@ export default function Dashboard() {
              });
         });
 
+        // [NEW] Chat cleared/deleted events
+        newSocket.on('chat:cleared', ({ roomId }) => {
+            // Optional: Update last message snippet to "Messages cleared" or similar?
+            // For now, maybe just let it be or refresh?
+            // Let's at least ensure if it's active, we might need to know?
+            // ChatWindow handles the messages view. Dashboard handles the list.
+            // Maybe we just ignore for list or set unread to 0?
+             setRooms(prev => prev.map(r => 
+                String(r.id) === String(roomId) ? { ...r, unread_count: 0 } : r
+            ));
+        });
+
+        newSocket.on('chat:deleted', ({ roomId }) => {
+            setRooms(prev => prev.filter(r => String(r.id) !== String(roomId)));
+            if (activeRoomRef.current && String(activeRoomRef.current.id) === String(roomId)) {
+                setActiveRoom(null);
+            }
+        });
+
         setSocket(newSocket);
 
         return () => newSocket.close();

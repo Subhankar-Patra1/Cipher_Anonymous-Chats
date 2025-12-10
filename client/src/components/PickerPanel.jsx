@@ -6,7 +6,7 @@ export default function PickerPanel({ onEmojiClick, onGifClick, disableGifTab = 
     const [activeTab, setActiveTab] = useState('emoji'); // 'emoji' | 'gif'
 
     return (
-        <div className="flex flex-col h-[400px] w-full bg-slate-900 rounded-xl overflow-hidden shadow-2xl border border-slate-700/50">
+        <div className="flex flex-col h-full w-full bg-slate-900 rounded-lg overflow-hidden shadow-2xl border border-slate-700/50">
             {/* Tabs */}
             <div className="flex items-center gap-4 px-4 py-2 bg-slate-800/80 border-b border-slate-700">
                 <button
