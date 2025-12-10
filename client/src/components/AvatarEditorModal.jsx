@@ -150,7 +150,7 @@ async function getCroppedImg(
     });
 }
 
-export default function AvatarEditorModal({ isOpen, onClose }) {
+export default function AvatarEditorModal({ isOpen, onClose, ...props }) {
     const { token, updateUser } = useAuth();
     const [imageSrc, setImageSrc] = useState(null);
     const [crop, setCrop] = useState({ x: 0, y: 0 });
@@ -202,8 +202,11 @@ export default function AvatarEditorModal({ isOpen, onClose }) {
             const avatarBlob = await getCroppedImg(imageSrc, croppedAreaPixels, rotation, 256);
             const thumbBlob = await getCroppedImg(imageSrc, croppedAreaPixels, rotation, 64);
 
+            const presignUrl = props.uploadUrl || `${import.meta.env.VITE_API_URL}/api/users/me/avatar/presign`;
+            const completeUrl = props.completeUrl || `${import.meta.env.VITE_API_URL}/api/users/me/avatar/complete`;
+
             // Get presigned URLs
-            const res = await fetch(`${import.meta.env.VITE_API_URL}/api/users/me/avatar/presign`, {
+            const res = await fetch(presignUrl, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -231,7 +234,7 @@ export default function AvatarEditorModal({ isOpen, onClose }) {
             }));
 
             // Complete
-            const completeRes = await fetch(`${import.meta.env.VITE_API_URL}/api/users/me/avatar/complete`, {
+            const completeRes = await fetch(completeUrl, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -245,7 +248,11 @@ export default function AvatarEditorModal({ isOpen, onClose }) {
             if (!completeRes.ok) throw new Error('Failed to save avatar');
             const data = await completeRes.json();
 
-            updateUser({ avatar_url: data.avatar_url, avatar_thumb_url: data.avatar_thumb_url });
+            if (props.onSuccess) {
+                props.onSuccess(data);
+            } else {
+                updateUser({ avatar_url: data.avatar_url, avatar_thumb_url: data.avatar_thumb_url });
+            }
             onClose();
 
         } catch (err) {
@@ -257,15 +264,20 @@ export default function AvatarEditorModal({ isOpen, onClose }) {
     };
 
     const handleRemove = async () => {
-        if (!confirm("Are you sure you want to remove your profile photo?")) return;
+        if (!confirm("Are you sure you want to remove this photo?")) return;
         setLoading(true);
         try {
-             const res = await fetch(`${import.meta.env.VITE_API_URL}/api/users/me/avatar`, {
+             const deleteUrl = props.deleteUrl || `${import.meta.env.VITE_API_URL}/api/users/me/avatar`;
+             const res = await fetch(deleteUrl, {
                 method: 'DELETE',
                 headers: { 'Authorization': `Bearer ${token}` }
             });
             if (res.ok) {
-                updateUser({ avatar_url: null, avatar_thumb_url: null });
+                if (props.onSuccess) {
+                    props.onSuccess({ avatar_url: null, avatar_thumb_url: null });
+                } else {
+                    updateUser({ avatar_url: null, avatar_thumb_url: null });
+                }
                 setImageSrc(null);
             }
         } catch (err) {

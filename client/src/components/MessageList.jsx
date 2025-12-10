@@ -542,9 +542,21 @@ export default function MessageList({ messages, setMessages, currentUser, roomId
                          } else if (msg.content.includes('left')) {
                              icon = 'logout'; 
                              textColor = 'text-amber-400';
-                         } else if (msg.content.includes('removed')) {
+                         } else if (msg.content.includes('removed') && !msg.content.includes('photo')) {
                              icon = 'person_remove';
                              textColor = 'text-red-400';
+                         } else if (msg.content.includes('changed the group name')) {
+                             icon = 'edit';
+                             textColor = 'text-blue-400';
+                         } else if (msg.content.includes('changed the group description')) {
+                             icon = 'description';
+                             textColor = 'text-blue-400';
+                         } else if (msg.content.includes('group photo')) {
+                             icon = 'image';
+                             textColor = 'text-blue-400';
+                         } else if (msg.content.includes('updated group permissions')) {
+                            icon = 'settings';
+                            textColor = 'text-orange-400';
                          }
  
                          return (

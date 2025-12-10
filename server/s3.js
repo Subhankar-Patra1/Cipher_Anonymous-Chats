@@ -93,7 +93,7 @@ const checkObjectExists = async (key) => {
         }));
         return true;
     } catch (err) {
-        if (err.name === 'NotFound') return false;
+        if (err.name === 'NotFound' || err.name === 'NoSuchKey') return false;
         throw err; // Permissions or other error
     }
 };

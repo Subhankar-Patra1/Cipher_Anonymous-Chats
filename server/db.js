@@ -34,7 +34,11 @@ const createTables = async () => {
                 type TEXT CHECK(type IN ('group', 'direct')) NOT NULL,
                 created_by INTEGER REFERENCES users(id),
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                expires_at TIMESTAMP
+                expires_at TIMESTAMP,
+                avatar_url TEXT,
+                avatar_thumb_url TEXT,
+                avatar_key TEXT,
+                bio TEXT DEFAULT ''
             );
 
             CREATE TABLE IF NOT EXISTS room_members (
@@ -92,6 +96,16 @@ const createTables = async () => {
             -- Migration for messages (Editing)
             ALTER TABLE messages ADD COLUMN IF NOT EXISTS edited_at TIMESTAMP;
             ALTER TABLE messages ADD COLUMN IF NOT EXISTS edit_version INTEGER DEFAULT 0;
+
+            CREATE TABLE IF NOT EXISTS group_permissions (
+                group_id INTEGER PRIMARY KEY REFERENCES rooms(id) ON DELETE CASCADE,
+                allow_name_change BOOLEAN DEFAULT TRUE,
+                allow_description_change BOOLEAN DEFAULT TRUE,
+                allow_add_members BOOLEAN DEFAULT TRUE,
+                allow_remove_members BOOLEAN DEFAULT TRUE,
+                send_mode VARCHAR(16) DEFAULT 'everyone',
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
         `);
         console.log("Tables created successfully");
     } catch (err) {

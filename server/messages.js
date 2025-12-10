@@ -40,6 +40,18 @@ router.post('/audio', upload.single('audio'), async (req, res) => {
         if (!memberRes.rows[0]) {
             return res.status(403).json({ error: 'Not a member of this room' });
         }
+        const member = memberRes.rows[0];
+
+        // Check Permissions (Send Mode)
+        const permRes = await db.query('SELECT send_mode FROM group_permissions WHERE group_id = $1', [roomId]);
+        const sendMode = permRes.rows[0]?.send_mode || 'everyone';
+
+        if (sendMode === 'admins_only' && !['admin', 'owner'].includes(member.role)) {
+             return res.status(403).json({ error: 'Only admins can send messages' });
+        }
+        if (sendMode === 'owner_only' && member.role !== 'owner') {
+             return res.status(403).json({ error: 'Only owner can send messages' });
+        }
 
         const fileName = `${roomId}/${Date.now()}-${req.user.id}.webm`;
         const audioUrl = await uploadFile(file.buffer, fileName, file.mimetype);
@@ -107,6 +119,18 @@ router.post('/', async (req, res) => {
         const memberRes = await db.query('SELECT * FROM room_members WHERE room_id = $1 AND user_id = $2', [room_id, req.user.id]);
         if (!memberRes.rows[0]) {
             return res.status(403).json({ error: 'Not a member of this room' });
+        }
+        const member = memberRes.rows[0];
+
+        // Check Permissions (Send Mode)
+        const permRes = await db.query('SELECT send_mode FROM group_permissions WHERE group_id = $1', [room_id]);
+        const sendMode = permRes.rows[0]?.send_mode || 'everyone';
+
+        if (sendMode === 'admins_only' && !['admin', 'owner'].includes(member.role)) {
+             return res.status(403).json({ error: 'Only admins can send messages' });
+        }
+        if (sendMode === 'owner_only' && member.role !== 'owner') {
+             return res.status(403).json({ error: 'Only owner can send messages' });
         }
 
         // Check room expiry

@@ -307,6 +307,17 @@ io.on('connection', async (socket) => {
             const member = memberRes.rows[0];
 
             if (member) {
+                // Check Permissions (Send Mode)
+                const permRes = await db.query('SELECT send_mode FROM group_permissions WHERE group_id = $1', [roomId]);
+                const sendMode = permRes.rows[0]?.send_mode || 'everyone';
+                
+                if (sendMode === 'admins_only' && !['admin', 'owner'].includes(member.role)) {
+                     return socket.emit('error', 'Only admins can send messages');
+                }
+                if (sendMode === 'owner_only' && member.role !== 'owner') {
+                     return socket.emit('error', 'Only owner can send messages');
+                }
+
                 const insertRes = await db.query(
                     `INSERT INTO messages (room_id, user_id, content, reply_to_message_id) 
                      VALUES ($1, $2, $3, $4) 

@@ -24,6 +24,36 @@ const authenticate = (req, res, next) => {
 
 router.use(authenticate);
 
+// 0. Search Users
+router.get('/search', async (req, res) => {
+    const { q, excludeGroupId } = req.query;
+    if (!q || q.length < 2) return res.json([]);
+
+    try {
+        let queryText = `
+            SELECT id, username, display_name, avatar_thumb_url 
+            FROM users 
+            WHERE (username ILIKE $1 OR display_name ILIKE $1)
+            AND id != $2
+        `;
+        const params = [`%${q}%`, req.user.id];
+
+        if (excludeGroupId) {
+            queryText += ` AND id NOT IN (SELECT user_id FROM room_members WHERE room_id = $${params.length + 1})`;
+            params.push(excludeGroupId);
+        }
+
+        queryText += ` LIMIT 10`;
+
+        const result = await db.query(queryText, params);
+        
+        res.json(result.rows);
+    } catch (err) {
+        console.error("Search error:", err);
+        res.status(500).json({ error: "Search failed" });
+    }
+});
+
 // 1. Request signed URLs
 router.post('/me/avatar/presign', async (req, res) => {
     const { files } = req.body; // [{ type: 'avatar'|'thumb', filename, contentType, size }]

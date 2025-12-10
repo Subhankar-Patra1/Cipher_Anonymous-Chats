@@ -152,6 +152,39 @@ export default function Dashboard() {
             }
         });
 
+        // [NEW] Group Avatar/Bio Updates
+        newSocket.on('room:updated', (data) => {
+            // data matches: { roomId, avatar_url, avatar_thumb_url, bio, etc }
+            console.log('[DEBUG] Room updated:', data);
+            
+            setRooms(prev => prev.map(r => {
+                if (String(r.id) === String(data.roomId)) {
+                    return { ...r, ...data }; // Merge updates (avatar, bio, etc)
+                }
+                return r;
+            }));
+
+            if (activeRoomRef.current && String(activeRoomRef.current.id) === String(data.roomId)) {
+                 setActiveRoom(prev => ({ ...prev, ...data }));
+            }
+        });
+
+        // [NEW] Group Permissions Updated
+        newSocket.on('group:permissions:updated', ({ groupId, permissions }) => {
+            console.log('[DEBUG] Permissions updated:', groupId, permissions);
+            
+            setRooms(prev => prev.map(r => {
+                if (String(r.id) === String(groupId)) {
+                    return { ...r, ...permissions }; // Merge permissions (send_mode, etc) into room
+                }
+                return r;
+            }));
+
+            if (activeRoomRef.current && String(activeRoomRef.current.id) === String(groupId)) {
+                 setActiveRoom(prev => ({ ...prev, ...permissions }));
+            }
+        });
+
         setSocket(newSocket);
 
         return () => newSocket.close();
@@ -287,12 +320,14 @@ export default function Dashboard() {
             });
             const newRoom = await res.json();
             if (res.ok) {
-                // Check if already in list (shouldn't be, but safety first)
+                // Check if already in list
                 if (!rooms.find(r => r.id === newRoom.id)) {
                     setRooms(prev => [newRoom, ...prev]);
                 }
-                setActiveRoom(newRoom);
                 setShowJoinModal(false);
+                
+                // Fetch messages immediately so the user sees the "You joined" message
+                await handleSelectRoom(newRoom);
             } else {
                 alert(newRoom.error);
             }

@@ -1,10 +1,9 @@
-import { useState, useEffect, useRef } from 'react';
-import MessageList from './MessageList';
-import MessageInput from './MessageInput';
+import React, { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { usePresence } from '../context/PresenceContext';
+import MessageList from './MessageList';
+import MessageInput from './MessageInput';
 import ProfilePanel from './ProfilePanel';
-// [MODIFIED] Added timeAgo helper (already present, just ensuring it stays)
 
 const timeAgo = (dateString) => {
     if (!dateString) return '';
@@ -23,13 +22,73 @@ const timeAgo = (dateString) => {
     return date.toLocaleDateString();
 };
 
+const PrivilegedUsersModal = ({ isOpen, onClose, title, roomId, roleFilter, token }) => {
+    const [users, setUsers] = useState([]);
+    const [loading, setLoading] = useState(false);
+
+    useEffect(() => {
+        if (!isOpen) return;
+        setLoading(true);
+        fetch(`${import.meta.env.VITE_API_URL}/api/rooms/${roomId}/members`, {
+            headers: { Authorization: `Bearer ${token}` }
+        })
+        .then(res => res.json())
+        .then(data => {
+            const filtered = data.filter(m => roleFilter.includes(m.role));
+            setUsers(filtered);
+        })
+        .catch(console.error)
+        .finally(() => setLoading(false));
+    }, [isOpen, roomId, roleFilter]);
+
+    if (!isOpen) return null;
+
+    return (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-[100] p-4" onClick={onClose}>
+            <div className="bg-slate-900 border border-slate-700 rounded-xl p-6 w-full max-w-sm shadow-2xl animate-modal-scale" onClick={e => e.stopPropagation()}>
+                <div className="flex justify-between items-center mb-4">
+                    <h3 className="text-lg font-bold text-white">{title}</h3>
+                    <button onClick={onClose} className="text-slate-400 hover:text-white">
+                        <span className="material-symbols-outlined">close</span>
+                    </button>
+                </div>
+                {loading ? (
+                    <div className="flex justify-center p-4">
+                        <span className="material-symbols-outlined animate-spin text-slate-500">progress_activity</span>
+                    </div>
+                ) : (
+                    <div className="space-y-3 max-h-[300px] overflow-y-auto custom-scrollbar">
+                        {users.map(u => (
+                            <div key={u.id} className="flex items-center gap-3 p-2 hover:bg-slate-800 rounded-lg">
+                                {/* Avatar */}
+                                {u.avatar_thumb_url ? (
+                                    <img src={u.avatar_thumb_url} alt={u.display_name} className="w-10 h-10 rounded-full object-cover" />
+                                ) : (
+                                    <div className="w-10 h-10 rounded-full bg-violet-600 flex items-center justify-center text-white font-bold">
+                                        {u.display_name[0]}
+                                    </div>
+                                )}
+                                <div>
+                                    <p className="text-sm font-bold text-slate-200">{u.display_name}</p>
+                                    <p className="text-xs text-slate-500">{u.username.startsWith('@') ? u.username : `@${u.username}`}</p>
+                                </div>
+                                <span className="ml-auto text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded bg-slate-800 text-slate-400 border border-slate-700">
+                                    {u.role}
+                                </span>
+                            </div>
+                        ))}
+                    </div>
+                )}
+            </div>
+        </div>
+    );
+};
+
 export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, setShowGroupInfo }) {
     const { token } = useAuth();
     const { presenceMap, fetchStatuses } = usePresence();
     const [showProfileCard, setShowProfileCard] = useState(false);
-    // [REMOVED] headerAvatarRef no longer needed
     
-    // [MODIFIED] Initialize with props instead of empty array
     const [messages, setMessages] = useState(room.initialMessages || []); 
     const [isExpired, setIsExpired] = useState(false);
     const [replyTo, setReplyTo] = useState(null); 
@@ -37,7 +96,32 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
     const [typingUsers, setTypingUsers] = useState([]);
     const typingTimeoutsRef = useRef({});
 
-    const headerRef = useRef(null); // [NEW]
+    const headerRef = useRef(null);
+    const messagesEndRef = useRef(null);
+
+    // Restriction Logic
+    const [showPrivilegedModal, setShowPrivilegedModal] = useState(false);
+    const [privilegedModalConfig, setPrivilegedModalConfig] = useState({ title: '', roles: [] });
+
+    const myRole = room.role || 'member';
+    const sendMode = room.send_mode || 'everyone';
+
+    const canSend = (() => {
+        if (room.type === 'direct') return true;
+        if (sendMode === 'everyone') return true;
+        if (sendMode === 'admins_only') return ['owner', 'admin'].includes(myRole);
+        if (sendMode === 'owner_only') return myRole === 'owner';
+        return true;
+    })();
+
+    const handleOpenPrivileged = () => {
+        if (sendMode === 'admins_only') {
+            setPrivilegedModalConfig({ title: 'Group Admins', roles: ['owner', 'admin'] });
+        } else if (sendMode === 'owner_only') {
+            setPrivilegedModalConfig({ title: 'Group Owner', roles: ['owner'] });
+        }
+        setShowPrivilegedModal(true);
+    };
 
     const handleLeave = async () => {
         if (!confirm('Are you sure you want to leave this group?')) return;
@@ -53,14 +137,12 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
         }
     };
 
-    // [NEW] Update messages when room or initialMessages changes (forcing reset if room changes, though usually key change handles this)
     useEffect(() => {
         if (room.initialMessages) {
              setMessages(room.initialMessages);
         }
     }, [room.initialMessages]);
 
-    // Fetch status if direct chat
     useEffect(() => {
         if (room.type === 'direct' && room.other_user_id) {
             fetchStatuses([room.other_user_id]);
@@ -71,26 +153,20 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
         ? presenceMap[room.other_user_id] 
         : null;
 
-
     useEffect(() => {
         if (!socket || !room) return;
 
-        // Check expiry
         if (room.expires_at && new Date(room.expires_at) < new Date()) {
             setIsExpired(true);
         } else {
             setIsExpired(false);
         }
 
-        // Join room
         socket.emit('join_room', room.id);
 
-        // Listen for messages
         const handleNewMessage = (msg) => {
             console.log('Received new_message:', msg, 'Current room:', room.id);
-            // [MODIFIED] Robust comparison for room ID (string vs number)
             if (String(msg.room_id) === String(room.id)) {
-                // Clear typing indicator for this user if they sent a message
                 setTypingUsers(prev => prev.filter(u => u.userId !== msg.user_id));
                 if (typingTimeoutsRef.current[msg.user_id]) {
                     clearTimeout(typingTimeoutsRef.current[msg.user_id]);
@@ -98,13 +174,10 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
                 }
 
                 setMessages(prev => {
-                    // [MODIFIED] Check for strict duplicates by ID first
-                    // This handles the case where the sender receives their own message back from the server
                     if (prev.some(m => m.id === msg.id)) {
                         return prev;
                     }
 
-                    // Hydrate msg if needed (for other users who get the message with just ID)
                     let processedMsg = { ...msg };
                     if (!processedMsg.replyTo && processedMsg.reply_to_message_id) {
                         const original = prev.find(m => m.id === processedMsg.reply_to_message_id);
@@ -123,14 +196,11 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
                         }
                     }
 
-                    // Check for optimistic message to replace using tempId if available
                     let optimisticIndex = -1;
 
                     if (processedMsg.tempId) {
                          optimisticIndex = prev.findIndex(m => m.id === processedMsg.tempId);
                     } else {
-                        // Fallback: match by content and user_id (reversed to find latest)
-                        // [MODIFIED] Added timestamp check to be safer? No, rely on content/user for now as before.
                         const reversedIndex = [...prev].reverse().findIndex(m => 
                             m.status === 'sending' && 
                             m.content === processedMsg.content && 
@@ -143,12 +213,11 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
                     
                     if (optimisticIndex !== -1) {
                         const newMsgs = [...prev];
-                        // Preserve replyTo from the optimistic message if the server message doesn't have it
                         const preservedMsg = { 
                             ...processedMsg, 
                             replyTo: processedMsg.replyTo || prev[optimisticIndex].replyTo 
                         };
-                        newMsgs[optimisticIndex] = preservedMsg; // Replace with real message
+                        newMsgs[optimisticIndex] = preservedMsg;
                         return newMsgs;
                     }
                     return [...prev, processedMsg];
@@ -176,7 +245,6 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
              if (String(updatedMsg.room_id) === String(room.id)) {
                  setMessages(prev => prev.map(msg => {
                      if (msg.id === updatedMsg.id) {
-                         // Update content and edit info, keep other fields like replyTo, user info
                          return { 
                              ...msg, 
                              content: updatedMsg.content,
@@ -192,18 +260,15 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
         const handleTypingStart = ({ room_id, user_id, user_name }) => {
              if (String(room_id) !== String(room.id)) return;
              
-             // Clear existing timeout
              if (typingTimeoutsRef.current[user_id]) {
                  clearTimeout(typingTimeoutsRef.current[user_id]);
              }
 
-             // Add user if not present
              setTypingUsers(prev => {
                  if (prev.some(u => u.userId === user_id)) return prev;
                  return [...prev, { userId: user_id, name: user_name }];
              });
 
-             // Set new timeout (auto remove after 4s)
              typingTimeoutsRef.current[user_id] = setTimeout(() => {
                  setTypingUsers(prev => prev.filter(u => u.userId !== user_id));
                  delete typingTimeoutsRef.current[user_id];
@@ -225,10 +290,8 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
         socket.on('message_deleted', handleMessageDeleted);
         socket.on('message_edited', handleMessageEdited);
         socket.on('typing:start', handleTypingStart);
-        socket.on('typing:start', handleTypingStart);
         socket.on('typing:stop', handleTypingStop);
 
-        // [NEW] Clear chat listener
         socket.on('chat:cleared', ({ roomId }) => {
             if (String(roomId) === String(room.id)) {
                 setMessages([]); 
@@ -243,7 +306,6 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
             socket.off('typing:start', handleTypingStart);
             socket.off('typing:stop', handleTypingStop);
             
-            // Clear all timeouts
             Object.values(typingTimeoutsRef.current).forEach(clearTimeout);
         };
     }, [socket, room, token]);
@@ -252,16 +314,15 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
         setMessages(prev => prev.filter(m => m.id !== messageId));
     };
 
-    const handleSend = (content, replyToMsg) => { // [MODIFY] accept replyToMsg
+    const handleSend = (content, replyToMsg) => {
         if (socket && !isExpired) {
-            // Optimistic Update
             const tempId = `temp-${Date.now()}`;
             const tempMsg = {
                 id: tempId,
                 room_id: room.id,
                 user_id: user.id,
                 content,
-                replyTo: replyToMsg || null, // [NEW] include replyTo
+                replyTo: replyToMsg || null,
                 created_at: new Date().toISOString(),
                 username: user.username,
                 display_name: user ? user.display_name : 'Me',
@@ -275,7 +336,7 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
                 replyToMessageId: replyToMsg ? replyToMsg.id : null,
                 tempId 
             });
-            setReplyTo(null); // [NEW] Clear reply after sending
+            setReplyTo(null);
         }
     };
 
@@ -308,7 +369,7 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
         });
     };
 
-    const handleSendAudio = async (blob, durationMs, waveform, replyToMsg) => { // [MODIFIED] Helper function
+    const handleSendAudio = async (blob, durationMs, waveform, replyToMsg) => {
         const tempId = `temp-${Date.now()}`;
         const tempMsg = {
             id: tempId,
@@ -326,7 +387,7 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
             status: 'sending',
             uploadStatus: 'uploading',
             uploadProgress: 0,
-            localBlob: blob // Save for retry
+            localBlob: blob 
         };
         setMessages(prev => [...prev, tempMsg]);
         setReplyTo(null);
@@ -341,7 +402,6 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
 
         try {
             await uploadAudioWithProgress(formData, tempId);
-            // Socket event will handle success replacement
         } catch (err) {
             console.error(err);
             setMessages(prev => prev.map(m => 
@@ -351,9 +411,8 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
     };
 
     const handleRetryAudio = async (msg) => {
-        if (!msg.localBlob) return; // Should have it
+        if (!msg.localBlob) return;
         
-        // Reset to uploading state
         setMessages(prev => prev.map(m => 
             m.id === msg.id ? { ...m, uploadStatus: 'uploading', uploadProgress: 0, status: 'sending' } : m
         ));
@@ -364,7 +423,7 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
         formData.append('durationMs', msg.audio_duration_ms);
         formData.append('waveform', JSON.stringify(msg.audio_waveform));
         if (msg.replyTo) formData.append('replyToMessageId', msg.replyTo.id);
-        formData.append('tempId', msg.id); // Reuse tempId
+        formData.append('tempId', msg.id);
 
         try {
             await uploadAudioWithProgress(formData, msg.id);
@@ -377,7 +436,6 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
     };
 
     const handleEditMessage = async (msgId, newContent) => {
-        // Optimistic update
         setMessages(prev => prev.map(m => 
             m.id === msgId 
             ? { ...m, content: newContent, edited_at: new Date().toISOString(), edit_version: (m.edit_version || 0) + 1 } 
@@ -404,16 +462,15 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
 
     const getTypingText = () => {
         if (typingUsers.length === 0) return null;
-        if (room.type === 'direct') return "is typing..."; // Direct chat usually just one other person
+        if (room.type === 'direct') return "is typing...";
         
         if (typingUsers.length === 1) return `${typingUsers[0].name} is typing...`;
         if (typingUsers.length === 2) return `${typingUsers[0].name} and ${typingUsers[1].name} are typing...`;
         return `${typingUsers[0].name}, ${typingUsers[1].name}, and ${typingUsers.length - 2} others are typing...`;
     };
 
-    const handleSendGif = async (gif, caption) => { // Removed default 'GIF'
+    const handleSendGif = async (gif, caption) => {
         const tempId = `temp-${Date.now()}`;
-        // gif object structure from tenor.js: { id, title, preview_url, gif_url, mp4_url, url, type, width, height }
         const finalGifUrl = gif.mp4_url || gif.gif_url;
         const finalPreviewUrl = gif.preview_url || gif.gifpreview;
         
@@ -421,8 +478,8 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
             id: tempId,
             room_id: room.id,
             user_id: user.id,
-            type: 'gif', // Database type is 'gif', but content might be mp4 url
-            content: caption || null, // Prompt req: content || null
+            type: 'gif',
+            content: caption || null,
             gif_url: finalGifUrl,
             preview_url: finalPreviewUrl,
             width: gif.width,
@@ -460,8 +517,24 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
         }
     };
 
+    const scrollToBottom = () => {
+        messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    };
+
+    useEffect(() => {
+        scrollToBottom();
+    }, [messages]);
+
     return (
         <div className="flex flex-col h-full bg-slate-950 relative overflow-hidden">
+            <PrivilegedUsersModal 
+                isOpen={showPrivilegedModal} 
+                onClose={() => setShowPrivilegedModal(false)}
+                title={privilegedModalConfig.title}
+                roleFilter={privilegedModalConfig.roles}
+                roomId={room.id}
+                token={token}
+            />
             {/* Background Pattern */}
             <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top_right,_var(--tw-gradient-stops))] from-violet-900/20 via-slate-950 to-slate-950 pointer-events-none" />
 
@@ -475,16 +548,16 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
                 </button>
 
                 <div 
-                    ref={headerRef} // [NEW] Attach ref
+                    ref={headerRef}
                     className="flex-1 min-w-0 cursor-pointer flex items-center gap-3" 
                     onClick={() => {
                         if (room.type === 'direct') setShowProfileCard(!showProfileCard);
                         else setShowGroupInfo(true);
                     }}
                 >
-                    {/* [NEW] Header Avatar */}
+                    {/* Header Avatar */}
                     <div className={`w-10 h-10 rounded-full flex items-center justify-center text-sm font-bold text-white shadow-lg shrink-0 overflow-hidden ${!room.avatar_url && !room.avatar_thumb_url ? 'bg-gradient-to-br from-violet-500 to-indigo-600' : 'bg-slate-800'}`}>
-                        {room.type === 'direct' && (room.avatar_url || room.avatar_thumb_url) ? (
+                        {(room.avatar_url || room.avatar_thumb_url) ? (
                             <img src={room.avatar_url || room.avatar_thumb_url} alt={room.name} className="w-full h-full object-cover" />
                         ) : (
                             room.type === 'direct' 
@@ -553,7 +626,7 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
                 onReply={setReplyTo} 
                 onDelete={handleLocalDelete}
                 onRetry={handleRetryAudio} 
-                onEdit={setEditingMessage} // [NEW]
+                onEdit={setEditingMessage}
             />
             
             {/* Typing Indicator */}
@@ -564,21 +637,38 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
                 </div>
             )}
 
-            <MessageInput 
-                onSend={(content) => handleSend(content, replyTo)} 
-                onSendAudio={(blob, duration, waveform) => handleSendAudio(blob, duration, waveform, replyTo)}
-                onSendGif={handleSendGif} // [NEW]
-                disabled={isExpired} 
-                replyTo={replyTo}          
-                setReplyTo={setReplyTo}
-                
-                // [NEW] Props for editing and typing
-                editingMessage={editingMessage}
-                onCancelEdit={() => setEditingMessage(null)}
-                onEditMessage={handleEditMessage}
-                onTypingStart={() => socket?.emit('typing:start', { roomId: room.id })}
-                onTypingStop={() => socket?.emit('typing:stop', { roomId: room.id })}
-            />
+            {canSend ? (
+                <MessageInput 
+                    onSend={(content) => handleSend(content, replyTo)} 
+                    onSendAudio={(blob, duration, waveform) => handleSendAudio(blob, duration, waveform, replyTo)}
+                    onSendGif={handleSendGif} 
+                    disabled={isExpired} 
+                    replyTo={replyTo}          
+                    setReplyTo={setReplyTo}
+                    
+                    editingMessage={editingMessage}
+                    onCancelEdit={() => setEditingMessage(null)}
+                    onEditMessage={handleEditMessage}
+                    onTypingStart={() => socket?.emit('typing:start', { roomId: room.id })}
+                    onTypingStop={() => socket?.emit('typing:stop', { roomId: room.id })}
+                />
+            ) : (
+                <div className="p-4 bg-slate-900/50 backdrop-blur-md border-t border-slate-800/50 z-10 flex justify-center items-center h-[88px]">
+                    <div className="bg-slate-800/80 px-6 py-3 rounded-full flex items-center gap-2 border border-slate-700 shadow-lg">
+                        <span className="material-symbols-outlined text-slate-400 text-sm">lock</span>
+                        <span className="text-slate-400 text-sm font-medium">
+                            Only{' '}
+                            <button 
+                                onClick={handleOpenPrivileged}
+                                className="font-bold text-violet-400 hover:text-violet-300 underline decoration-violet-500/30 underline-offset-4 hover:decoration-violet-500 transition-all"
+                            >
+                                {sendMode === 'admins_only' ? 'admins' : 'owner'}
+                            </button>
+                            {' '}can send messages
+                        </span>
+                    </div>
+                </div>
+            )}
 
             {showProfileCard && room.type === 'direct' && (
                 <ProfilePanel 
@@ -589,7 +679,6 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
                         if (action === 'delete') {
                             onBack(); // Go back to empty state
                         }
-                        // 'clear' handled by socket
                     }}
                 />
             )}
