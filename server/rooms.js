@@ -197,6 +197,8 @@ router.get('/', async (req, res) => {
             SELECT r.*, rm.role, rm.last_read_at,
             (SELECT u.display_name FROM room_members rm2 JOIN users u ON rm2.user_id = u.id WHERE rm2.room_id = r.id AND rm2.user_id != $1) as other_user_name,
             (SELECT u.username FROM room_members rm2 JOIN users u ON rm2.user_id = u.id WHERE rm2.room_id = r.id AND rm2.user_id != $1) as other_user_username,
+            (SELECT u.avatar_thumb_url FROM room_members rm2 JOIN users u ON rm2.user_id = u.id WHERE rm2.room_id = r.id AND rm2.user_id != $1) as other_user_avatar_thumb,
+            (SELECT u.avatar_url FROM room_members rm2 JOIN users u ON rm2.user_id = u.id WHERE rm2.room_id = r.id AND rm2.user_id != $1) as other_user_avatar_url,
             (SELECT u.id FROM room_members rm2 JOIN users u ON rm2.user_id = u.id WHERE rm2.room_id = r.id AND rm2.user_id != $1) as other_user_id,
             (SELECT COUNT(*) FROM messages m WHERE m.room_id = r.id AND m.created_at > rm.last_read_at) as unread_count
             FROM rooms r 
@@ -212,7 +214,9 @@ router.get('/', async (req, res) => {
             ...r,
             name: r.type === 'direct' ? (r.other_user_name || 'Unknown User') : r.name,
             username: r.type === 'direct' ? r.other_user_username : null,
-            other_user_id: r.type === 'direct' ? r.other_user_id : null
+            other_user_id: r.type === 'direct' ? r.other_user_id : null,
+            avatar_thumb_url: r.type === 'direct' ? r.other_user_avatar_thumb : null,
+            avatar_url: r.type === 'direct' ? r.other_user_avatar_url : null
         }));
 
         res.json(mappedRooms);
@@ -240,7 +244,7 @@ router.get('/:id/messages', async (req, res) => {
                    m.gif_url, m.preview_url, m.width, m.height,
                    (aps.heard_at IS NOT NULL) as audio_heard,
                    to_char(m.created_at, 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') as created_at,
-                   u.display_name, u.username 
+                   u.display_name, u.username, u.avatar_thumb_url, u.avatar_url 
             FROM messages m 
             JOIN users u ON m.user_id = u.id 
             LEFT JOIN audio_play_state aps ON m.id = aps.message_id AND aps.user_id = $2
@@ -282,7 +286,7 @@ router.get('/:id/members', async (req, res) => {
         }
 
         const membersRes = await db.query(`
-            SELECT u.id, u.display_name, u.username, rm.role, rm.joined_at 
+            SELECT u.id, u.display_name, u.username, u.avatar_thumb_url, rm.role, rm.joined_at 
             FROM room_members rm 
             JOIN users u ON rm.user_id = u.id 
             WHERE rm.room_id = $1

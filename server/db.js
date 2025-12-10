@@ -72,6 +72,11 @@ const createTables = async () => {
             ALTER TABLE messages ADD COLUMN IF NOT EXISTS audio_duration_ms INTEGER;
             ALTER TABLE messages ADD COLUMN IF NOT EXISTS audio_waveform TEXT; -- JSON stringified array
 
+            -- Migration for users table (Avatars)
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_url TEXT;
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_thumb_url TEXT;
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_key TEXT;
+
             CREATE TABLE IF NOT EXISTS audio_play_state (
                 user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
                 message_id INTEGER REFERENCES messages(id) ON DELETE CASCADE,

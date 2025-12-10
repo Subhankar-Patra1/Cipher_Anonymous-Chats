@@ -57,7 +57,7 @@ router.post('/login', async (req, res) => {
         }
 
         const token = jwt.sign({ id: user.id, username: user.username, display_name: user.display_name }, JWT_SECRET);
-        res.json({ token, user: { id: user.id, username: user.username, display_name: user.display_name, share_presence: user.share_presence } });
+        res.json({ token, user: { id: user.id, username: user.username, display_name: user.display_name, share_presence: user.share_presence, avatar_url: user.avatar_url, avatar_thumb_url: user.avatar_thumb_url } });
     } catch (error) {
         console.error("Login error:", error);
         res.status(500).json({ error: error.message });
@@ -100,7 +100,7 @@ router.get('/me', async (req, res) => {
 
     try {
         const decoded = jwt.verify(token, JWT_SECRET);
-        const { rows } = await db.query('SELECT id, username, display_name, share_presence FROM users WHERE id = $1', [decoded.id]);
+        const { rows } = await db.query('SELECT id, username, display_name, share_presence, avatar_url, avatar_thumb_url FROM users WHERE id = $1', [decoded.id]);
         const user = rows[0];
         
         if (!user) return res.status(404).json({ error: 'User not found' });
@@ -128,7 +128,7 @@ router.get('/search', async (req, res) => {
         // Note: Postgres uses $1, $2. 
         // We use ILIKE for case-insensitive search if desired, but LIKE is standard.
         const { rows } = await db.query(
-            'SELECT id, username, display_name FROM users WHERE username LIKE $1 AND id != $2 LIMIT 10', 
+            'SELECT id, username, display_name, avatar_thumb_url FROM users WHERE username LIKE $1 AND id != $2 LIMIT 10', 
             [`%${q}%`, currentUserId || -1]
         );
         res.json(rows);

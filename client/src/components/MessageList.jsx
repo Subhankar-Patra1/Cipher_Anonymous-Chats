@@ -115,8 +115,12 @@ const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone, onRetr
             <div className={`max-w-[75%] flex flex-col ${isMe ? 'items-end' : 'items-start'}`}>
                 {!isMe && (
                     <div className="flex items-center gap-2 mb-1 ml-1 select-none">
-                        <div className="w-5 h-5 rounded-full bg-gradient-to-br from-indigo-500 to-violet-600 flex items-center justify-center text-[10px] text-white font-bold">
-                            {(msg.display_name || msg.username || '?')[0].toUpperCase()}
+                        <div className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] text-white font-bold overflow-hidden ${!msg.avatar_thumb_url ? 'bg-gradient-to-br from-indigo-500 to-violet-600' : 'bg-slate-800'}`}>
+                            {msg.avatar_thumb_url ? (
+                                <img src={msg.avatar_thumb_url} alt={msg.display_name} className="w-full h-full object-cover" />
+                            ) : (
+                                (msg.display_name || msg.username || '?')[0].toUpperCase()
+                            )}
                         </div>
                         <span className="text-xs text-slate-400 font-medium">
                             {msg.display_name || msg.username}

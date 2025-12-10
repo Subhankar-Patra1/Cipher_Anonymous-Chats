@@ -36,8 +36,12 @@ export default function Sidebar({ rooms, activeRoom, onSelectRoom, loadingRoomId
                         ref={myProfileRef}
                         onClick={() => setShowMyProfile(!showMyProfile)}
                     >
-                        <div className="w-10 h-10 rounded-full bg-gradient-to-br from-violet-500 to-indigo-600 flex items-center justify-center text-white font-bold text-lg shadow-lg shadow-violet-500/20">
-                            {user.display_name[0].toUpperCase()}
+                        <div className={`w-10 h-10 rounded-full flex items-center justify-center text-white font-bold text-lg shadow-lg shadow-violet-500/20 overflow-hidden ${!user.avatar_thumb_url ? 'bg-gradient-to-br from-violet-500 to-indigo-600' : 'bg-slate-800'}`}>
+                            {user.avatar_thumb_url ? (
+                                <img src={user.avatar_thumb_url} alt="Me" className="w-full h-full object-cover" />
+                            ) : (
+                                user.display_name[0].toUpperCase()
+                            )}
                         </div>
                         <div>
                             <h2 className="font-bold text-slate-100 truncate max-w-[100px]">{user.display_name}</h2>
@@ -111,9 +115,13 @@ export default function Sidebar({ rooms, activeRoom, onSelectRoom, loadingRoomId
                     >
                         <div className={`w-10 h-10 flex items-center justify-center ${room.type === 'direct' ? 'rounded-full' : 'rounded-lg p-2'} ${activeRoom?.id === room.id ? 'bg-violet-500/20' : 'bg-slate-800 group-hover:bg-slate-700'} transition-colors relative`}>
                             {room.type === 'direct' ? (
-                                <span className="text-sm font-bold">
-                                    {room.name[0].toUpperCase()}
-                                </span>
+                                room.avatar_thumb_url ? (
+                                    <img src={room.avatar_thumb_url} alt={room.name} className="w-full h-full object-cover rounded-full" />
+                                ) : (
+                                    <span className="text-sm font-bold">
+                                        {room.name[0].toUpperCase()}
+                                    </span>
+                                )
                             ) : (
                                 <span className="material-symbols-outlined text-lg">
                                     group

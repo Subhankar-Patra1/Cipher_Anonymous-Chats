@@ -7,7 +7,12 @@ const db = require('./db');
 const redisClient = require('./redis');
 
 // Connect Redis
+// Connect Redis
 redisClient.connectRedis();
+
+// Configure S3 CORS
+const { configureBucketCors } = require('./s3');
+configureBucketCors();
 
 const app = express();
 const server = http.createServer(app);
@@ -149,6 +154,9 @@ app.patch('/api/users/me/privacy', async (req, res) => {
         res.status(401).json({ error: 'Unauthorized' });
     }
 });
+
+const usersRoutes = require('./users');
+app.use('/api/users', usersRoutes);
 
 // Global Error Handler
 app.use((err, req, res, next) => {
@@ -308,7 +316,7 @@ io.on('connection', async (socket) => {
                 const info = insertRes.rows[0];
                 
                 // Get User Display Name
-                const userRes = await db.query('SELECT display_name FROM users WHERE id = $1', [socket.user.id]);
+                const userRes = await db.query('SELECT display_name, avatar_thumb_url, avatar_url FROM users WHERE id = $1', [socket.user.id]);
                 const user = userRes.rows[0];
 
                 const message = {
@@ -321,6 +329,8 @@ io.on('connection', async (socket) => {
                     created_at: info.created_at,
                     username: socket.user.username,
                     display_name: user ? user.display_name : socket.user.display_name,
+                    avatar_thumb_url: user ? user.avatar_thumb_url : null,
+                    avatar_url: user ? user.avatar_url : null,
                     tempId: tempId // Return the tempId to the client
                 };
 

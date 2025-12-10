@@ -55,7 +55,7 @@ router.post('/audio', upload.single('audio'), async (req, res) => {
         const info = result.rows[0];
 
         // Fetch user display name
-        const userRes = await db.query('SELECT display_name FROM users WHERE id = $1', [req.user.id]);
+        const userRes = await db.query('SELECT display_name, avatar_thumb_url, avatar_url FROM users WHERE id = $1', [req.user.id]);
         const user = userRes.rows[0];
 
         let parsedWaveform = [];
@@ -79,6 +79,8 @@ router.post('/audio', upload.single('audio'), async (req, res) => {
             created_at: info.created_at,
             username: req.user.username,
             display_name: user ? user.display_name : req.user.display_name,
+            avatar_thumb_url: user ? user.avatar_thumb_url : null,
+            avatar_url: user ? user.avatar_url : null,
             tempId: tempId
         };
         
@@ -142,7 +144,7 @@ router.post('/', async (req, res) => {
         const info = result.rows[0];
 
         // Fetch user info for broadcast
-        const userRes = await db.query('SELECT display_name FROM users WHERE id = $1', [req.user.id]);
+        const userRes = await db.query('SELECT display_name, avatar_thumb_url, avatar_url FROM users WHERE id = $1', [req.user.id]);
         const user = userRes.rows[0];
 
         const message = {
@@ -159,6 +161,8 @@ router.post('/', async (req, res) => {
             created_at: info.created_at,
             username: req.user.username,
             display_name: user ? user.display_name : req.user.display_name,
+            avatar_thumb_url: user ? user.avatar_thumb_url : null,
+            avatar_url: user ? user.avatar_url : null,
             tempId
         };
 

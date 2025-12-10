@@ -1,4 +1,5 @@
-const { S3Client, PutObjectCommand } = require('@aws-sdk/client-s3');
+const { S3Client, PutObjectCommand, HeadObjectCommand, DeleteObjectCommand, PutBucketCorsCommand } = require('@aws-sdk/client-s3');
+const { getSignedUrl } = require('@aws-sdk/s3-request-presigner');
 require('dotenv').config();
 
 const region = process.env.AWS_REGION;
@@ -13,7 +14,7 @@ if (!secretAccessKey) missingVars.push('AWS_SECRET_ACCESS_KEY');
 if (!bucketName) missingVars.push('AWS_BUCKET_NAME');
 
 if (missingVars.length > 0) {
-    console.error(`[S3 Error] Missing AWS environment variables: ${missingVars.join(', ')}. Audio uploads will fail.`);
+    console.error(`[S3 Error] Missing AWS environment variables: ${missingVars.join(', ')}. Audio/Image uploads will fail.`);
 }
 
 const s3Client = new S3Client({
@@ -23,6 +24,30 @@ const s3Client = new S3Client({
         secretAccessKey
     }
 });
+
+const configureBucketCors = async () => {
+    try {
+        const command = new PutBucketCorsCommand({
+            Bucket: bucketName,
+            CORSConfiguration: {
+                CORSRules: [
+                    {
+                        AllowedHeaders: ["*"],
+                        AllowedMethods: ["PUT", "POST", "GET", "HEAD"],
+                        AllowedOrigins: ["*"], // For dev. In prod, lock this down.
+                        ExposeHeaders: ["ETag"],
+                        MaxAgeSeconds: 3000
+                    }
+                ]
+            }
+        });
+        await s3Client.send(command);
+        console.log("S3 Bucket CORS updated successfully.");
+    } catch (err) {
+        console.error("Failed to update S3 Bucket CORS:", err);
+        // Don't throw, just log. Might fail if permissions are missing.
+    }
+};
 
 const uploadFile = async (fileBuffer, fileName, mimeType) => {
     const uploadParams = {
@@ -34,9 +59,6 @@ const uploadFile = async (fileBuffer, fileName, mimeType) => {
 
     try {
         await s3Client.send(new PutObjectCommand(uploadParams));
-        // Construct the URL manually or use a signed URL if private.
-        // Assuming public read or specific bucket policy for now, or just returning the URL structure.
-        // Standard S3 URL: https://bucket-name.s3.region.amazonaws.com/key
         const url = `https://${bucketName}.s3.${region}.amazonaws.com/${fileName}`;
         return url;
     } catch (err) {
@@ -45,4 +67,56 @@ const uploadFile = async (fileBuffer, fileName, mimeType) => {
     }
 };
 
-module.exports = { uploadFile };
+const generatePresignedUrl = async (key, contentType, expiresIn = 300) => {
+    const command = new PutObjectCommand({
+        Bucket: bucketName,
+        Key: key,
+        ContentType: contentType,
+        // ACL is tricky with buckets blocking public ACLs.
+        // Usually better to rely on bucket policy. Omitting ACL here unless specified.
+    });
+
+    try {
+        const url = await getSignedUrl(s3Client, command, { expiresIn });
+        return url;
+    } catch (err) {
+        console.error("Presigned URL Error", err);
+        throw err;
+    }
+};
+
+const checkObjectExists = async (key) => {
+    try {
+        await s3Client.send(new HeadObjectCommand({
+            Bucket: bucketName,
+            Key: key
+        }));
+        return true;
+    } catch (err) {
+        if (err.name === 'NotFound') return false;
+        throw err; // Permissions or other error
+    }
+};
+
+const deleteObject = async (key) => {
+    try {
+        await s3Client.send(new DeleteObjectCommand({
+            Bucket: bucketName,
+            Key: key
+        }));
+        return true;
+    } catch (err) {
+        console.error("S3 Delete Error", err);
+        throw err;
+    }
+};
+
+module.exports = { 
+    uploadFile,
+    generatePresignedUrl,
+    checkObjectExists,
+    deleteObject,
+    configureBucketCors,
+    bucketName,
+    region
+};

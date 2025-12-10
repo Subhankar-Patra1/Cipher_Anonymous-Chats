@@ -37,6 +37,8 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
     const [typingUsers, setTypingUsers] = useState([]);
     const typingTimeoutsRef = useRef({});
 
+    const headerRef = useRef(null); // [NEW]
+
     const handleLeave = async () => {
         if (!confirm('Are you sure you want to leave this group?')) return;
         
@@ -79,9 +81,6 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
         } else {
             setIsExpired(false);
         }
-
-        // [REMOVED] Internal fetch logic - now handled by parent
-
 
         // Join room
         socket.emit('join_room', room.id);
@@ -468,6 +467,7 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
                 </button>
 
                 <div 
+                    ref={headerRef} // [NEW] Attach ref
                     className="flex-1 min-w-0 cursor-pointer flex items-center gap-3" 
                     onClick={() => {
                         if (room.type === 'direct') setShowProfileCard(!showProfileCard);
@@ -475,11 +475,14 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
                     }}
                 >
                     {/* [NEW] Header Avatar */}
-                    <div className="w-10 h-10 rounded-full bg-gradient-to-br from-violet-500 to-indigo-600 flex items-center justify-center text-sm font-bold text-white shadow-lg shrink-0">
-                        {room.type === 'direct' 
-                            ? room.display_name?.[0]?.toUpperCase() || room.name?.[0]?.toUpperCase()
-                            : '#'
-                        }
+                    <div className={`w-10 h-10 rounded-full flex items-center justify-center text-sm font-bold text-white shadow-lg shrink-0 overflow-hidden ${!room.avatar_url && !room.avatar_thumb_url ? 'bg-gradient-to-br from-violet-500 to-indigo-600' : 'bg-slate-800'}`}>
+                        {room.type === 'direct' && (room.avatar_url || room.avatar_thumb_url) ? (
+                            <img src={room.avatar_url || room.avatar_thumb_url} alt={room.name} className="w-full h-full object-cover" />
+                        ) : (
+                            room.type === 'direct' 
+                                ? room.display_name?.[0]?.toUpperCase() || room.name?.[0]?.toUpperCase()
+                                : '#'
+                        )}
                     </div>
 
                     <div className="min-w-0">
@@ -574,9 +577,12 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
                     targetUser={{
                         id: room.other_user_id,
                         display_name: room.name,
-                        username: room.username
+                        username: room.username,
+                        avatar_url: room.avatar_url,
+                        avatar_thumb_url: room.avatar_thumb_url
                     }}
                     onClose={() => setShowProfileCard(false)}
+                    anchorRef={headerRef} // [NEW]
                 />
             )}
         </div>

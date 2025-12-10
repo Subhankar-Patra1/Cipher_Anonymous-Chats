@@ -99,6 +99,40 @@ export default function Dashboard() {
             }));
         });
 
+        // [NEW] Avatar Updates
+        newSocket.on('user:avatar:updated', ({ userId, avatar_url, avatar_thumb_url }) => {
+             console.log('[DEBUG] Avatar updated for user', userId, avatar_thumb_url);
+             setRooms(prev => prev.map(r => {
+                 if (r.type === 'direct' && String(r.other_user_id) === String(userId)) {
+                     return { ...r, avatar_thumb_url };
+                 }
+                 return r;
+             }));
+             
+             setActiveRoom(prev => {
+                 if (prev && prev.type === 'direct' && String(prev.other_user_id) === String(userId)) {
+                     return { ...prev, avatar_thumb_url, avatar_url }; // Update both
+                 }
+                 return prev;
+             });
+        });
+
+        newSocket.on('user:avatar:deleted', ({ userId }) => {
+             setRooms(prev => prev.map(r => {
+                 if (r.type === 'direct' && String(r.other_user_id) === String(userId)) {
+                     return { ...r, avatar_thumb_url: null };
+                 }
+                 return r;
+             }));
+             
+             setActiveRoom(prev => {
+                 if (prev && prev.type === 'direct' && String(prev.other_user_id) === String(userId)) {
+                     return { ...prev, avatar_thumb_url: null, avatar_url: null };
+                 }
+                 return prev;
+             });
+        });
+
         setSocket(newSocket);
 
         return () => newSocket.close();
@@ -387,6 +421,7 @@ export default function Dashboard() {
             {showGroupInfo && activeRoom && (
                 <GroupInfoModal 
                     room={activeRoom} 
+                    socket={socket}
                     onClose={() => setShowGroupInfo(false)}
                     onLeave={async () => {
                          if (!confirm('Are you sure you want to leave this group?')) return;

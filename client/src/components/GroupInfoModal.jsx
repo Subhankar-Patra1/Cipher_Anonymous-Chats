@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { QRCodeSVG } from 'qrcode.react';
 
-export default function GroupInfoModal({ room, onClose, onLeave, onKick }) {
+export default function GroupInfoModal({ room, onClose, onLeave, onKick, socket }) {
     const { token, user: currentUser } = useAuth();
     const [members, setMembers] = useState([]);
     const [loading, setLoading] = useState(true);
@@ -27,6 +27,36 @@ export default function GroupInfoModal({ room, onClose, onLeave, onKick }) {
             setLoading(false);
         }
     };
+
+    useEffect(() => {
+        if (!socket) return;
+
+        const handleAvatarUpdate = ({ userId, avatar_url, avatar_thumb_url }) => {
+            setMembers(prev => prev.map(m => {
+                if (String(m.id) === String(userId)) {
+                    return { ...m, avatar_thumb_url, avatar_url };
+                }
+                return m;
+            }));
+        };
+
+        const handleAvatarDelete = ({ userId }) => {
+            setMembers(prev => prev.map(m => {
+                if (String(m.id) === String(userId)) {
+                    return { ...m, avatar_thumb_url: null, avatar_url: null };
+                }
+                return m;
+            }));
+        };
+
+        socket.on('user:avatar:updated', handleAvatarUpdate);
+        socket.on('user:avatar:deleted', handleAvatarDelete);
+
+        return () => {
+            socket.off('user:avatar:updated', handleAvatarUpdate);
+            socket.off('user:avatar:deleted', handleAvatarDelete);
+        };
+    }, [socket]);
 
     const copyToClipboard = (text, type) => {
         navigator.clipboard.writeText(text);
@@ -135,13 +165,21 @@ export default function GroupInfoModal({ room, onClose, onLeave, onKick }) {
                             {members.map(member => (
                                 <div key={member.id} className="flex items-center justify-between p-3 rounded-xl hover:bg-slate-800/50 transition-colors group">
                                     <div className="flex items-center gap-3">
-                                        <div className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold ${
-                                            member.id === currentUser.id 
-                                            ? 'bg-violet-600 text-white' 
-                                            : 'bg-slate-700 text-slate-300'
-                                        }`}>
-                                            {member.display_name[0].toUpperCase()}
-                                        </div>
+                                        {member.avatar_thumb_url ? (
+                                            <img 
+                                                src={member.avatar_thumb_url} 
+                                                alt={member.display_name} 
+                                                className="w-8 h-8 rounded-full object-cover bg-slate-800"
+                                            />
+                                        ) : (
+                                            <div className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold ${
+                                                member.id === currentUser.id 
+                                                ? 'bg-violet-600 text-white' 
+                                                : 'bg-slate-700 text-slate-300'
+                                            }`}>
+                                                {member.display_name[0].toUpperCase()}
+                                            </div>
+                                        )}
                                         <div>
                                             <p className="text-sm font-medium text-slate-200 flex items-center gap-2">
                                                 {member.display_name}
