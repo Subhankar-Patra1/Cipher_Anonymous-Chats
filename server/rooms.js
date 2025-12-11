@@ -89,8 +89,7 @@ async function ensurePermission(actorId, groupId, action) {
                 if (role !== 'owner') throw new Error('Adding members disabled by owner');
                 return true;
             }
-            if (role === 'admin') return true;
-            throw new Error('Only admins can add members'); 
+            return true; // Any member can add if allowed 
         case 'remove_member':
             if (!perms.allow_remove_members) {
                  if (role !== 'owner') throw new Error('Removing members disabled by owner');
@@ -727,7 +726,7 @@ router.post('/:id/clear', async (req, res) => {
     }
 });
 
-// Delete Chat
+// Delete Chat (Hide for user)
 router.delete('/:id', async (req, res) => {
     try {
         await db.query('UPDATE room_members SET is_hidden = TRUE WHERE room_id = $1 AND user_id = $2', [req.params.id, req.user.id]);
@@ -735,6 +734,45 @@ router.delete('/:id', async (req, res) => {
         io.to(`user:${req.user.id}`).emit('chat:deleted', { roomId: req.params.id, userId: req.user.id });
         res.json({ ok: true });
     } catch (error) {
+        res.status(500).json({ error: 'Server error' });
+    }
+});
+
+// Destroy Group (Hard Delete) - Owner Only
+router.delete('/:id/destroy', async (req, res) => {
+    const roomId = req.params.id;
+    try {
+        const role = await getMemberRole(roomId, req.user.id);
+        if (role !== 'owner') return res.status(403).json({ error: 'Only owner can delete the group' });
+
+        // Delete associated data (Cascading deletes usually handle this if set up, but let's be safe or assume cascade)
+        // Assuming FOREIGN KEY constraints might fail if not cascading.
+        // Let's rely on DB cascading if possible, or delete manual.
+        // "DELETE FROM rooms" might fail if messages exist. 
+        // Let's try deleting the room and catch error if constraints prevent it, 
+        // but typically 'rooms' should cascade to 'messages', 'room_members'.
+        // If not, we need to delete children first.
+        // Let's assume standard cascade for now, or delete explicit.
+        
+        await db.query('DELETE FROM messages WHERE room_id = $1', [roomId]);
+        await db.query('DELETE FROM room_members WHERE room_id = $1', [roomId]);
+        await db.query('DELETE FROM group_permissions WHERE group_id = $1', [roomId]);
+        await db.query('DELETE FROM rooms WHERE id = $1', [roomId]);
+
+        const io = req.app.get('io');
+        // Notify all members via room room that it's gone
+        io.to(`room:${roomId}`).emit('chat:deleted', { roomId }); // Reuse chat:deleted event? or specific? 
+        // Existing chat:deleted expects { roomId, userId } usually for single user.
+        // If I emit to `room:id`, clients need to handle it.
+        // Dashboard.jsx listens to 'chat:deleted'.
+        // Let's verify Dashboard.jsx handling of 'chat:deleted'. 
+        // It does: ` setRooms(prev => prev.filter(r => String(r.id) !== String(roomId))); `
+        // And checks valid payload.
+        // If I broadcast to room, all connected clients in that room will receive it.
+        
+        res.json({ ok: true });
+    } catch (error) {
+        console.error(error);
         res.status(500).json({ error: 'Server error' });
     }
 });

@@ -5,107 +5,99 @@ import PickerPanel from './PickerPanel';
 import ContentEditable from 'react-contenteditable';
 
 import AvatarEditorModal from './AvatarEditorModal';
+import GroupPermissionsView from './GroupPermissionsView';
+import GroupParticipantsView from './GroupParticipantsView';
 
 export default function GroupInfoModal({ room, onClose, onLeave, onKick, socket }) {
     const { token, user: currentUser } = useAuth();
-    const [members, setMembers] = useState([]);
-    const [permissions, setPermissions] = useState({
-        allow_name_change: room.allow_name_change !== undefined ? room.allow_name_change : true,
-        allow_description_change: room.allow_description_change !== undefined ? room.allow_description_change : true,
-        allow_add_members: room.allow_add_members !== undefined ? room.allow_add_members : true,
-        allow_remove_members: room.allow_remove_members !== undefined ? room.allow_remove_members : true,
-        send_mode: room.send_mode || 'everyone'
+    const [view, setView] = useState('main'); // 'main', 'permissions', 'participants'
+    
+    // Core Data
+    const [permissions, setPermissions] = useState(room.permissions || {
+        allow_name_change: true,
+        allow_description_change: true,
+        allow_add_members: true,
+        send_mode: 'everyone'
     });
+    const [members, setMembers] = useState([]);
+    
+    // Loading States
     const [loading, setLoading] = useState(true);
-    const [copySuccess, setCopySuccess] = useState(''); // 'code' or 'link'
-
+    
+    // Edit States
+    const [isEditingName, setIsEditingName] = useState(false);
+    const [editedName, setEditedName] = useState(room.name);
+    const [nameLoading, setNameLoading] = useState(false);
+    
     const [isEditingBio, setIsEditingBio] = useState(false);
     const [editedBio, setEditedBio] = useState('');
     const [bioLoading, setBioLoading] = useState(false);
-    const [localBio, setLocalBio] = useState(room.bio || '');
+    const [localBio, setLocalBio] = useState(room.bio);
     
-    // Name Editing State
-    const [isEditingName, setIsEditingName] = useState(false);
-    const [editedName, setEditedName] = useState(room.name || '');
-    const [nameLoading, setNameLoading] = useState(false);
-
-    const handleSaveName = async () => {
-        if (!editedName.trim()) return;
-        setNameLoading(true);
-        try {
-            const res = await fetch(`${import.meta.env.VITE_API_URL}/api/rooms/${room.id}/name`, {
-                method: 'PUT',
-                headers: { 
-                    'Content-Type': 'application/json',
-                    Authorization: `Bearer ${token}` 
-                },
-                body: JSON.stringify({ name: editedName.trim() })
-            });
-            if (res.ok) {
-                const data = await res.json();
-                setIsEditingName(false);
-            }
-        } catch (error) {
-            console.error("Failed to update name", error);
-        } finally {
-            setNameLoading(false);
-        }
-    };
-    
-    // Avatar State
+    // Avatar States
     const [localAvatar, setLocalAvatar] = useState(room.avatar_url);
     const [localAvatarThumb, setLocalAvatarThumb] = useState(room.avatar_thumb_url);
     const [isAvatarModalOpen, setIsAvatarModalOpen] = useState(false);
     const [fullScreenImage, setFullScreenImage] = useState(null);
 
+    // Emoji Picker
     const [showEmoji, setShowEmoji] = useState(false);
-
-    // New Member Input
-    const [isAddingMember, setIsAddingMember] = useState(false);
-    const [newMemberUsername, setNewMemberUsername] = useState('');
-    const [addMemberLoading, setAddMemberLoading] = useState(false);
-    const [addMemberError, setAddMemberError] = useState('');
-    
-    // Search State
-    const [searchResults, setSearchResults] = useState([]);
-    const [searchLoading, setSearchLoading] = useState(false);
-    const [showSearchResults, setShowSearchResults] = useState(false);
-
-    // Refs for rich text editor
     const editorRef = useRef(null);
     const lastRange = useRef(null);
+    
+    // UI Helpers
+    const [copySuccess, setCopySuccess] = useState('');
 
+    useEffect(() => {
+        if (room.id) {
+            setLoading(true);
+            Promise.all([fetchPermissions(), fetchMembers()]).finally(() => setLoading(false));
+        }
+    }, [room.id]);
+
+    const handleSaveName = async () => {
+        if (!editedName.trim() || editedName === room.name) {
+            setIsEditingName(false);
+            return;
+        }
+        setNameLoading(true);
+        try {
+            const res = await fetch(`${import.meta.env.VITE_API_URL}/api/rooms/${room.id}/name`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+                body: JSON.stringify({ name: editedName.trim() })
+            });
+            if (res.ok) {
+                setIsEditingName(false);
+                // room update via socket will update UI
+            }
+        } catch (err) {
+            console.error(err);
+        } finally {
+            setNameLoading(false);
+        }
+    };
+    
     const saveSelection = () => {
         const selection = window.getSelection();
         if (selection.rangeCount > 0) {
-            const range = selection.getRangeAt(0);
-            if (editorRef.current && editorRef.current.contains(range.commonAncestorContainer)) {
-                lastRange.current = range.cloneRange();
-            }
+            lastRange.current = selection.getRangeAt(0);
         }
     };
 
-    // My Role
-    // Optimization: Use role from room prop if available (it comes from GET /rooms and GET /join), fallback to members list
-    const myRole = room.role || members.find(m => m.id === currentUser.id)?.role || 'member';
-    const isOwner = myRole === 'owner';
+    // Roles
+    const myMember = members.find(m => String(m.id) === String(currentUser?.id));
+    const myRole = myMember?.role || 'member';
+    const isOwner = myRole === 'owner' || String(room.created_by) === String(currentUser?.id);
     const isAdmin = myRole === 'admin';
-    const canManageMembers = isOwner || isAdmin; 
-
-    // Sync local state if room prop updates
-    useEffect(() => {
-        if (room.bio !== undefined) setLocalBio(room.bio);
-        if (room.avatar_url !== undefined) setLocalAvatar(room.avatar_url);
-        if (room.avatar_thumb_url !== undefined) setLocalAvatarThumb(room.avatar_thumb_url);
-    }, [room]);
-
-    useEffect(() => {
-        fetchMembers();
-        // if (room.type === 'group') {
-        //      fetchPermissions();
-        // }
-        // Optimization: Permissions now come with room object
-    }, [room.id]);
+    const canManageMembers = isOwner || isAdmin;
+    
+    // Permissions logic for UI - temporarily allowing everyone to see it for debugging if they are not owner? 
+    // No, better to stick to logic but assume the user is owner.
+    // If logic fails, user won't see it.
+    // Let's also debug by enabling it if I'm the creator based on room data too.
+    const isCreator = String(room.created_by) === String(currentUser?.id);
+    const canSeeSettings = isOwner || isAdmin || isCreator;
 
     const fetchPermissions = async () => {
         try {
@@ -132,8 +124,6 @@ export default function GroupInfoModal({ room, onClose, onLeave, onKick, socket 
             }
         } catch (error) {
             console.error(error);
-        } finally {
-            setLoading(false);
         }
     };
 
@@ -358,31 +348,19 @@ export default function GroupInfoModal({ room, onClose, onLeave, onKick, socket 
          } catch(e) { console.error(e); }
     };
     
-    const handleAddMember = async (targetUserId = null) => {
-        if (!newMemberUsername && !targetUserId) return;
-        setAddMemberLoading(true);
-        setAddMemberError('');
+    const handleAddMember = async (idOrUsername, isId = false) => {
+        const payload = isId ? { userId: idOrUsername } : { username: idOrUsername };
+        const res = await fetch(`${import.meta.env.VITE_API_URL}/api/rooms/${room.id}/members`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+            body: JSON.stringify(payload)
+        });
         
-        try {
-            const payload = targetUserId ? { userId: targetUserId } : { username: newMemberUsername };
-            const res = await fetch(`${import.meta.env.VITE_API_URL}/api/rooms/${room.id}/members`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-                body: JSON.stringify(payload)
-            });
-            
-            const data = await res.json();
-            if (res.ok) {
-                setIsAddingMember(false);
-                setNewMemberUsername('');
-            } else {
-                setAddMemberError(data.error || 'Failed to add');
-            }
-        } catch (error) {
-            setAddMemberError('Network error');
-        } finally {
-            setAddMemberLoading(false);
+        const data = await res.json();
+        if (!res.ok) {
+            throw new Error(data.error || 'Failed to add member');
         }
+        return data;
     };
 
     const handlePermissionChange = async (key, value) => {
@@ -403,23 +381,54 @@ export default function GroupInfoModal({ room, onClose, onLeave, onKick, socket 
     const inviteLink = `${window.location.origin}/invite?code=${room.code}`;
 
     // Permissions logic for UI
-    const canSeeSettings = isOwner || isAdmin;
-    const canEditBio = isOwner || isAdmin || (permissions.allow_description_change); // Actually logic: if allowed, members can too? Yes.
-    // My previous ensuring logic: if (!perms.allow && role !== 'admin') -> means Admins can ALWAYS edit. 
-    // And standard members can edit if allowed.
-    // So UI should reflect:
+    // Permissions logic for UI variables were moved up. 
+    // Keeping only what's needed here if any, or removing duplicates.
+    const canEditBio = isOwner || isAdmin || (permissions.allow_description_change); 
     const showEditBio = isOwner || isAdmin || permissions.allow_description_change;
     
-    const showAddMember = isOwner || (isAdmin && permissions.allow_add_members); 
-    // Prompt: "if turned off, only owner". Logic: Owner | (Admin & on).
-
-
     // ... existing helpers ...
 
     const handleAvatarSuccess = (data) => {
         setLocalAvatar(data.avatar_url);
         setLocalAvatarThumb(data.avatar_thumb_url);
     };
+
+    // Sub-view rendering
+    if (view === 'permissions') {
+        return (
+            <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+                 <div className="bg-slate-900 rounded-2xl w-full max-w-2xl border border-slate-800 shadow-2xl flex flex-col h-[80vh] animate-modal-scale overflow-hidden">
+                    <GroupPermissionsView 
+                        permissions={permissions}
+                        onPermissionChange={handlePermissionChange}
+                        onBack={() => setView('main')}
+                    />
+                 </div>
+            </div>
+        );
+    }
+    
+    if (view === 'participants') {
+         return (
+            <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+                 <div className="bg-slate-900 rounded-2xl w-full max-w-2xl border border-slate-800 shadow-2xl flex flex-col h-[80vh] animate-modal-scale overflow-hidden">
+                    <GroupParticipantsView 
+                        room={room}
+                        members={members}
+                        currentUser={currentUser}
+                        permissions={permissions}
+                        isOwner={isOwner}
+                        isAdmin={isAdmin}
+                        onAddMember={handleAddMember}
+                        onKick={handleKick}
+                        onPromote={handlePromote}
+                        onDemote={handleDemote}
+                        onBack={() => setView('main')}
+                    />
+                 </div>
+            </div>
+        );
+    }
 
     return (
         <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center z-50 p-4">
@@ -620,7 +629,7 @@ export default function GroupInfoModal({ room, onClose, onLeave, onKick, socket 
                                     <div className="text-[10px] text-slate-500 font-mono pt-2 border-t border-slate-800/50">
                                         Group created by{' '}
                                         <span className="text-slate-400 font-bold">
-                                            {Number(room.created_by) === Number(currentUser.id) ? 'You' : (room.creator_name || 'an unknown user')}
+                                            {Number(room.created_by) === Number(currentUser?.id) ? 'You' : (room.creator_name || 'an unknown user')}
                                         </span>
                                         , on {new Date(room.created_at).toLocaleString(undefined, {
                                             day: '2-digit', month: '2-digit', year: 'numeric',
@@ -687,265 +696,112 @@ export default function GroupInfoModal({ room, onClose, onLeave, onKick, socket 
                         </div>
                     )}
                     
-                    {/* Permissions Section (Owner Only) */}
-                    {canSeeSettings && (
-                         <div className="p-6 border-b border-slate-800/50 bg-slate-900/30">
-                            <h3 className="text-slate-500 text-xs font-bold uppercase tracking-wider mb-4">Group Permissions</h3>
-                            <div className="space-y-3">
-                                {/* Toggles */}
-                                <div className="flex items-center justify-between">
-                                    <div className="flex flex-col">
-                                        <span className="text-sm text-slate-200">Edit Group Name</span>
-                                        <span className="text-[10px] text-slate-500">Allow members to change group name</span>
-                                    </div>
-                                    <label className="relative inline-flex items-center cursor-pointer">
-                                        <input 
-                                            type="checkbox" 
-                                            className="sr-only peer" 
-                                            checked={permissions.allow_name_change} 
-                                            onChange={(e) => handlePermissionChange('allow_name_change', e.target.checked)}
-                                        />
-                                        <div className="w-9 h-5 bg-slate-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-violet-600"></div>
-                                    </label>
-                                </div>
-                                <div className="flex items-center justify-between">
-                                    <div className="flex flex-col">
-                                        <span className="text-sm text-slate-200">Edit Description</span>
-                                        <span className="text-[10px] text-slate-500">Allow members to change description</span>
-                                    </div>
-                                    <label className="relative inline-flex items-center cursor-pointer">
-                                        <input 
-                                            type="checkbox" 
-                                            className="sr-only peer" 
-                                            checked={permissions.allow_description_change}
-                                            onChange={(e) => handlePermissionChange('allow_description_change', e.target.checked)}
-                                        />
-                                        <div className="w-9 h-5 bg-slate-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-violet-600"></div>
-                                    </label>
-                                </div>
+                    {/* Navigation Buttons for Sub-pages */}
+                    <div className="p-0">
+                             {(isOwner || isAdmin) && (
+                                 <button 
+                                    onClick={() => setView('permissions')}
+                                    className="w-full flex items-center justify-between p-6 hover:bg-slate-800/50 transition-colors border-b border-slate-800/50"
+                                 >
+                                     <div className="flex items-center gap-3">
+                                         <span className="material-symbols-outlined text-slate-400">tune</span>
+                                         <span className="text-slate-200 font-medium">Permissions</span>
+                                     </div>
+                                     <span className="material-symbols-outlined text-slate-500">chevron_right</span>
+                                 </button>
+                             )}
 
-                                <div className="flex items-center justify-between">
+                         <button 
+                            onClick={() => setView('participants')}
+                            className="w-full flex items-center justify-between p-6 hover:bg-slate-800/50 transition-colors border-b border-slate-800/50"
+                         >
+                             <div className="flex items-center gap-3">
+                                 <span className="material-symbols-outlined text-slate-400">group</span>
+                                 <span className="text-slate-200 font-medium">Participants</span>
+                             </div>
+                             <div className="flex items-center gap-2">
+                                 <span className="text-xs text-slate-500">{members.length}</span>
+                                 <span className="material-symbols-outlined text-slate-500">chevron_right</span>
+                             </div>
+                         </button>
+                    </div>
+
+                    {/* Danger Zone */}
+                    <div className="p-6 border-b border-slate-800/50 bg-slate-900/30">
+                        <div className="space-y-3">
+                            {/* Clear Messages - Visible to everyone */}
+                            <button
+                                onClick={async () => {
+                                    if (!confirm('Clear all messages in this chat? This will only affect you.')) return;
+                                    try {
+                                        const res = await fetch(`${import.meta.env.VITE_API_URL}/api/rooms/${room.id}/clear`, {
+                                            method: 'POST',
+                                            headers: { Authorization: `Bearer ${token}` }
+                                        });
+                                        if (res.ok) {
+                                            // Handle success (maybe show toast? or just close)
+                                            alert('Chat history cleared.');
+                                            onClose();
+                                        }
+                                    } catch (err) {
+                                        console.error(err);
+                                    }
+                                }}
+                                className="w-full flex items-center gap-3 text-amber-400 hover:text-amber-300 transition-colors p-2 rounded-lg hover:bg-amber-500/10 text-left"
+                            >
+                                <span className="material-symbols-outlined">cleaning_services</span>
+                                <div className="flex flex-col">
+                                    <span className="font-bold text-sm">Clear Messages</span>
+                                    <span className="text-[10px] text-amber-400/70">Clear chat history (for you only)</span>
+                                </div>
+                            </button>
+
+                            {/* Leave Group - Visible to everyone */}
+                            <button
+                                onClick={onLeave}
+                                className="w-full flex items-center gap-3 text-red-400 hover:text-red-300 transition-colors p-2 rounded-lg hover:bg-red-500/10 text-left"
+                            >
+                                <span className="material-symbols-outlined">logout</span>
+                                <div className="flex flex-col">
+                                    <span className="font-bold text-sm">Leave Group</span>
+                                    <span className="text-[10px] text-red-400/70">Leave this group chat</span>
+                                </div>
+                            </button>
+
+                            {/* Delete Group - Owner Only */}
+                            {isOwner && (
+                                <button
+                                    onClick={async () => {
+                                        if (!confirm('Are you certain you want to DELETE this group? This cannot be undone and will remove it for EVERYONE.')) return;
+                                        // Specific confirm logic could be more robust (e.g. type name), but strict confirm is okay for now.
+                                        try {
+                                            const res = await fetch(`${import.meta.env.VITE_API_URL}/api/rooms/${room.id}/destroy`, {
+                                                method: 'DELETE',
+                                                headers: { Authorization: `Bearer ${token}` }
+                                            });
+                                            if (res.ok) {
+                                                onClose();
+                                                // Dashboard socket listener handles removal
+                                            } else {
+                                                const err = await res.json();
+                                                alert(err.error || 'Failed to delete group');
+                                            }
+                                        } catch (err) {
+                                            console.error(err);
+                                        }
+                                    }}
+                                    className="w-full flex items-center gap-3 text-red-400 hover:text-red-300 transition-colors p-2 rounded-lg hover:bg-red-500/10 text-left"
+                                >
+                                    <span className="material-symbols-outlined">delete_forever</span>
                                     <div className="flex flex-col">
-                                        <span className="text-sm text-slate-200">Add Members</span>
-                                        <span className="text-[10px] text-slate-500">Allow admins to add members</span>
+                                        <span className="font-bold text-sm">Delete Group</span>
+                                        <span className="text-[10px] text-red-400/70">Permanently delete this group for everyone</span>
                                     </div>
-                                    <label className="relative inline-flex items-center cursor-pointer">
-                                        <input 
-                                            type="checkbox" 
-                                            className="sr-only peer" 
-                                            checked={permissions.allow_add_members}
-                                            onChange={(e) => handlePermissionChange('allow_add_members', e.target.checked)}
-                                        />
-                                        <div className="w-9 h-5 bg-slate-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-violet-600"></div>
-                                    </label>
-                                </div>
-                                
-                                <div className="flex items-center justify-between">
-                                    <div className="flex flex-col">
-                                        <span className="text-sm text-slate-200">Send Messages</span>
-                                        <span className="text-[10px] text-slate-500">Who can send messages to this group</span>
-                                    </div>
-                                    <select 
-                                        className="bg-slate-800 text-xs text-white border border-slate-700 rounded p-1 outline-none focus:border-violet-500"
-                                        value={permissions.send_mode}
-                                        onChange={(e) => handlePermissionChange('send_mode', e.target.value)}
-                                    >
-                                        <option value="everyone">Everyone</option>
-                                        <option value="admins_only">Admins Only</option>
-                                        <option value="owner_only">Owner Only</option>
-                                    </select>
-                                </div>
-                            </div>
-                        </div>
-                    )}
-
-                        {/* Members List */}
-                    <div className="p-6">
-                        <div className="flex items-center justify-between mb-4">
-                            <p className="text-xs font-bold text-slate-500 uppercase tracking-wider">Members ({members.length})</p>
-                            <div className="flex gap-2">
-                                {showAddMember && (
-                                     <button 
-                                        onClick={() => setIsAddingMember(!isAddingMember)}
-                                        className="text-xs bg-violet-600/20 text-violet-400 hover:bg-violet-600/30 hover:text-violet-300 px-2 py-1 rounded transition-colors font-medium flex items-center gap-1"
-                                     >
-                                        <span className="material-symbols-outlined text-[14px]">person_add</span>
-                                        Add Member
-                                     </button>
-                                )}
-                                {loading && <span className="material-symbols-outlined text-slate-600 animate-spin text-sm">progress_activity</span>}
-                            </div>
-                        </div>
-
-                         {/* Add Member Input */}
-                         {isAddingMember && (
-                            <div className="mb-4 relative">
-                                <div className="bg-slate-800 p-3 rounded-xl border border-slate-700/50 flex items-center gap-2">
-                                    <span className="text-slate-500 material-symbols-outlined">alternate_email</span>
-                                    <input 
-                                        type="text" 
-                                        placeholder="Username to add..." 
-                                        className="bg-transparent flex-1 text-sm text-white outline-none placeholder:text-slate-600"
-                                        value={newMemberUsername}
-                                        onChange={(e) => {
-                                            setNewMemberUsername(e.target.value);
-                                            // Simple debounce logic
-                                            if (window._searchTimeout) clearTimeout(window._searchTimeout);
-                                            window._searchTimeout = setTimeout(async () => {
-                                                const q = e.target.value.trim();
-                                                if (q.length >= 2) {
-                                                    setSearchLoading(true);
-                                                    try {
-                                                        const res = await fetch(`${import.meta.env.VITE_API_URL}/api/users/search?q=${encodeURIComponent(q)}&excludeGroupId=${room.id}`, {
-                                                            headers: { Authorization: `Bearer ${token}` }
-                                                        });
-                                                        const data = await res.json();
-                                                        setSearchResults(data);
-                                                        setShowSearchResults(true);
-                                                    } catch (err) {
-                                                        console.error(err);
-                                                    } finally {
-                                                        setSearchLoading(false);
-                                                    }
-                                                } else {
-                                                    setSearchResults([]);
-                                                    setShowSearchResults(false);
-                                                }
-                                            }, 300);
-                                        }}
-                                        onKeyDown={(e) => e.key === 'Enter' && handleAddMember()}
-                                        autoFocus
-                                        onBlur={() => setTimeout(() => setShowSearchResults(false), 200)} // Delay hide to allow click
-                                    />
-                                    {/* Removed main button as requested */}
-                                    {searchLoading && (
-                                        <div className="animate-spin rounded-full h-4 w-4 border-2 border-violet-500 border-t-transparent"></div>
-                                    )}
-                                </div>
-                                {addMemberError && <p className="text-xs text-red-500 mt-2 ml-1">{addMemberError}</p>}
-
-                                {/* Search Results Dropdown */}
-                                {showSearchResults && searchResults.length > 0 && (
-                                    <div className="absolute top-full left-0 right-0 mt-2 bg-slate-900 border border-slate-700 rounded-lg shadow-xl overflow-hidden z-50 max-h-48 overflow-y-auto custom-scrollbar">
-                                        {searchResults.map(user => (
-                                            <div
-                                                key={user.id}
-                                                className="group w-full flex items-center gap-3 p-2 hover:bg-slate-800 transition-colors cursor-pointer"
-                                                onClick={() => {
-                                                    handleAddMember(user.id);
-                                                    setNewMemberUsername('');
-                                                    setSearchResults([]);
-                                                }}
-                                            >
-                                                <div className="w-8 h-8 rounded-full overflow-hidden bg-slate-700 flex items-center justify-center shrink-0">
-                                                    {user.avatar_thumb_url ? (
-                                                        <img src={user.avatar_thumb_url} alt={user.username} className="w-full h-full object-cover" />
-                                                    ) : (
-                                                        <span className="text-slate-400 font-bold text-xs">{user.display_name?.[0]?.toUpperCase()}</span>
-                                                    )}
-                                                </div>
-                                                <div className="flex-1 min-w-0">
-                                                    <div className="text-sm font-bold text-slate-200 truncate">{user.display_name}</div>
-                                                    <div className="text-xs text-slate-500 truncate">@{user.username}</div>
-                                                </div>
-                                                
-                                                {/* Hover Checkmark */}
-                                                <button 
-                                                    className="w-8 h-8 rounded-full bg-violet-600 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity transform scale-90 group-hover:scale-100 shadow-lg"
-                                                    title="Add Member"
-                                                >
-                                                    <span className="material-symbols-outlined text-sm">check</span>
-                                                </button>
-                                            </div>
-                                        ))}
-                                    </div>
-                                )}
-                            </div>
-                         )}
-                        
-                        <div className="space-y-2">
-                            {members.map(member => (
-                                <div key={member.id} className="flex items-center justify-between p-3 rounded-xl hover:bg-slate-800/50 transition-colors group relative">
-                                    <div className="flex items-center gap-3">
-                                        {member.avatar_thumb_url ? (
-                                            <img 
-                                                src={member.avatar_thumb_url} 
-                                                alt={member.display_name} 
-                                                className="w-10 h-10 rounded-full object-cover bg-slate-800"
-                                            />
-                                        ) : (
-                                            <div className={`w-10 h-10 rounded-full flex items-center justify-center text-sm font-bold ${
-                                                member.id === currentUser.id 
-                                                ? 'bg-violet-600 text-white' 
-                                                : 'bg-slate-700 text-slate-300'
-                                            }`}>
-                                                {member.display_name[0].toUpperCase()}
-                                            </div>
-                                        )}
-                                        <div>
-                                            <p className="text-sm font-medium text-slate-200 flex items-center gap-2">
-                                                {member.display_name}
-                                                {member.id === currentUser.id && <span className="text-[9px] bg-slate-800 px-1.5 py-0.5 rounded text-slate-500 uppercase font-bold tracking-wider">You</span>}
-                                            </p>
-                                            <div className="flex items-center gap-2 mt-0.5">
-                                                 <span className="text-[10px] text-slate-500 font-mono">
-                                                    {member.username.startsWith('@') ? member.username : `@${member.username}`}
-                                                </span>
-                                                {/* Role Badge */}
-                                                {member.role === 'owner' && <span className="text-[9px] bg-amber-500/10 text-amber-500 border border-amber-500/20 px-1.5 rounded font-bold uppercase tracking-wider">Owner</span>}
-                                                {member.role === 'admin' && <span className="text-[9px] bg-violet-500/10 text-violet-400 border border-violet-500/20 px-1.5 rounded font-bold uppercase tracking-wider">Admin</span>}
-                                            </div>
-                                        </div>
-                                    </div>
-                                    
-                                    {/* Action Menu (Only if needed) */}
-                                    {/* Logic: Show Actions if:
-                                        1. I am Owner -> Can act on anyone (except myself)
-                                        2. I am Admin -> Can act on Members (except myself)
-                                    */}
-                                    {member.id !== currentUser.id && (
-                                        (isOwner || (isAdmin && member.role === 'member')) && (
-                                            <div className="opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1">
-                                                {/* Promote/Demote */}
-                                                {isOwner && member.role === 'member' && (
-                                                    <button onClick={() => handlePromote(member.id)} title="Promote to Admin" className="p-1.5 text-slate-500 hover:text-white hover:bg-slate-700 rounded transition-colors">
-                                                        <span className="material-symbols-outlined text-[18px]">verified_user</span>
-                                                    </button>
-                                                )}
-                                                {isOwner && member.role === 'admin' && (
-                                                    <button onClick={() => handleDemote(member.id)} title="Demote to Member" className="p-1.5 text-slate-500 hover:text-white hover:bg-slate-700 rounded transition-colors">
-                                                        <span className="material-symbols-outlined text-[18px]">remove_moderator</span>
-                                                    </button>
-                                                )}
-                                                
-                                                {/* Remove */}
-                                                { (isOwner || (isAdmin && permissions.allow_remove_members)) && (
-                                                     <button 
-                                                        onClick={() => handleKick(member.id)}
-                                                        className="p-1.5 text-slate-500 hover:text-red-400 hover:bg-red-500/10 rounded transition-colors"
-                                                        title="Remove from group"
-                                                    >
-                                                        <span className="material-symbols-outlined text-[18px]">person_remove</span>
-                                                    </button>
-                                                )}
-                                            </div>
-                                        )
-                                    )}
-                                </div>
-                            ))}
+                                </button>
+                            )}
                         </div>
                     </div>
-                </div>
 
-                {/* Footer */}
-                <div className="p-4 border-t border-slate-800/50 bg-slate-900/30">
-                    <button 
-                        onClick={onLeave}
-                        className="w-full py-3 rounded-xl bg-red-500/10 hover:bg-red-500/20 text-red-400 hover:text-red-300 font-bold text-sm border border-red-500/20 transition-all flex items-center justify-center gap-2"
-                    >
-                        <span className="material-symbols-outlined">logout</span>
-                        Leave Group
-                    </button>
                 </div>
             </div>
         </div>
