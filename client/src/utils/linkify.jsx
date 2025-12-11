@@ -2,11 +2,21 @@
 import emojiRegex from 'emoji-regex';
 
 // Helper to convert emoji to hex code, stripping VS16 (fe0f) for CDN compatibility
-const toHex = (emoji) => {
+export const toHex = (emoji) => {
     return Array.from(emoji)
         .map(c => c.codePointAt(0).toString(16))
         .filter(hex => hex !== 'fe0f') // Strip variation selector 16
         .join('-');
+};
+
+// Convert text with emojis to HTML string with images
+export const textToHtml = (text) => {
+    if (!text) return '';
+    const regex = emojiRegex();
+    return text.replace(regex, (match) => {
+        const hex = toHex(match);
+        return `<img src="https://cdn.jsdelivr.net/npm/emoji-datasource-apple/img/apple/64/${hex}.png" alt="${match}" class="w-6 h-6 inline-block align-middle mb-[3px]" style="margin: 0 1px;" draggable="false" />`;
+    });
 };
 
 // Main function to linkify text and render emojis
@@ -40,7 +50,7 @@ export const linkifyText = (text) => {
                     key={globalKey++}
                     src={`https://cdn.jsdelivr.net/npm/emoji-datasource-apple/img/apple/64/${hex}.png`}
                     alt={emojiChar}
-                    className="w-5 h-5 inline-block align-bottom mx-[1px]"
+                    className="w-5 h-5 inline-block align-middle mb-[3px] mx-[1px]"
                     draggable="false"
                     loading="lazy"
                     onError={(e) => {

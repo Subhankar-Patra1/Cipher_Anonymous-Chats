@@ -151,11 +151,11 @@ export default function GifPicker({ onSendGif }) {
     };
 
     return (
-        <div className="flex flex-col h-[400px] bg-slate-900 border-t border-slate-700">
+        <div className="flex flex-col h-[400px] bg-white dark:bg-slate-900 border-t border-slate-200 dark:border-slate-700 transition-colors">
             {/* Search Bar */}
-            <div className="p-3 border-b border-slate-700/50">
+            <div className="p-3 border-b border-slate-200/50 dark:border-slate-700/50 transition-colors">
                 <div className="relative">
-                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 material-symbols-outlined text-[20px]">
+                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 dark:text-slate-400 material-symbols-outlined text-[20px]">
                         search
                     </span>
                     <input
@@ -163,14 +163,14 @@ export default function GifPicker({ onSendGif }) {
                         placeholder="Search GIFs via Tenor"
                         value={search}
                         onChange={(e) => setSearch(e.target.value)}
-                        className="w-full bg-slate-800 text-slate-200 pl-10 pr-4 py-2 rounded-xl border border-slate-700 focus:border-violet-500 focus:outline-none placeholder:text-slate-500 text-sm"
+                        className="w-full bg-slate-100 dark:bg-slate-800 text-slate-800 dark:text-slate-200 pl-10 pr-4 py-2 rounded-xl border border-slate-200 dark:border-slate-700 focus:border-violet-500 focus:outline-none placeholder:text-slate-500 text-sm transition-colors"
                         autoFocus
                     />
                     {search && (
                         <button 
                             type="button"
                             onClick={() => setSearch('')}
-                            className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white"
+                            className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:hover:text-white"
                         >
                             <span className="material-symbols-outlined text-[18px]">close</span>
                         </button>
@@ -186,7 +186,7 @@ export default function GifPicker({ onSendGif }) {
                             type="button"
                             key={f}
                             onClick={() => handleFilterClick(f)}
-                            className="px-3 py-1 rounded-full bg-slate-800 border border-slate-700 text-xs text-slate-300 hover:bg-slate-700 hover:border-violet-500/50 transition-all whitespace-nowrap"
+                            className="px-3 py-1 rounded-full bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700 hover:border-violet-500/50 transition-all whitespace-nowrap"
                         >
                             {f}
                         </button>
@@ -206,7 +206,7 @@ export default function GifPicker({ onSendGif }) {
                             type="button"
                             key={gif.id}
                             onClick={() => onSendGif(gif)}
-                            className="gif-tile relative aspect-square rounded-md overflow-hidden group bg-slate-900/30 border border-slate-800 focus:outline-none focus:ring-2 focus:ring-violet-500 hover:shadow-lg transition-all"
+                            className="gif-tile relative aspect-square rounded-md overflow-hidden group bg-slate-100 dark:bg-slate-900/30 border border-slate-200 dark:border-slate-800 focus:outline-none focus:ring-2 focus:ring-violet-500 hover:shadow-lg transition-all"
                         >
                             {gif.autoplay_url ? (
                                 <video
@@ -234,18 +234,18 @@ export default function GifPicker({ onSendGif }) {
                     
                     {/* Skeletons while loading */}
                     {loading && Array.from({ length: 12 }).map((_, i) => (
-                         <div key={`sk-${i}`} className="aspect-square rounded-md bg-slate-800 animate-pulse" />
+                         <div key={`sk-${i}`} className="aspect-square rounded-md bg-slate-200 dark:bg-slate-800 animate-pulse transition-colors" />
                     ))}
                 </div>
                 
                 {error && (
-                    <div className="flex flex-col items-center justify-center h-full text-red-400 text-sm py-10 px-4 text-center">
+                    <div className="flex flex-col items-center justify-center h-full text-red-500 dark:text-red-400 text-sm py-10 px-4 text-center">
                         <span className="material-symbols-outlined text-3xl mb-2">error</span>
                         <p>{error}</p>
                         <button 
                             type="button"
                             onClick={() => setSearch(s => s ? s : ' ')} // trigger effect
-                            className="mt-3 text-xs bg-red-500/10 hover:bg-red-500/20 text-red-300 px-3 py-1 rounded-md border border-red-500/20 transition-colors"
+                            className="mt-3 text-xs bg-red-50 hover:bg-red-100 dark:bg-red-500/10 dark:hover:bg-red-500/20 text-red-600 dark:text-red-300 px-3 py-1 rounded-md border border-red-200 dark:border-red-500/20 transition-colors"
                         >
                             Retry
                         </button>
@@ -260,9 +260,9 @@ export default function GifPicker({ onSendGif }) {
                 )}
             </div>
             
-            <div className="bg-slate-900 px-2 py-1 flex justify-center border-t border-slate-800">
+            <div className="bg-slate-50 dark:bg-slate-900 px-2 py-1 flex justify-center border-t border-slate-200 dark:border-slate-800 transition-colors">
                 <span className="text-[10px] text-slate-500 flex items-center gap-1">
-                    Powered by <img src="https://tenor.com/assets/img/tenor-logo.svg" className="h-3 opacity-50 invert" alt="Tenor" />
+                    Powered by <img src="https://tenor.com/assets/img/tenor-logo.svg" className="h-3 opacity-50 filter grayscale dark:invert" alt="Tenor" />
                 </span>
             </div>
         </div>

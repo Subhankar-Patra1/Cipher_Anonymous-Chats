@@ -3,6 +3,7 @@ import { useAuth } from '../context/AuthContext';
 import { QRCodeSVG } from 'qrcode.react';
 import PickerPanel from './PickerPanel';
 import ContentEditable from 'react-contenteditable';
+import { linkifyText, textToHtml } from '../utils/linkify';
 
 import AvatarEditorModal from './AvatarEditorModal';
 import GroupPermissionsView from './GroupPermissionsView';
@@ -26,8 +27,9 @@ export default function GroupInfoModal({ room, onClose, onLeave, onKick, socket 
     
     // Edit States
     const [isEditingName, setIsEditingName] = useState(false);
-    const [editedName, setEditedName] = useState(room.name);
+    const [editedName, setEditedName] = useState('');
     const [nameLoading, setNameLoading] = useState(false);
+    const [showNameEmoji, setShowNameEmoji] = useState(false);
     
     const [isEditingBio, setIsEditingBio] = useState(false);
     const [editedBio, setEditedBio] = useState('');
@@ -40,10 +42,12 @@ export default function GroupInfoModal({ room, onClose, onLeave, onKick, socket 
     const [isAvatarModalOpen, setIsAvatarModalOpen] = useState(false);
     const [fullScreenImage, setFullScreenImage] = useState(null);
 
-    // Emoji Picker
+    // Emoji Picker (for Bio)
     const [showEmoji, setShowEmoji] = useState(false);
     const editorRef = useRef(null);
     const lastRange = useRef(null);
+    const nameInputRef = useRef(null);
+    const nameRange = useRef(null);
     
     // UI Helpers
     const [copySuccess, setCopySuccess] = useState('');
@@ -55,8 +59,29 @@ export default function GroupInfoModal({ room, onClose, onLeave, onKick, socket 
         }
     }, [room.id]);
 
+    const saveNameSelection = () => {
+        const selection = window.getSelection();
+        if (selection.rangeCount > 0) {
+            nameRange.current = selection.getRangeAt(0);
+        }
+    };
+
     const handleSaveName = async () => {
-        if (!editedName.trim() || editedName === room.name) {
+        // Strip HTML to get plain text
+        const tempDiv = document.createElement('div');
+        tempDiv.innerHTML = editedName;
+        // Replace img tags with alt text (emoji)
+        const images = tempDiv.getElementsByTagName('img');
+        while (images.length > 0) {
+            const img = images[0];
+            const alt = img.getAttribute('alt');
+            const text = document.createTextNode(alt);
+            img.parentNode.replaceChild(text, img);
+        }
+        let plainName = tempDiv.textContent || "";
+        plainName = plainName.trim();
+
+        if (!plainName || plainName === room.name) {
             setIsEditingName(false);
             return;
         }
@@ -65,10 +90,11 @@ export default function GroupInfoModal({ room, onClose, onLeave, onKick, socket 
             const res = await fetch(`${import.meta.env.VITE_API_URL}/api/rooms/${room.id}/name`, {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-                body: JSON.stringify({ name: editedName.trim() })
+                body: JSON.stringify({ name: plainName })
             });
             if (res.ok) {
                 setIsEditingName(false);
+                setShowNameEmoji(false);
                 // room update via socket will update UI
             }
         } catch (err) {
@@ -77,7 +103,24 @@ export default function GroupInfoModal({ room, onClose, onLeave, onKick, socket 
             setNameLoading(false);
         }
     };
-    
+
+    const handleNameEmojiClick = (emojiData) => {
+        const hex = emojiData.unified.split('-').filter(c => c !== 'fe0f').join('-');
+        const imageUrl = `https://cdn.jsdelivr.net/npm/emoji-datasource-apple/img/apple/64/${hex}.png`;
+        const imageTag = `<img src="${imageUrl}" alt="${emojiData.emoji}" class="w-6 h-6 inline-block align-bottom" style="margin: 0 1px;" draggable="false" />`;
+
+        if (nameRange.current) {
+            const selection = window.getSelection();
+            selection.removeAllRanges();
+            selection.addRange(nameRange.current);
+        } else if (nameInputRef.current) {
+            nameInputRef.current.focus();
+        }
+
+        document.execCommand('insertHTML', false, imageTag);
+        saveNameSelection();
+    };
+
     const saveSelection = () => {
         const selection = window.getSelection();
         if (selection.rangeCount > 0) {
@@ -85,7 +128,7 @@ export default function GroupInfoModal({ room, onClose, onLeave, onKick, socket 
         }
     };
 
-    // Roles
+
     const myMember = members.find(m => String(m.id) === String(currentUser?.id));
     const myRole = myMember?.role || 'member';
     const isOwner = myRole === 'owner' || String(room.created_by) === String(currentUser?.id);
@@ -396,8 +439,8 @@ export default function GroupInfoModal({ room, onClose, onLeave, onKick, socket 
     // Sub-view rendering
     if (view === 'permissions') {
         return (
-            <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-                 <div className="bg-slate-900 rounded-2xl w-full max-w-2xl border border-slate-800 shadow-2xl flex flex-col h-[80vh] animate-modal-scale overflow-hidden">
+            <div className="fixed inset-0 bg-gray-900/80 dark:bg-slate-950/80 backdrop-blur-sm flex items-center justify-center z-50 p-4 transition-colors duration-300">
+                 <div className="bg-white dark:bg-slate-900 rounded-2xl w-full max-w-2xl border border-slate-200 dark:border-slate-800 shadow-2xl flex flex-col h-[80vh] animate-modal-scale overflow-hidden transition-colors">
                     <GroupPermissionsView 
                         permissions={permissions}
                         onPermissionChange={handlePermissionChange}
@@ -410,8 +453,8 @@ export default function GroupInfoModal({ room, onClose, onLeave, onKick, socket 
     
     if (view === 'participants') {
          return (
-            <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-                 <div className="bg-slate-900 rounded-2xl w-full max-w-2xl border border-slate-800 shadow-2xl flex flex-col h-[80vh] animate-modal-scale overflow-hidden">
+            <div className="fixed inset-0 bg-gray-900/80 dark:bg-slate-950/80 backdrop-blur-sm flex items-center justify-center z-50 p-4 transition-colors duration-300">
+                 <div className="bg-white dark:bg-slate-900 rounded-2xl w-full max-w-2xl border border-slate-200 dark:border-slate-800 shadow-2xl flex flex-col h-[80vh] animate-modal-scale overflow-hidden transition-colors">
                     <GroupParticipantsView 
                         room={room}
                         members={members}
@@ -431,7 +474,7 @@ export default function GroupInfoModal({ room, onClose, onLeave, onKick, socket 
     }
 
     return (
-        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+        <div className="fixed inset-0 bg-gray-900/80 dark:bg-slate-950/80 backdrop-blur-sm flex items-center justify-center z-50 p-4 transition-colors duration-300">
              {/* Full Screen Image Modal */}
             {fullScreenImage && (
                 <div 
@@ -460,15 +503,15 @@ export default function GroupInfoModal({ room, onClose, onLeave, onKick, socket 
                 aspect={1}
             />
 
-            <div className="bg-slate-900 rounded-2xl w-full max-w-2xl border border-slate-800 shadow-2xl flex flex-col max-h-[90vh] animate-modal-scale">
+            <div className="bg-white dark:bg-slate-900 rounded-2xl w-full max-w-2xl border border-slate-200 dark:border-slate-800 shadow-2xl flex flex-col max-h-[90vh] animate-modal-scale transition-colors overflow-hidden">
                 {/* Header */}
-                <div className="p-6 border-b border-slate-800/50 flex justify-between items-center bg-slate-900/50">
+                <div className="p-6 border-b border-slate-200/50 dark:border-slate-800/50 flex justify-between items-center bg-gray-50/50 dark:bg-slate-900/50 transition-colors">
                     <div className="flex items-center gap-4">
                         {/* Avatar */}
                         <div className="relative group shrink-0">
                             <button 
                                 onClick={() => localAvatar && setFullScreenImage(localAvatar)}
-                                className={`w-14 h-14 rounded-full overflow-hidden flex items-center justify-center font-bold text-xl border-2 border-slate-700/50 transition-transform ${localAvatar ? 'hover:scale-105 cursor-zoom-in' : 'bg-slate-800 text-slate-500 cursor-default'}`}
+                                className={`w-14 h-14 rounded-full overflow-hidden flex items-center justify-center font-bold text-xl border-2 border-slate-200 dark:border-slate-700/50 transition-transform ${localAvatar ? 'hover:scale-105 cursor-zoom-in' : 'bg-slate-200 dark:bg-slate-800 text-slate-500 dark:text-slate-500 cursor-default'}`}
                             >
                                 {localAvatarThumb ? (
                                     <img src={localAvatarThumb} alt={room.name} className="w-full h-full object-cover" />
@@ -481,7 +524,7 @@ export default function GroupInfoModal({ room, onClose, onLeave, onKick, socket 
                             {canManageMembers && (
                                 <button
                                     onClick={() => setIsAvatarModalOpen(true)}
-                                    className="absolute -bottom-1 -right-1 bg-slate-800 text-slate-400 hover:text-white p-1 rounded-full border border-slate-700 shadow-lg transition-colors"
+                                    className="absolute -bottom-1 -right-1 bg-white dark:bg-slate-800 text-slate-500 dark:text-slate-400 hover:text-violet-600 dark:hover:text-white p-1 rounded-full border border-slate-200 dark:border-slate-700 shadow-lg transition-colors"
                                     title="Change Photo"
                                 >
                                     <span className="material-symbols-outlined text-[14px] flex">edit</span>
@@ -491,45 +534,115 @@ export default function GroupInfoModal({ room, onClose, onLeave, onKick, socket 
 
                         <div>
                             {isEditingName ? (
-                                <div className="flex items-center gap-2">
-                                    <input 
-                                        type="text" 
-                                        value={editedName}
-                                        onChange={(e) => setEditedName(e.target.value)}
-                                        className="bg-slate-800 text-white text-lg font-bold px-2 py-1 rounded outline-none border border-slate-700 focus:border-violet-500 w-full min-w-[200px]"
-                                        autoFocus
-                                        onKeyDown={(e) => {
-                                            if (e.key === 'Enter') handleSaveName();
-                                            if (e.key === 'Escape') setIsEditingName(false);
-                                        }}
-                                    />
-                                    <button onClick={handleSaveName} disabled={nameLoading} className="text-violet-400 hover:text-violet-300">
+                                <div className="flex items-center gap-2 relative">
+                                    <div className="flex flex-col w-[200px] sm:w-[300px] mr-2">
+                                        <div className="relative flex items-center w-full bg-white dark:bg-slate-800 border border-violet-500 rounded-lg transition-shadow focus-within:shadow-[0_0_0_2px_rgba(139,92,246,0.2)]">
+                                            <ContentEditable
+                                                innerRef={nameInputRef}
+                                                html={editedName}
+                                                onChange={(e) => {
+                                                    setEditedName(e.target.value);
+                                                    saveNameSelection();
+                                                }}
+                                                onKeyUp={saveNameSelection}
+                                                onMouseUp={saveNameSelection}
+                                                onPaste={(e) => {
+                                                    e.preventDefault();
+                                                    const text = e.clipboardData.getData('text/plain');
+                                                    
+                                                    // Calculate current length
+                                                    const temp = document.createElement('div');
+                                                    temp.innerHTML = e.currentTarget.innerHTML;
+                                                    temp.querySelectorAll('img').forEach(img => img.replaceWith(img.alt));
+                                                    const currentLength = temp.textContent.length;
+                                                    
+                                                    const remaining = 64 - currentLength;
+                                                    if (remaining > 0) {
+                                                        const toInsert = text.slice(0, remaining);
+                                                        document.execCommand('insertText', false, toInsert);
+                                                    }
+                                                }}
+                                                onKeyDown={(e) => {
+                                                    if (e.key === 'Enter') {
+                                                        e.preventDefault();
+                                                        handleSaveName();
+                                                        return;
+                                                    }
+                                                    if (e.key === 'Escape') {
+                                                        setIsEditingName(false);
+                                                        return;
+                                                    }
+                                                    
+                                                    if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
+                                                        // Calculate current length accurately
+                                                        const temp = document.createElement('div');
+                                                        temp.innerHTML = e.currentTarget.innerHTML;
+                                                        temp.querySelectorAll('img').forEach(img => img.replaceWith(img.alt));
+                                                        const currentLength = temp.textContent.length;
+                                                        
+                                                        if (currentLength >= 64) {
+                                                            e.preventDefault();
+                                                        }
+                                                    }
+                                                }}
+                                                className="flex-1 min-w-0 bg-transparent text-slate-800 dark:text-white text-lg font-bold px-3 py-1.5 outline-none whitespace-nowrap overflow-x-auto no-scrollbar"
+                                                tagName="div"
+                                            />
+                                            <button
+                                                onMouseDown={(e) => e.preventDefault()}
+                                                onClick={() => setShowNameEmoji(!showNameEmoji)}
+                                                className="shrink-0 w-8 h-8 flex items-center justify-center mr-1 text-slate-400 hover:text-violet-500 dark:text-slate-500 dark:hover:text-violet-400 transition-colors rounded-full"
+                                            >
+                                                <span className="material-symbols-outlined text-[20px]">sentiment_satisfied</span>
+                                            </button>
+
+                                            {showNameEmoji && (
+                                                <div className="absolute top-full right-0 mt-2 z-50 shadow-2xl rounded-lg w-[320px] h-[400px] overflow-hidden border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 animate-scale-up origin-top-right">
+                                                    <PickerPanel 
+                                                        onEmojiClick={handleNameEmojiClick}
+                                                        disableGifTab={true}
+                                                    />
+                                                </div>
+                                            )}
+                                        </div>
+                                        <div className="text-[10px] text-slate-400 dark:text-slate-500 text-right mt-1 px-1 font-mono">
+                                            {(() => {
+                                                const temp = document.createElement('div');
+                                                temp.innerHTML = editedName;
+                                                temp.querySelectorAll('img').forEach(img => img.replaceWith(img.alt));
+                                                return temp.textContent.length;
+                                            })()}/64
+                                        </div>
+                                    </div>
+                                    
+                                    <button onClick={handleSaveName} disabled={nameLoading} className="text-violet-600 dark:text-violet-400 hover:text-violet-500 dark:hover:text-violet-300 p-1">
                                         <span className="material-symbols-outlined">check_circle</span>
                                     </button>
-                                    <button onClick={() => setIsEditingName(false)} className="text-slate-500 hover:text-slate-300">
+                                    <button onClick={() => setIsEditingName(false)} className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 p-1">
                                         <span className="material-symbols-outlined">cancel</span>
                                     </button>
                                 </div>
                             ) : (
-                                <h3 className="text-xl font-bold text-white mb-1 flex items-center gap-2 group/name">
-                                    {room.name}
+                                <h3 className="text-xl font-bold text-slate-800 dark:text-white mb-1 flex items-center gap-2 group/name transition-colors">
+                                    <span className="flex items-center gap-1">{linkifyText(room.name)}</span>
                                     {(isOwner || isAdmin || permissions.allow_name_change) && (
                                         <button 
                                             onClick={() => {
-                                                setEditedName(room.name);
+                                                setEditedName(textToHtml(room.name));
                                                 setIsEditingName(true);
+                                                setShowNameEmoji(false);
                                             }}
-                                            className="opacity-0 group-hover/name:opacity-100 text-slate-500 hover:text-white transition-opacity"
+                                            className="opacity-0 group-hover/name:opacity-100 text-slate-400 hover:text-slate-600 dark:text-slate-500 dark:hover:text-white transition-opacity"
                                         >
                                             <span className="material-symbols-outlined text-[16px]">edit</span>
                                         </button>
                                     )}
                                 </h3>
                             )}
-                            <p className="text-xs text-slate-400 font-mono">#{room.code}</p>
+                            <p className="text-xs text-slate-500 dark:text-slate-400 font-mono">#{room.code}</p>
                         </div>
                     </div>
-                    <button onClick={onClose} className="p-2 -mr-2 text-slate-400 hover:text-white transition-colors rounded-full">
+                    <button onClick={onClose} className="p-2 -mr-2 text-slate-400 hover:text-slate-600 dark:hover:text-white transition-colors rounded-full">
                         <span className="material-symbols-outlined">close</span>
                     </button>
                 </div>
@@ -539,16 +652,16 @@ export default function GroupInfoModal({ room, onClose, onLeave, onKick, socket 
                 <div className="overflow-y-auto custom-scrollbar flex-1">
 
                     {/* Group Description/Bio */}
-                    <div className="p-6 border-b border-slate-800/50 bg-slate-900/30">
+                    <div className="p-6 border-b border-slate-200/50 dark:border-slate-800/50 bg-gray-50/30 dark:bg-slate-900/30 transition-colors">
                         <div className="flex items-center justify-between mb-2">
-                             <h3 className="text-slate-500 text-xs font-bold uppercase tracking-wider">Group Description</h3>
+                             <h3 className="text-slate-500 font-bold text-xs uppercase tracking-wider">Group Description</h3>
                              {showEditBio && !isEditingBio && (
                                 <button 
                                     onClick={() => {
                                         setEditedBio(localBio || '');
                                         setIsEditingBio(true);
                                     }}
-                                    className="text-slate-500 hover:text-white transition-colors"
+                                    className="text-slate-400 hover:text-slate-600 dark:hover:text-white transition-colors"
                                 >
                                     <span className="material-symbols-outlined text-[16px]">edit</span>
                                 </button>
@@ -557,7 +670,7 @@ export default function GroupInfoModal({ room, onClose, onLeave, onKick, socket 
 
                          {isEditingBio ? (
                             <div className="space-y-2 relative">
-                                <div className="bg-slate-800 rounded-lg p-3 border border-slate-700 focus-within:border-violet-500 transition-colors">
+                                <div className="bg-white dark:bg-slate-800 rounded-lg p-3 border border-slate-200 dark:border-slate-700 focus-within:border-violet-500 transition-colors relative">
                                     <ContentEditable
                                         innerRef={editorRef}
                                         html={editedBio}
@@ -568,25 +681,67 @@ export default function GroupInfoModal({ room, onClose, onLeave, onKick, socket 
                                         }}
                                         onKeyUp={saveSelection}
                                         onMouseUp={saveSelection}
-                                        className="w-full text-slate-200 text-sm outline-none bg-transparent min-h-[80px] max-h-[150px] overflow-y-auto whitespace-pre-wrap break-words custom-scrollbar"
+                                        onPaste={(e) => {
+                                            e.preventDefault();
+                                            const text = e.clipboardData.getData('text/plain');
+                                            
+                                            // Calculate current length
+                                            const temp = document.createElement('div');
+                                            temp.innerHTML = e.currentTarget.innerHTML;
+                                            temp.querySelectorAll('img').forEach(img => img.replaceWith(img.alt));
+                                            const currentLength = temp.textContent.length;
+                                            
+                                            const remaining = 500 - currentLength;
+                                            if (remaining > 0) {
+                                                const toInsert = text.slice(0, remaining);
+                                                document.execCommand('insertText', false, toInsert);
+                                            }
+                                        }}
+                                        onKeyDown={(e) => {
+                                            if (e.key === 'Escape') {
+                                                setIsEditingBio(false);
+                                                return;
+                                            }
+                                            if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
+                                                // Calculate current length accurately
+                                                const temp = document.createElement('div');
+                                                temp.innerHTML = e.currentTarget.innerHTML;
+                                                temp.querySelectorAll('img').forEach(img => img.replaceWith(img.alt));
+                                                const currentLength = temp.textContent.length;
+                                                
+                                                if (currentLength >= 500) {
+                                                    e.preventDefault();
+                                                }
+                                            }
+                                        }}
+                                        className="w-full text-slate-800 dark:text-slate-200 text-sm outline-none bg-transparent min-h-[80px] max-h-[150px] overflow-y-auto whitespace-pre-wrap break-words custom-scrollbar"
                                         tagName="div"
                                     />
                                     {!editedBio && (
-                                        <div className="text-slate-500 text-sm pointer-events-none absolute top-3 left-3">Add a group description...</div>
+                                        <div className="text-slate-400 dark:text-slate-500 text-sm pointer-events-none absolute top-3 left-3">Add a group description...</div>
                                     )}
+                                    <div className="absolute bottom-2 right-2 text-[10px] text-slate-400 dark:text-slate-500 font-mono pointer-events-none bg-white/80 dark:bg-slate-800/80 px-1 rounded-sm">
+                                        {(() => {
+                                            const temp = document.createElement('div');
+                                            temp.innerHTML = editedBio;
+                                            // Handle emoji images counting as their alt text
+                                            temp.querySelectorAll('img').forEach(img => img.replaceWith(img.alt));
+                                            return temp.textContent.length;
+                                        })()}/500
+                                    </div>
                                 </div>
 
                                 <div className="flex justify-between items-center">
                                     <div className="relative">
                                         <button 
                                             onClick={() => setShowEmoji(!showEmoji)}
-                                            className={`p-2 transition-colors flex items-center justify-center rounded-lg ${showEmoji ? 'text-white bg-slate-800' : 'text-slate-400 hover:text-white'}`}
+                                            className={`p-2 transition-colors flex items-center justify-center rounded-lg ${showEmoji ? 'text-violet-500 bg-violet-50 dark:bg-slate-800 dark:text-white' : 'text-slate-400 hover:text-slate-600 dark:hover:text-white'}`}
                                             title="Insert Emoji"
                                         >
                                             <span className="material-symbols-outlined text-[20px]">sentiment_satisfied</span>
                                         </button>
                                          {showEmoji && (
-                                            <div className="absolute top-full left-0 mt-2 z-50 shadow-2xl rounded-lg w-[320px] h-[400px] overflow-hidden border border-slate-700">
+                                            <div className="absolute top-full left-0 mt-2 z-50 shadow-2xl rounded-lg w-[320px] h-[400px] overflow-hidden border border-slate-200 dark:border-slate-700">
                                                 <PickerPanel 
                                                     onEmojiClick={handleEmojiClick}
                                                     disableGifTab={true}
@@ -601,7 +756,7 @@ export default function GroupInfoModal({ room, onClose, onLeave, onKick, socket 
                                                 setIsEditingBio(false);
                                                 setShowEmoji(false);
                                             }}
-                                            className="px-3 py-1.5 text-xs font-medium text-slate-400 hover:text-white hover:bg-slate-800 rounded-lg transition-colors"
+                                            className="px-3 py-1.5 text-xs font-medium text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition-colors"
                                             disabled={bioLoading}
                                         >
                                             Cancel
@@ -620,15 +775,15 @@ export default function GroupInfoModal({ room, onClose, onLeave, onKick, socket 
                         ) : (
                             <div className="space-y-3">
                                 <div 
-                                    className="text-slate-300 text-sm leading-relaxed whitespace-pre-wrap break-words"
-                                    dangerouslySetInnerHTML={{ __html: localBio || '<span class="text-slate-600 italic">No description</span>' }}
+                                    className="text-slate-600 dark:text-slate-300 text-sm leading-relaxed whitespace-pre-wrap break-words transition-colors"
+                                    dangerouslySetInnerHTML={{ __html: localBio || '<span class="text-slate-400 dark:text-slate-600 italic">No description</span>' }}
                                 />
                                 
                                 {/* Creator Info */}
                                 {room.created_at && (
-                                    <div className="text-[10px] text-slate-500 font-mono pt-2 border-t border-slate-800/50">
+                                    <div className="text-[10px] text-slate-500 font-mono pt-2 border-t border-slate-200 dark:border-slate-800/50">
                                         Group created by{' '}
-                                        <span className="text-slate-400 font-bold">
+                                        <span className="text-slate-700 dark:text-slate-400 font-bold">
                                             {Number(room.created_by) === Number(currentUser?.id) ? 'You' : (room.creator_name || 'an unknown user')}
                                         </span>
                                         , on {new Date(room.created_at).toLocaleString(undefined, {
@@ -643,7 +798,7 @@ export default function GroupInfoModal({ room, onClose, onLeave, onKick, socket 
                     
                     {/* Share Section (Only for Groups) */}
                     {room.type === 'group' && (
-                        <div className="p-6 border-b border-slate-800/50 bg-slate-900/30">
+                        <div className="p-6 border-b border-slate-200/50 dark:border-slate-800/50 bg-gray-50/30 dark:bg-slate-900/30 transition-colors">
                             <div className="flex flex-col sm:flex-row gap-6 items-center">
                                 {/* QR Code */}
                                 <div className="bg-white p-3 rounded-lg shadow-lg shrink-0 hidden sm:block">
@@ -655,15 +810,15 @@ export default function GroupInfoModal({ room, onClose, onLeave, onKick, socket 
                                     <div className="space-y-1.5">
                                         <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Group Code</label>
                                         <div className="flex items-center gap-2">
-                                            <div className="flex-1 bg-slate-800/80 h-10 flex items-center justify-center rounded-lg font-mono text-lg tracking-widest text-white border border-slate-700/50">
+                                            <div className="flex-1 bg-white dark:bg-slate-800/80 h-10 flex items-center justify-center rounded-lg font-mono text-lg tracking-widest text-slate-800 dark:text-white border border-slate-200 dark:border-slate-700/50 transition-colors">
                                                 {room.code}
                                             </div>
                                             <button 
                                                 onClick={() => copyToClipboard(room.code, 'code')}
                                                 className={`h-10 w-10 flex items-center justify-center rounded-lg border transition-all ${
                                                     copySuccess === 'code'
-                                                    ? 'bg-emerald-500/10 border-emerald-500/50 text-emerald-400' 
-                                                    : 'bg-slate-800 border-slate-700 text-slate-400 hover:text-white hover:border-slate-600'
+                                                    ? 'bg-emerald-50 border-emerald-500/50 text-emerald-600 dark:bg-emerald-500/10 dark:text-emerald-400' 
+                                                    : 'bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-400 hover:text-slate-700 dark:hover:text-white hover:border-slate-300 dark:hover:border-slate-600'
                                                 }`}
                                                 title="Copy Code"
                                             >
@@ -675,15 +830,15 @@ export default function GroupInfoModal({ room, onClose, onLeave, onKick, socket 
                                     <div className="space-y-1.5">
                                         <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Universal Invite Link</label>
                                         <div className="flex items-center gap-2">
-                                            <div className="flex-1 bg-slate-800/50 h-10 flex items-center px-3 rounded-lg text-xs text-slate-400 border border-slate-700/50 truncate font-mono select-all">
+                                            <div className="flex-1 bg-white dark:bg-slate-800/50 h-10 flex items-center px-3 rounded-lg text-xs text-slate-500 dark:text-slate-400 border border-slate-200 dark:border-slate-700/50 truncate font-mono select-all transition-colors">
                                                 {inviteLink}
                                             </div>
                                             <button 
                                                 onClick={() => copyToClipboard(inviteLink, 'link')}
                                                 className={`h-10 w-10 flex items-center justify-center rounded-lg border transition-all ${
                                                     copySuccess === 'link'
-                                                    ? 'bg-emerald-500/10 border-emerald-500/50 text-emerald-400' 
-                                                    : 'bg-slate-800 border-slate-700 text-slate-400 hover:text-white hover:border-slate-600'
+                                                    ? 'bg-emerald-50 border-emerald-500/50 text-emerald-600 dark:bg-emerald-500/10 dark:text-emerald-400' 
+                                                    : 'bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-400 hover:text-slate-700 dark:hover:text-white hover:border-slate-300 dark:hover:border-slate-600'
                                                 }`}
                                                 title="Copy Link"
                                             >
@@ -701,33 +856,33 @@ export default function GroupInfoModal({ room, onClose, onLeave, onKick, socket 
                              {(isOwner || isAdmin) && (
                                  <button 
                                     onClick={() => setView('permissions')}
-                                    className="w-full flex items-center justify-between p-6 hover:bg-slate-800/50 transition-colors border-b border-slate-800/50"
+                                    className="w-full flex items-center justify-between p-6 hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors border-b border-slate-200/50 dark:border-slate-800/50"
                                  >
                                      <div className="flex items-center gap-3">
                                          <span className="material-symbols-outlined text-slate-400">tune</span>
-                                         <span className="text-slate-200 font-medium">Permissions</span>
+                                         <span className="text-slate-700 dark:text-slate-200 font-medium">Permissions</span>
                                      </div>
-                                     <span className="material-symbols-outlined text-slate-500">chevron_right</span>
+                                     <span className="material-symbols-outlined text-slate-400">chevron_right</span>
                                  </button>
                              )}
 
                          <button 
                             onClick={() => setView('participants')}
-                            className="w-full flex items-center justify-between p-6 hover:bg-slate-800/50 transition-colors border-b border-slate-800/50"
+                            className="w-full flex items-center justify-between p-6 hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors border-b border-slate-200/50 dark:border-slate-800/50"
                          >
                              <div className="flex items-center gap-3">
                                  <span className="material-symbols-outlined text-slate-400">group</span>
-                                 <span className="text-slate-200 font-medium">Participants</span>
+                                 <span className="text-slate-700 dark:text-slate-200 font-medium">Participants</span>
                              </div>
                              <div className="flex items-center gap-2">
                                  <span className="text-xs text-slate-500">{members.length}</span>
-                                 <span className="material-symbols-outlined text-slate-500">chevron_right</span>
+                                 <span className="material-symbols-outlined text-slate-400">chevron_right</span>
                              </div>
                          </button>
                     </div>
 
                     {/* Danger Zone */}
-                    <div className="p-6 border-b border-slate-800/50 bg-slate-900/30">
+                    <div className="p-6 border-b border-slate-200/50 dark:border-slate-800/50 bg-gray-50/30 dark:bg-slate-900/30 transition-colors">
                         <div className="space-y-3">
                             {/* Clear Messages - Visible to everyone */}
                             <button
@@ -747,24 +902,24 @@ export default function GroupInfoModal({ room, onClose, onLeave, onKick, socket 
                                         console.error(err);
                                     }
                                 }}
-                                className="w-full flex items-center gap-3 text-amber-400 hover:text-amber-300 transition-colors p-2 rounded-lg hover:bg-amber-500/10 text-left"
+                                className="w-full flex items-center gap-3 text-amber-500 hover:text-amber-600 dark:text-amber-400 dark:hover:text-amber-300 transition-colors p-2 rounded-lg hover:bg-amber-50 dark:hover:bg-amber-500/10 text-left"
                             >
                                 <span className="material-symbols-outlined">cleaning_services</span>
                                 <div className="flex flex-col">
                                     <span className="font-bold text-sm">Clear Messages</span>
-                                    <span className="text-[10px] text-amber-400/70">Clear chat history (for you only)</span>
+                                    <span className="text-[10px] text-amber-500/70 dark:text-amber-400/70">Clear chat history (for you only)</span>
                                 </div>
                             </button>
 
                             {/* Leave Group - Visible to everyone */}
                             <button
                                 onClick={onLeave}
-                                className="w-full flex items-center gap-3 text-red-400 hover:text-red-300 transition-colors p-2 rounded-lg hover:bg-red-500/10 text-left"
+                                className="w-full flex items-center gap-3 text-red-500 hover:text-red-600 dark:text-red-400 dark:hover:text-red-300 transition-colors p-2 rounded-lg hover:bg-red-50 dark:hover:bg-red-500/10 text-left"
                             >
                                 <span className="material-symbols-outlined">logout</span>
                                 <div className="flex flex-col">
                                     <span className="font-bold text-sm">Leave Group</span>
-                                    <span className="text-[10px] text-red-400/70">Leave this group chat</span>
+                                    <span className="text-[10px] text-red-500/70 dark:text-red-400/70">Leave this group chat</span>
                                 </div>
                             </button>
 
@@ -790,18 +945,17 @@ export default function GroupInfoModal({ room, onClose, onLeave, onKick, socket 
                                             console.error(err);
                                         }
                                     }}
-                                    className="w-full flex items-center gap-3 text-red-400 hover:text-red-300 transition-colors p-2 rounded-lg hover:bg-red-500/10 text-left"
+                                    className="w-full flex items-center gap-3 text-red-500 hover:text-red-600 dark:text-red-400 dark:hover:text-red-300 transition-colors p-2 rounded-lg hover:bg-red-50 dark:hover:bg-red-500/10 text-left"
                                 >
                                     <span className="material-symbols-outlined">delete_forever</span>
                                     <div className="flex flex-col">
                                         <span className="font-bold text-sm">Delete Group</span>
-                                        <span className="text-[10px] text-red-400/70">Permanently delete this group for everyone</span>
+                                        <span className="text-[10px] text-red-500/70 dark:text-red-400/70">Permanently delete this group for everyone</span>
                                     </div>
                                 </button>
                             )}
                         </div>
                     </div>
-
                 </div>
             </div>
         </div>

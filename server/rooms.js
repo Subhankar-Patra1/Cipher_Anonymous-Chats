@@ -120,7 +120,7 @@ router.post('/', async (req, res) => {
 
         try {
             // Fetch users to get display names and usernames
-            const targetUserRes = await db.query('SELECT display_name, username FROM users WHERE id = $1', [targetUserId]);
+            const targetUserRes = await db.query('SELECT display_name, username, avatar_thumb_url, avatar_url FROM users WHERE id = $1', [targetUserId]);
             const targetUser = targetUserRes.rows[0];
             
             const creatorRes = await db.query('SELECT display_name, username FROM users WHERE id = $1', [req.user.id]);
@@ -141,10 +141,16 @@ router.post('/', async (req, res) => {
             const existingRoom = checkRes.rows[0];
 
             if (existingRoom) {
+                // Ensure room is not hidden for the creator
+                await db.query('UPDATE room_members SET is_hidden = false WHERE room_id = $1 AND user_id = $2', [existingRoom.id, req.user.id]);
+
                 return res.json({ 
                     ...existingRoom, 
                     name: targetUser.display_name,
-                    username: targetUser.username
+                    username: targetUser.username,
+                    other_user_id: targetUserId,
+                    avatar_thumb_url: targetUser.avatar_thumb_url,
+                    avatar_url: targetUser.avatar_url
                 });
             }
 

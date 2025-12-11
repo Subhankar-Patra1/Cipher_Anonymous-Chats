@@ -276,13 +276,13 @@ export default function MessageInput({
     // Render Recording UI if active
     if (isRecording || isReviewing) {
         return (
-            <div className="p-4 bg-slate-900/50 backdrop-blur-md border-t border-slate-800/50 z-10 relative">
-                <div className="flex gap-3 max-w-4xl mx-auto items-center justify-between h-[56px] px-4 rounded-2xl bg-slate-800/80 border border-slate-700">
+            <div className="p-4 bg-white/50 dark:bg-slate-900/50 backdrop-blur-md border-t border-slate-200/50 dark:border-slate-800/50 z-10 relative transition-colors duration-300">
+                <div className="flex gap-3 max-w-4xl mx-auto items-center justify-between h-[56px] px-4 rounded-2xl bg-white dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700 shadow-sm dark:shadow-none transition-colors">
                     
                     {/* Left Side: Status / Delete */}
                     <div className="flex items-center gap-3">
                         <div className={`w-3 h-3 rounded-full ${isRecording ? 'bg-red-500 animate-pulse' : 'bg-slate-400'}`} />
-                        <span className="text-slate-200 font-mono min-w-[50px]">{formatDuration(duration)}</span>
+                        <span className="text-slate-700 dark:text-slate-200 font-mono min-w-[50px]">{formatDuration(duration)}</span>
                         
                         {isRecording && (
                            <div className="flex items-center gap-[2px] h-6 ml-2">
@@ -301,7 +301,7 @@ export default function MessageInput({
                     <div className="flex items-center gap-3">
                         <button 
                             onClick={handleCancelRecording}
-                            className="p-2 text-slate-400 hover:text-red-400 transition-colors"
+                            className="p-2 text-slate-500 hover:text-red-500 hover:bg-red-50 dark:text-slate-400 dark:hover:text-red-400 dark:hover:bg-red-500/10 rounded-full transition-colors"
                             title="Cancel"
                         >
                             <span className="material-symbols-outlined">delete</span>
@@ -310,7 +310,7 @@ export default function MessageInput({
                         {isRecording ? (
                             <button 
                                 onClick={handleStopRecording}
-                                className="w-10 h-10 rounded-full bg-slate-700 hover:bg-slate-600 flex items-center justify-center text-red-400 transition-all border border-red-500/20"
+                                className="w-10 h-10 rounded-full bg-slate-100 hover:bg-slate-200 dark:bg-slate-700 dark:hover:bg-slate-600 flex items-center justify-center text-red-500 dark:text-red-400 transition-all border border-red-500/20"
                             >
                                 <span className="material-symbols-outlined">stop_circle</span>
                             </button>
@@ -318,7 +318,7 @@ export default function MessageInput({
                             <>
                                 <button 
                                     onClick={handleTogglePreview}
-                                    className="p-2 text-slate-300 hover:text-white transition-colors"
+                                    className="p-2 text-slate-500 hover:text-slate-900 dark:text-slate-300 dark:hover:text-white transition-colors"
                                     title={isPlayingPreview ? "Pause" : "Play Preview"}
                                 >
                                     <span className="material-symbols-outlined">{isPlayingPreview ? 'pause' : 'play_arrow'}</span>
@@ -345,7 +345,7 @@ export default function MessageInput({
     const hasContent = hasText || pendingGif;
 
     return (
-        <div className="p-4 bg-slate-900/50 backdrop-blur-md border-t border-slate-800/50 z-10 relative">
+        <div className="p-4 bg-white/50 dark:bg-slate-900/50 backdrop-blur-md border-t border-slate-200/50 dark:border-slate-800/50 z-10 relative transition-colors duration-300">
             <form onSubmit={handleSubmit} className="flex gap-3 max-w-4xl mx-auto items-end">
                 <div className="flex-1 flex flex-col gap-1">
                     {/* Editing Bar */}
@@ -353,12 +353,12 @@ export default function MessageInput({
                          <div className="
                             w-full
                             flex justify-between items-center
-                            bg-slate-800/80 border border-slate-700
+                            bg-slate-100 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700
                             rounded-t-2xl rounded-b-md
-                            px-4 py-2
+                            px-4 py-2 transition-colors
                          ">
                              <div className="flex flex-col">
-                                 <span className="text-sm font-bold text-violet-300">Editing message</span>
+                                 <span className="text-sm font-bold text-violet-600 dark:text-violet-300">Editing message</span>
                              </div>
                              <div className="flex gap-2">
                                  <button
@@ -366,7 +366,7 @@ export default function MessageInput({
                                          setHtml(''); /* Clear or reset */
                                          onCancelEdit();
                                      }}
-                                     className="text-xs px-2 py-1 bg-slate-700/50 hover:bg-slate-700 rounded text-slate-300"
+                                     className="text-xs px-2 py-1 bg-slate-200 hover:bg-slate-300 dark:bg-slate-700/50 dark:hover:bg-slate-700 rounded text-slate-600 dark:text-slate-300 transition-colors"
                                      type="button"
                                  >
                                      Cancel
@@ -379,30 +379,30 @@ export default function MessageInput({
                         <div className="
                             w-full
                             flex justify-between items-start
-                            bg-slate-800/60 border border-slate-700
+                            bg-slate-100/80 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700
                             rounded-t-2xl rounded-b-md
-                            px-4 py-2
+                            px-4 py-2 transition-colors
                         ">
                              <div className="flex items-center gap-2 max-w-[90%]">
                                 {replyTo.type === 'audio' ? (
                                     <>
-                                         <span className="material-symbols-outlined text-violet-300 text-sm">mic</span>
+                                         <span className="material-symbols-outlined text-violet-500 dark:text-violet-300 text-sm">mic</span>
                                          <div className="flex flex-col">
-                                            <span className="text-sm font-semibold text-violet-300">{replyTo.sender}</span>
-                                            <span className="text-xs text-slate-300">Voice message</span>
+                                            <span className="text-sm font-semibold text-violet-600 dark:text-violet-300">{replyTo.sender}</span>
+                                            <span className="text-xs text-slate-600 dark:text-slate-300">Voice message</span>
                                         </div>
                                     </>
                                 ) : (
                                     <div className="flex flex-col">
-                                        <span className="text-sm font-semibold text-violet-300">{replyTo.sender}</span>
-                                        <span className="text-sm text-slate-300 break-words line-clamp-2">{replyTo.text}</span>
+                                        <span className="text-sm font-semibold text-violet-600 dark:text-violet-300">{replyTo.sender}</span>
+                                        <span className="text-sm text-slate-600 dark:text-slate-300 break-words line-clamp-2">{replyTo.text}</span>
                                     </div>
                                 )}
                             </div>
 
                             <button
                                 onClick={() => setReplyTo(null)}
-                                className="text-slate-400 hover:text-white transition-colors"
+                                className="text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-white transition-colors"
                             >
                                 <span className="material-symbols-outlined text-lg">close</span>
                             </button>
@@ -410,12 +410,13 @@ export default function MessageInput({
                     )}
 
                     <div className={`
-                        relative bg-slate-800/50 border border-slate-700 focus-within:ring-2 focus-within:ring-violet-500/50 focus-within:border-violet-500/50 transition-all flex flex-col
+                        relative bg-white dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700 focus-within:ring-2 focus-within:ring-violet-500/50 focus-within:border-violet-500/50 transition-all flex flex-col
                         ${replyTo ? 'rounded-b-2xl rounded-t-md' : 'rounded-2xl'} 
+                        shadow-sm dark:shadow-none
                     `}>
                         {/* Pending GIF Preview */}
                         {pendingGif && (
-                             <div className="p-3 border-b border-slate-700/50 bg-slate-800/30 rounded-t-2xl flex justify-center relative">
+                             <div className="p-3 border-b border-slate-200 dark:border-slate-700/50 bg-slate-50 dark:bg-slate-800/30 rounded-t-2xl flex justify-center relative transition-colors">
                                  <div className="composer-gif-preview rounded-xl relative inline-block group">
                                      <video
                                          src={pendingGif.mp4_url || pendingGif.gif_url}
@@ -464,12 +465,12 @@ export default function MessageInput({
                                 onKeyUp={saveSelection}
                                 onMouseUp={saveSelection}
                                 onKeyDown={handleKeyDown}
-                                className="w-full text-slate-100 pl-4 pr-2 py-3 focus:outline-none min-h-[48px] max-h-[150px] overflow-y-auto whitespace-pre-wrap break-words custom-scrollbar"
+                                className="w-full text-slate-800 dark:text-slate-100 pl-4 pr-2 py-3 focus:outline-none min-h-[48px] max-h-[150px] overflow-y-auto whitespace-pre-wrap break-words custom-scrollbar placeholder:text-slate-400 dark:placeholder:text-slate-500 transition-colors"
                                 tagName="div"
                             />
                             
                             {!hasText && (
-                                <div className="absolute left-4 top-3 text-slate-500 pointer-events-none select-none">
+                                <div className="absolute left-4 top-3 text-slate-400 dark:text-slate-500 pointer-events-none select-none transition-colors">
                                     {disabled 
                                         ? "Room expired..." 
                                         : pendingGif 
@@ -485,8 +486,8 @@ export default function MessageInput({
                                     onClick={() => setShowEmoji(!showEmoji)}
                                     className={`p-2 transition-colors flex items-center justify-center rounded-lg ${
                                         showEmoji 
-                                        ? 'text-white' 
-                                        : 'text-slate-400 hover:text-white'
+                                        ? 'text-violet-500 bg-violet-50 dark:bg-slate-800 dark:text-white' 
+                                        : 'text-slate-400 hover:text-slate-600 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800'
                                     }`}
                                     title="Insert Emoji"
                                 >
@@ -503,7 +504,7 @@ export default function MessageInput({
                         className={`
                             p-3 rounded-xl flex items-center justify-center transition-all duration-200 shrink-0
                             ${disabled 
-                                ? 'bg-slate-800 text-slate-500 cursor-not-allowed' 
+                                ? 'bg-slate-100 dark:bg-slate-800 text-slate-400 dark:text-slate-500 cursor-not-allowed' 
                                 : 'bg-violet-600 hover:bg-violet-500 text-white shadow-lg shadow-violet-500/20 hover:scale-105 active:scale-95'
                             }
                         `}
@@ -518,8 +519,8 @@ export default function MessageInput({
                         className={`
                             p-3 rounded-xl flex items-center justify-center transition-all duration-200 shrink-0
                             ${disabled 
-                                ? 'bg-slate-800 text-slate-500 cursor-not-allowed' 
-                                : 'text-slate-400 hover:text-white hover:bg-slate-800'
+                                ? 'bg-slate-100 dark:bg-slate-800 text-slate-400 dark:text-slate-500 cursor-not-allowed' 
+                                : 'text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800'
                             }
                         `}
                         disabled={disabled}
@@ -530,6 +531,5 @@ export default function MessageInput({
                 )}
             </form>
         </div>
-
     );
 }

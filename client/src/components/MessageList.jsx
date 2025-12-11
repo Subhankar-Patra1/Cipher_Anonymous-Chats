@@ -91,10 +91,10 @@ const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone, onRetr
             >
                 <div className={`max-w-[75%] flex flex-col ${isMe ? 'items-end' : 'items-start'}`}>
                     <div className={`
-                         px-3 py-2 text-sm italic text-slate-400
+                         px-3 py-2 text-sm italic text-slate-500 dark:text-slate-400
                          ${isMe 
-                             ? 'bg-slate-900/50 rounded-2xl rounded-tr-sm border border-slate-800' 
-                             : 'bg-slate-900/50 rounded-2xl rounded-tl-sm border border-slate-800'
+                             ? 'bg-slate-100 dark:bg-slate-900/50 rounded-2xl rounded-tr-sm border border-slate-200 dark:border-slate-800' 
+                             : 'bg-slate-100 dark:bg-slate-900/50 rounded-2xl rounded-tl-sm border border-slate-200 dark:border-slate-800'
                          }
                     `}>
                         <div className="flex items-center gap-2">
@@ -115,14 +115,14 @@ const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone, onRetr
             <div className={`max-w-[75%] flex flex-col ${isMe ? 'items-end' : 'items-start'}`}>
                 {!isMe && (
                     <div className="flex items-center gap-2 mb-1 ml-1 select-none">
-                        <div className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] text-white font-bold overflow-hidden ${!msg.avatar_thumb_url ? 'bg-gradient-to-br from-indigo-500 to-violet-600' : 'bg-slate-800'}`}>
+                        <div className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] text-white font-bold overflow-hidden ${!msg.avatar_thumb_url ? 'bg-gradient-to-br from-indigo-500 to-violet-600' : 'bg-slate-200 dark:bg-slate-800'}`}>
                             {msg.avatar_thumb_url ? (
                                 <img src={msg.avatar_thumb_url} alt={msg.display_name} className="w-full h-full object-cover" />
                             ) : (
                                 (msg.display_name || msg.username || '?')[0].toUpperCase()
                             )}
                         </div>
-                        <span className="text-xs text-slate-400 font-medium">
+                        <span className="text-xs text-slate-500 dark:text-slate-400 font-medium transition-colors">
                             {msg.display_name || msg.username}
                         </span>
                     </div>
@@ -133,7 +133,7 @@ const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone, onRetr
                         px-4 py-3 shadow-md text-sm leading-relaxed break-all relative overflow-hidden whitespace-pre-wrap
                         ${isMe 
                             ? 'bg-violet-600 text-white rounded-2xl rounded-tr-sm' 
-                            : 'bg-slate-800 text-slate-200 rounded-2xl rounded-tl-sm border border-slate-700'
+                            : 'bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-200 rounded-2xl rounded-tl-sm border border-slate-100 dark:border-slate-700'
                         }
                     `}>
                         {msg.replyTo && (
@@ -142,11 +142,11 @@ const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone, onRetr
                                 className={`
                                     mb-1 p-2 rounded-lg cursor-pointer
                                     border-l-4 border-violet-400
-                                    transition-colors hover:bg-black/25
-                                    ${isMe ? 'bg-black/15' : 'bg-black/15'}
+                                    transition-colors hover:bg-black/10 dark:hover:bg-black/25
+                                    ${isMe ? 'bg-black/10 dark:bg-black/15' : 'bg-slate-100 dark:bg-black/15'}
                                 `}
                             >
-                                <div className="text-xs font-bold text-violet-300 mb-0.5 max-w-[200px] truncate">
+                                <div className={`text-xs font-bold mb-0.5 max-w-[200px] truncate ${isMe ? 'text-violet-200' : 'text-violet-600 dark:text-violet-300'}`}>
                                     {msg.replyTo.sender}
                                 </div>
                                 
@@ -173,7 +173,7 @@ const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone, onRetr
                                 {msg.uploadStatus === 'uploading' ? (
                                     <div className="flex items-center gap-3 py-1">
                                          <div className="w-8 h-8 rounded-full bg-slate-100/10 flex items-center justify-center">
-                                            <span className="w-4 h-4 rounded-full border-2 border-white/30 border-t-white animate-spin"></span>
+                                            <span className="w-4 h-4 rounded-full border-2 border-current border-t-transparent animate-spin"></span>
                                          </div>
                                          <div className="flex flex-col">
                                              <span className="text-xs font-medium opacity-90">Uploading...</span>
@@ -183,10 +183,10 @@ const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone, onRetr
                                          </div>
                                     </div>
                                 ) : msg.uploadStatus === 'failed' ? (
-                                    <div className="flex items-center gap-3 py-1 text-red-100">
+                                    <div className="flex items-center gap-3 py-1 text-red-500 dark:text-red-300">
                                          <button 
                                             onClick={() => onRetry(msg)}
-                                            className="w-8 h-8 rounded-full bg-red-500/20 hover:bg-red-500/30 flex items-center justify-center transition-colors"
+                                            className="w-8 h-8 rounded-full bg-red-100 dark:bg-red-500/20 hover:bg-red-200 dark:hover:bg-red-500/30 flex items-center justify-center transition-colors"
                                          >
                                             <span className="material-symbols-outlined text-[20px]">refresh</span>
                                          </button>
@@ -214,7 +214,7 @@ const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone, onRetr
                                         muted 
                                         loop 
                                         playsInline
-                                        onLoadedData={onImageLoad} // [NEW] Trigger scroll check on video load
+                                        onLoadedData={onImageLoad} 
                                         onClick={() => window.open(msg.gif_url, '_blank')}
                                     />
                                 ) : (
@@ -223,12 +223,11 @@ const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone, onRetr
                                         alt="GIF" 
                                         className="w-full h-auto object-cover rounded-lg cursor-pointer hover:opacity-90 transition-opacity"
                                         loading="lazy"
-                                        onLoad={onImageLoad} // [NEW] Trigger scroll check on image load
+                                        onLoad={onImageLoad} 
                                         onClick={() => window.open(msg.gif_url, '_blank')}
                                         title="Open full size"
                                     />
                                 )}
-                                {/* Label for GIF type if needed, or just let it be visual */}
                                 <div className="absolute bottom-1 right-1 bg-black/50 text-white text-[9px] px-1 rounded uppercase font-bold tracking-wider pointer-events-none">
                                     GIF
                                 </div>
@@ -269,7 +268,7 @@ const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone, onRetr
                         className={`
                             opacity-0 group-hover:opacity-100
                             transition-opacity duration-150
-                            text-slate-300 hover:text-white
+                            text-slate-400 dark:text-slate-300 hover:text-slate-600 dark:hover:text-white
                             p-1 rounded-full
                         `}
                         onClick={toggleMenu}
@@ -285,15 +284,15 @@ const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone, onRetr
                                 left-1/2 -translate-x-1/2
                                 w-48
                                 rounded-2xl
-                                bg-slate-900
-                                border border-slate-700/70
-                                shadow-2xl shadow-black/60
+                                bg-white dark:bg-slate-900
+                                border border-slate-200 dark:border-slate-700/70
+                                shadow-2xl shadow-black/20 dark:shadow-black/60
                                 py-1
                                 z-[9999]
                             `}
                         >
                             <button 
-                                className="w-full flex items-center gap-2 px-3 py-2.5 text-left text-sm text-slate-100 hover:bg-slate-800 rounded-t-2xl"
+                                className="w-full flex items-center gap-2 px-3 py-2.5 text-left text-sm text-slate-700 dark:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-t-2xl transition-colors"
                                 onClick={(e) => {
                                     e.stopPropagation();
                                     const raw = msg.content || "";
@@ -317,7 +316,7 @@ const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone, onRetr
                             {/* [NEW] Edit Option */}
                             {isMe && !isAudio && msg.type !== 'gif' && !msg.is_deleted_for_everyone && (
                                 <button 
-                                    className="w-full flex items-center gap-2 px-3 py-2.5 text-left text-sm text-slate-100 hover:bg-slate-800"
+                                    className="w-full flex items-center gap-2 px-3 py-2.5 text-left text-sm text-slate-700 dark:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
                                     onClick={(e) => {
                                         e.stopPropagation();
                                         onEdit(msg);
@@ -331,7 +330,7 @@ const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone, onRetr
 
                             {isAudio && msg.status !== 'error' ? (
                                 <button 
-                                    className="w-full flex items-center gap-2 px-3 py-2.5 text-left text-sm text-slate-100 hover:bg-slate-800"
+                                    className="w-full flex items-center gap-2 px-3 py-2.5 text-left text-sm text-slate-700 dark:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
                                     onClick={handleDownload}
                                 >
                                     <span className="material-symbols-outlined text-base">download</span>
@@ -341,7 +340,7 @@ const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone, onRetr
 
                             {msg.type === 'gif' && (
                                 <button 
-                                    className="w-full flex items-center gap-2 px-3 py-2.5 text-left text-sm text-slate-100 hover:bg-slate-800"
+                                    className="w-full flex items-center gap-2 px-3 py-2.5 text-left text-sm text-slate-700 dark:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
                                     onClick={(e) => {
                                         e.stopPropagation();
                                         navigator.clipboard.writeText(msg.gif_url);
@@ -355,7 +354,7 @@ const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone, onRetr
 
                             {msg.type !== 'audio' && msg.type !== 'gif' && (
                                 <button 
-                                    className="w-full flex items-center gap-2 px-3 py-2.5 text-left text-sm text-slate-100 hover:bg-slate-800"
+                                    className="w-full flex items-center gap-2 px-3 py-2.5 text-left text-sm text-slate-700 dark:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
                                     onClick={(e) => {
                                         e.stopPropagation();
                                         navigator.clipboard.writeText(msg.content);
@@ -368,7 +367,7 @@ const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone, onRetr
                             )}
                             
                              <button
-                                className="w-full flex items-center gap-2 px-3 py-2.5 text-left text-sm text-red-400 hover:bg-slate-800"
+                                className="w-full flex items-center gap-2 px-3 py-2.5 text-left text-sm text-red-500 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
                                 onClick={(e) => {
                                     e.stopPropagation();
                                     handleDeleteForMe();
@@ -380,7 +379,7 @@ const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone, onRetr
 
                             {msg.user_id === user.id && (
                                 <button
-                                    className="w-full flex items-center gap-2 px-3 py-2.5 text-left text-sm text-red-500 hover:bg-slate-800 rounded-b-2xl"
+                                    className="w-full flex items-center gap-2 px-3 py-2.5 text-left text-sm text-red-600 dark:text-red-500 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-b-2xl transition-colors"
                                     onClick={(e) => {
                                         e.stopPropagation();
                                         onDeleteForEveryone(msg);
@@ -396,7 +395,7 @@ const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone, onRetr
                 </div>
                 </div>
                 
-                <div className={`text-[10px] mt-1 px-1 opacity-0 ${msg.status !== 'sending' ? 'group-hover:opacity-100' : ''} transition-opacity select-none ${isMe ? 'text-slate-500' : 'text-slate-500'}`}>
+                <div className={`text-[10px] mt-1 px-1 opacity-0 ${msg.status !== 'sending' ? 'group-hover:opacity-100' : ''} transition-opacity select-none ${isMe ? 'text-slate-400 dark:text-slate-500' : 'text-slate-400 dark:text-slate-500'}`}>
                     {new Date(msg.created_at).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: true })}
                 </div>
             </div>
@@ -534,41 +533,41 @@ export default function MessageList({ messages, setMessages, currentUser, roomId
                     if (isSystem) {
                          // ... (keep system message logic)
                          let icon = 'info';
-                         let textColor = 'text-slate-400';
+                         let textColor = 'text-slate-500 dark:text-slate-400';
 
                          if (msg.content.includes('joined')) {
                              icon = 'login';
-                             textColor = 'text-emerald-400';
+                             textColor = 'text-emerald-500 dark:text-emerald-400';
                          } else if (msg.content.includes('left')) {
                              icon = 'logout'; 
-                             textColor = 'text-amber-400';
+                             textColor = 'text-amber-500 dark:text-amber-400';
                          } else if (msg.content.includes('removed') && !msg.content.includes('photo')) {
                              icon = 'person_remove';
-                             textColor = 'text-red-400';
+                             textColor = 'text-red-500 dark:text-red-400';
                          } else if (msg.content.includes('changed the group name')) {
                              icon = 'edit';
-                             textColor = 'text-blue-400';
+                             textColor = 'text-blue-500 dark:text-blue-400';
                          } else if (msg.content.includes('changed the group description')) {
                              icon = 'description';
-                             textColor = 'text-blue-400';
+                             textColor = 'text-blue-500 dark:text-blue-400';
                          } else if (msg.content.includes('group photo')) {
                              icon = 'image';
-                             textColor = 'text-blue-400';
+                             textColor = 'text-blue-500 dark:text-blue-400';
                          } else if (msg.content.includes('updated group permissions')) {
                             icon = 'settings';
-                            textColor = 'text-orange-400';
+                            textColor = 'text-orange-500 dark:text-orange-400';
                          }
  
                          return (
                              <div key={msg.id || index} className="flex justify-center my-6 group/system animate-slide-in-up">
-                                 <div className="flex items-center gap-2 px-4 py-1.5 rounded-full bg-slate-900/40 border border-slate-800/50 backdrop-blur-sm transition-all hover:bg-slate-900/60 hover:border-slate-700">
+                                 <div className="flex items-center gap-2 px-4 py-1.5 rounded-full bg-white/60 dark:bg-slate-900/40 border border-slate-200/50 dark:border-slate-800/50 backdrop-blur-sm transition-all hover:bg-white/80 dark:hover:bg-slate-900/60 hover:border-slate-300 dark:hover:border-slate-700 shadow-sm">
                                      <span className={`material-symbols-outlined text-[16px] ${textColor}`}>
                                          {icon}
                                      </span>
-                                     <span className="text-xs text-slate-400 font-medium">
-                                         {msg.content}
+                                     <span className="text-xs text-slate-600 dark:text-slate-400 font-medium">
+                                         {linkifyText(msg.content)}
                                      </span>
-                                     <span className="text-[10px] text-slate-600 opacity-0 group-hover/system:opacity-100 transition-opacity ml-2">
+                                     <span className="text-[10px] text-slate-500 dark:text-slate-600 opacity-0 group-hover/system:opacity-100 transition-opacity ml-2">
                                          {new Date(msg.created_at).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: true })}
                                      </span>
                                  </div>
@@ -587,7 +586,7 @@ export default function MessageList({ messages, setMessages, currentUser, roomId
                             onRetry={onRetry}
                             onMarkHeard={handleMarkHeard}
                             onEdit={onEdit} 
-                            onImageLoad={handleImageLoad} // [NEW] Pass handleImageLoad
+                            onImageLoad={handleImageLoad}
                         />
                     );
                 })}
@@ -599,10 +598,10 @@ export default function MessageList({ messages, setMessages, currentUser, roomId
             <button
                 onClick={scrollToBottom}
                 className={`
-                    absolute bottom-5 right-5 w-10 h-10 rounded-full bg-slate-900/80 backdrop-blur-sm 
-                    border border-slate-700 shadow-lg shadow-black/50 text-slate-200 
+                    absolute bottom-5 right-5 w-10 h-10 rounded-full bg-white/80 dark:bg-slate-900/80 backdrop-blur-sm 
+                    border border-slate-200 dark:border-slate-700 shadow-lg shadow-black/10 dark:shadow-black/50 text-slate-600 dark:text-slate-200 
                     flex items-center justify-center z-20 transition-all duration-300 ease-in-out
-                    hover:bg-slate-800 hover:text-white hover:scale-110 active:scale-95
+                    hover:bg-white dark:hover:bg-slate-800 hover:text-slate-900 dark:hover:text-white hover:scale-110 active:scale-95
                     ${showScrollButton ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-4 pointer-events-none'}
                 `}
             >
@@ -611,29 +610,30 @@ export default function MessageList({ messages, setMessages, currentUser, roomId
             {confirmDeleteMessage && (
                 <div className="
                     fixed inset-0 z-50 flex items-center justify-center
-                    bg-black/60
+                    bg-slate-950/60 backdrop-blur-sm
                 ">
                     <div className="
-                        bg-slate-900 rounded-2xl shadow-2xl
-                        border border-slate-700
+                        bg-white dark:bg-slate-900 rounded-2xl shadow-2xl
+                        border border-slate-200 dark:border-slate-700
                         w-full max-w-sm px-6 py-5
+                        transition-colors
                     ">
-                        <h2 className="text-lg font-semibold text-slate-100 mb-2">
+                        <h2 className="text-lg font-semibold text-slate-800 dark:text-slate-100 mb-2">
                             Delete message for everyone?
                         </h2>
-                        <p className="text-sm text-slate-300 mb-6">
+                        <p className="text-sm text-slate-500 dark:text-slate-300 mb-6">
                             This message will be deleted for all participants in this chat.
                         </p>
 
                         <div className="flex justify-end gap-2">
                             <button
-                                className="px-4 py-2 rounded-xl text-sm text-slate-300 hover:bg-slate-800"
+                                className="px-4 py-2 rounded-xl text-sm text-slate-500 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
                                 onClick={() => setConfirmDeleteMessage(null)}
                             >
                                 Cancel
                             </button>
                             <button
-                                className="px-4 py-2 rounded-xl text-sm bg-red-500 text-white hover:bg-red-600"
+                                className="px-4 py-2 rounded-xl text-sm bg-red-500 text-white hover:bg-red-600 transition-colors shadow-lg shadow-red-500/20"
                                 onClick={() => confirmDeleteForEveryone()}
                             >
                                 Delete

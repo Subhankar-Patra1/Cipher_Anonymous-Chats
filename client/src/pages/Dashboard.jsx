@@ -281,61 +281,6 @@ export default function Dashboard() {
         }
     }, [activeRoom]);
 
-    const handleCreateRoom = async (roomData) => {
-        try {
-            const res = await fetch(`${import.meta.env.VITE_API_URL}/api/rooms`, {
-                method: 'POST',
-                headers: { 
-                    'Content-Type': 'application/json',
-                    Authorization: `Bearer ${token}` 
-                },
-                body: JSON.stringify(roomData)
-            });
-            if (res.ok) {
-                const newRoom = await res.json();
-                
-                // Check if room already exists in list
-                const exists = rooms.find(r => r.id === newRoom.id);
-                if (!exists) {
-                    setRooms([newRoom, ...rooms]);
-                }
-                
-                setActiveRoom(newRoom);
-                setShowCreateModal(false);
-            }
-        } catch (err) {
-            console.error(err);
-        }
-    };
-
-    const handleJoinRoom = async (code) => {
-        try {
-            const res = await fetch(`${import.meta.env.VITE_API_URL}/api/rooms/join`, {
-                method: 'POST',
-                headers: { 
-                    'Content-Type': 'application/json',
-                    Authorization: `Bearer ${token}` 
-                },
-                body: JSON.stringify({ code })
-            });
-            const newRoom = await res.json();
-            if (res.ok) {
-                // Check if already in list
-                if (!rooms.find(r => r.id === newRoom.id)) {
-                    setRooms(prev => [newRoom, ...prev]);
-                }
-                setShowJoinModal(false);
-                
-                // Fetch messages immediately so the user sees the "You joined" message
-                await handleSelectRoom(newRoom);
-            } else {
-                alert(newRoom.error);
-            }
-        } catch (err) {
-            console.error(err);
-        }
-    };
-
     // [NEW] Helper to hydrate messages (resolve replies)
     const hydrateMessages = (messages) => {
         const byId = new Map(messages.map(m => [m.id, m]));
@@ -392,9 +337,64 @@ export default function Dashboard() {
         }
     };
 
+    const handleCreateRoom = async (roomData) => {
+        try {
+            const res = await fetch(`${import.meta.env.VITE_API_URL}/api/rooms`, {
+                method: 'POST',
+                headers: { 
+                    'Content-Type': 'application/json',
+                    Authorization: `Bearer ${token}` 
+                },
+                body: JSON.stringify(roomData)
+            });
+            if (res.ok) {
+                const newRoom = await res.json();
+                
+                // Check if room already exists in list
+                const exists = rooms.find(r => r.id === newRoom.id);
+                if (!exists) {
+                    setRooms([newRoom, ...rooms]);
+                }
+                
+                setShowCreateModal(false);
+                await handleSelectRoom(newRoom);
+            }
+        } catch (err) {
+            console.error(err);
+        }
+    };
+
+    const handleJoinRoom = async (code) => {
+        try {
+            const res = await fetch(`${import.meta.env.VITE_API_URL}/api/rooms/join`, {
+                method: 'POST',
+                headers: { 
+                    'Content-Type': 'application/json',
+                    Authorization: `Bearer ${token}` 
+                },
+                body: JSON.stringify({ code })
+            });
+            const newRoom = await res.json();
+            if (res.ok) {
+                // Check if already in list
+                if (!rooms.find(r => r.id === newRoom.id)) {
+                    setRooms(prev => [newRoom, ...prev]);
+                }
+                setShowJoinModal(false);
+                
+                // Fetch messages immediately so the user sees the "You joined" message
+                await handleSelectRoom(newRoom);
+            } else {
+                alert(newRoom.error);
+            }
+        } catch (err) {
+            console.error(err);
+        }
+    };
+
     return (
         <PresenceProvider socket={socket}>
-        <div className={`fixed inset-0 h-[100dvh] w-full bg-gray-900 text-white overflow-hidden flex ${isResizing ? 'select-none cursor-col-resize' : ''} animate-dashboard-entry`}>
+        <div className={`fixed inset-0 h-[100dvh] w-full bg-gray-50 dark:bg-slate-950 text-slate-900 dark:text-white overflow-hidden flex ${isResizing ? 'select-none cursor-col-resize' : ''} animate-dashboard-entry transition-colors`}>
             {/* Mobile: Sidebar hidden if activeRoom exists. Desktop: Always visible */}
             <div 
                 className={`
@@ -419,7 +419,7 @@ export default function Dashboard() {
             {/* Drag Handle (Desktop Only) */}
             {!showGroupInfo && (
                 <div 
-                    className="hidden md:block w-1 hover:w-1.5 cursor-col-resize bg-slate-800 hover:bg-violet-500 transition-all z-10 shrink-0"
+                    className="hidden md:block w-1 hover:w-1.5 cursor-col-resize bg-slate-200 dark:bg-slate-800 hover:bg-violet-500 transition-all z-10 shrink-0"
                     onMouseDown={startResizing}
                 />
             )}
@@ -427,7 +427,7 @@ export default function Dashboard() {
             {/* Mobile: Chat visible if activeRoom exists. Desktop: Always visible (flex-1) */}
             <div className={`
                 ${activeRoom ? 'flex' : 'hidden md:flex'} 
-                flex-1 flex-col h-full bg-gray-900 relative z-0 min-w-0 overflow-hidden
+                flex-1 flex-col h-full bg-gray-50 dark:bg-slate-950 relative z-0 min-w-0 overflow-hidden transition-colors duration-300
             `}>
                 {activeRoom ? (
                     <ChatWindow 
@@ -440,9 +440,9 @@ export default function Dashboard() {
                         setShowGroupInfo={setShowGroupInfo}
                     />
                 ) : (
-                    <div className="flex-1 flex items-center justify-center text-gray-500">
+                    <div className="flex-1 flex items-center justify-center text-slate-500 dark:text-slate-400">
                         <div className="text-center">
-                            <span className="material-symbols-outlined text-6xl text-slate-700 mb-4">chat_bubble_outline</span>
+                            <span className="material-symbols-outlined text-6xl text-slate-300 dark:text-slate-700 mb-4 transition-colors">chat_bubble_outline</span>
                             <p>Select a room to start chatting</p>
                         </div>
                     </div>

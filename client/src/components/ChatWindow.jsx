@@ -4,6 +4,7 @@ import { usePresence } from '../context/PresenceContext';
 import MessageList from './MessageList';
 import MessageInput from './MessageInput';
 import ProfilePanel from './ProfilePanel';
+import { linkifyText } from '../utils/linkify';
 
 const timeAgo = (dateString) => {
     if (!dateString) return '';
@@ -532,7 +533,7 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
     }, [messages]);
 
     return (
-        <div className="flex flex-col h-full bg-slate-950 relative overflow-hidden">
+        <div className="flex flex-col h-full bg-gray-50 dark:bg-slate-950 relative overflow-hidden transition-colors">
             <PrivilegedUsersModal 
                 isOpen={showPrivilegedModal} 
                 onClose={() => setShowPrivilegedModal(false)}
@@ -542,13 +543,13 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
                 token={token}
             />
             {/* Background Pattern */}
-            <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top_right,_var(--tw-gradient-stops))] from-violet-900/20 via-slate-950 to-slate-950 pointer-events-none" />
+            <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top_right,_var(--tw-gradient-stops))] from-violet-200/40 via-gray-50 to-gray-50 dark:from-violet-900/20 dark:via-slate-950 dark:to-slate-950 pointer-events-none transition-colors" />
 
             {/* Header */}
-            <div className="p-4 border-b border-slate-800/50 bg-slate-900/50 backdrop-blur-md flex items-center gap-4 shadow-sm z-10">
+            <div className="p-4 border-b border-slate-200/50 dark:border-slate-800/50 bg-white/50 dark:bg-slate-900/50 backdrop-blur-md flex items-center gap-4 shadow-sm z-10 transition-colors">
                 <button 
                     onClick={onBack}
-                    className="p-2 -ml-2 text-slate-400 hover:text-white transition-colors"
+                    className="p-2 -ml-2 text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white transition-colors"
                 >
                     <span className="material-symbols-outlined">arrow_back</span>
                 </button>
@@ -562,7 +563,7 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
                     }}
                 >
                     {/* Header Avatar */}
-                    <div className={`w-10 h-10 rounded-full flex items-center justify-center text-sm font-bold text-white shadow-lg shrink-0 overflow-hidden ${!room.avatar_url && !room.avatar_thumb_url ? 'bg-gradient-to-br from-violet-500 to-indigo-600' : 'bg-slate-800'}`}>
+                    <div className={`w-10 h-10 rounded-full flex items-center justify-center text-sm font-bold text-white shadow-lg shrink-0 overflow-hidden ${!room.avatar_url && !room.avatar_thumb_url ? 'bg-gradient-to-br from-violet-500 to-indigo-600' : 'bg-slate-200 dark:bg-slate-800'}`}>
                         {(room.avatar_url || room.avatar_thumb_url) ? (
                             <img src={room.avatar_url || room.avatar_thumb_url} alt={room.name} className="w-full h-full object-cover" />
                         ) : (
@@ -573,19 +574,19 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
                     </div>
 
                     <div className="min-w-0">
-                        <h2 className="text-lg font-bold text-slate-100 flex items-center gap-2 truncate">
+                        <h2 className="text-lg font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2 truncate transition-colors duration-300">
                             {room.type === 'group' && (
-                                <span className="material-symbols-outlined text-violet-400 shrink-0">tag</span>
+                                <span className="material-symbols-outlined text-violet-500 dark:text-violet-400 shrink-0">tag</span>
                             )}
-                            <span className="truncate">{room.name}</span>
+                            <span className="truncate">{linkifyText(room.name)}</span>
                             {room.type === 'group' && (
-                                <span className="text-xs bg-slate-800 px-2 py-1 rounded-md text-slate-400 font-mono border border-slate-700 ml-2 shrink-0">
+                                <span className="text-xs bg-slate-100 dark:bg-slate-800 px-2 py-1 rounded-md text-slate-500 dark:text-slate-400 font-mono border border-slate-200 dark:border-slate-700 ml-2 shrink-0 transition-colors duration-300">
                                     {room.code}
                                 </span>
                             )}
                         </h2>
                         {room.type === 'direct' && room.username && (
-                            <p className="text-xs text-slate-400 font-medium truncate">
+                            <p className="text-xs text-slate-500 dark:text-slate-400 font-medium truncate transition-colors duration-300">
                                 {room.username.startsWith('@') ? room.username : `@${room.username}`}
                             </p>
                         )}
@@ -593,18 +594,18 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
                         {room.type === 'direct' && otherUserStatus && (
                             <div className="text-xs font-medium mt-0.5">
                                 {otherUserStatus.online ? (
-                                    <span className="text-green-400">Online now</span>
+                                    <span className="text-green-500 dark:text-green-400">Online now</span>
                                 ) : otherUserStatus.last_seen ? (
-                                    <span className="text-slate-500">Last seen {timeAgo(otherUserStatus.last_seen)}</span>
+                                    <span className="text-slate-400 dark:text-slate-500">Last seen {timeAgo(otherUserStatus.last_seen)}</span>
                                 ) : (
-                                    <span className="text-slate-600">Offline</span>
+                                    <span className="text-slate-400 dark:text-slate-600">Offline</span>
                                 )}
                             </div>
                         )}
                     </div>
 
                     {room.expires_at && (
-                        <p className={`text-xs mt-0.5 flex items-center gap-1 ${isExpired ? 'text-red-400' : 'text-emerald-400'}`}>
+                        <p className={`text-xs mt-0.5 flex items-center gap-1 ${isExpired ? 'text-red-500 dark:text-red-400' : 'text-emerald-500 dark:text-emerald-400'}`}>
                             <span className="material-symbols-outlined text-[14px]">
                                 {isExpired ? 'timer_off' : 'timer'}
                             </span>
@@ -616,7 +617,7 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
                 {room.type === 'group' && (
                     <button 
                         onClick={() => setShowGroupInfo(true)}
-                        className="p-2 text-slate-400 hover:text-white transition-all"
+                        className="p-2 text-slate-400 hover:text-slate-700 dark:text-slate-400 dark:hover:text-white transition-all"
                     >
                         <span className="material-symbols-outlined">info</span>
                     </button>
@@ -637,7 +638,7 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
             
             {/* Typing Indicator */}
             {typingUsers.length > 0 && (
-                <div className="px-4 py-2 text-xs text-slate-400 font-medium italic animate-pulse flex items-center gap-1 z-10 bg-slate-900/30 backdrop-blur-sm">
+                <div className="px-4 py-2 text-xs text-slate-500 dark:text-slate-400 font-medium italic animate-pulse flex items-center gap-1 z-10 bg-white/50 dark:bg-slate-900/30 backdrop-blur-sm transition-colors duration-300">
                     <span className="material-symbols-outlined text-[14px] animate-bounce">more_horiz</span>
                     {getTypingText()}
                 </div>
@@ -659,14 +660,14 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
                     onTypingStop={() => socket?.emit('typing:stop', { roomId: room.id })}
                 />
             ) : (
-                <div className="p-4 bg-slate-900/50 backdrop-blur-md border-t border-slate-800/50 z-10 flex justify-center items-center h-[88px]">
-                    <div className="bg-slate-800/80 px-6 py-3 rounded-full flex items-center gap-2 border border-slate-700 shadow-lg">
+                <div className="p-4 bg-white/50 dark:bg-slate-900/50 backdrop-blur-md border-t border-slate-200/50 dark:border-slate-800/50 z-10 flex justify-center items-center h-[88px] transition-colors duration-300">
+                    <div className="bg-slate-100/80 dark:bg-slate-800/80 px-6 py-3 rounded-full flex items-center gap-2 border border-slate-200 dark:border-slate-700 shadow-lg">
                         <span className="material-symbols-outlined text-slate-400 text-sm">lock</span>
-                        <span className="text-slate-400 text-sm font-medium">
+                        <span className="text-slate-500 dark:text-slate-400 text-sm font-medium">
                             Only{' '}
                             <button 
                                 onClick={handleOpenPrivileged}
-                                className="font-bold text-violet-400 hover:text-violet-300 underline decoration-violet-500/30 underline-offset-4 hover:decoration-violet-500 transition-all"
+                                className="font-bold text-violet-500 dark:text-violet-400 hover:text-violet-600 dark:hover:text-violet-300 underline decoration-violet-500/30 underline-offset-4 hover:decoration-violet-500 transition-all"
                             >
                                 {sendMode === 'admins_only' ? 'admins' : 'owner'}
                             </button>

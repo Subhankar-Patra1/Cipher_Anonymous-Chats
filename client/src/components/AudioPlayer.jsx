@@ -93,6 +93,19 @@ export default function AudioPlayer({ src, durationMs, waveform, isMe, isHeard, 
         }
     }, [playbackRate, isPlaying]);
 
+    // Style variants based on isMe
+    const baseButton = isMe 
+        ? "bg-white/20 hover:bg-white/30 text-white" 
+        : "bg-slate-900/10 hover:bg-slate-900/20 dark:bg-white/10 dark:hover:bg-white/20 text-violet-600 dark:text-white";
+    
+    const textColor = isMe
+        ? "text-white/70"
+        : "text-slate-500 dark:text-slate-400";
+
+    const badgeColor = isMe
+        ? "bg-white/10 hover:bg-white/20 text-white border-white/5"
+        : "bg-slate-900/10 hover:bg-slate-900/20 dark:bg-white/10 dark:hover:bg-white/20 text-violet-600 dark:text-white border-violet-200 dark:border-white/5";
+
     // If waveform is missing, render a dummy line
     const renderWaveform = () => {
         if (!bars.length) {
@@ -100,11 +113,12 @@ export default function AudioPlayer({ src, durationMs, waveform, isMe, isHeard, 
                 <div 
                     ref={waveformRef}
                     onClick={handleWaveformClick}
-                    className="flex-1 h-3 bg-white/20 rounded-full overflow-hidden cursor-pointer flex items-center relative group"
+                    className="flex-1 h-3 rounded-full overflow-hidden cursor-pointer flex items-center relative group"
                 >
-                    <div className="absolute inset-0 bg-white/10 opacity-0 group-hover:opacity-100 transition-opacity" />
+                    <div className={`absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity ${isMe ? 'bg-white/10' : 'bg-slate-900/10 dark:bg-white/10'}`} />
+                    <div className={`w-full h-full opacity-20 ${isMe ? 'bg-white' : 'bg-slate-900 dark:bg-white'}`} />
                     <div 
-                        className="h-1 bg-white/80 transition-all duration-100 ease-linear rounded-full absolute left-0"
+                        className={`h-full transition-all duration-100 ease-linear rounded-full absolute left-0 ${isMe ? 'bg-white/80' : 'bg-violet-500 dark:bg-white/80'}`}
                         style={{ width: `${progress * 100}%` }}
                     />
                 </div>
@@ -117,17 +131,21 @@ export default function AudioPlayer({ src, durationMs, waveform, isMe, isHeard, 
                 onClick={handleWaveformClick}
                 className="flex-1 flex items-center h-8 gap-[1px] opacity-80 cursor-pointer relative group select-none"
             >
-                <div className="absolute inset-0 top-1 bottom-1 -left-1 -right-1 bg-white/5 rounded-md opacity-0 group-hover:opacity-100 transition-opacity" />
+                <div className={`absolute inset-0 top-1 bottom-1 -left-1 -right-1 rounded-md opacity-0 group-hover:opacity-100 transition-opacity ${isMe ? 'bg-white/5' : 'bg-slate-900/5 dark:bg-white/5'}`} />
                 
                 {bars.map((v, i) => {
                     // Determine if this bar is "past" the playback head
                     const barPos = i / bars.length;
                     const isPlayed = barPos <= progress;
+                    
+                    const barColor = isPlayed 
+                        ? (isMe ? 'bg-white' : 'bg-violet-600 dark:bg-white')
+                        : (isMe ? 'bg-white/30' : 'bg-slate-900/20 dark:bg-white/30');
 
                     return (
                         <div
                             key={i}
-                            className={`flex-1 rounded-full transition-colors duration-100 ${isPlayed ? 'bg-white' : 'bg-white/30'}`}
+                            className={`flex-1 rounded-full transition-colors duration-100 ${barColor}`}
                             style={{ 
                                 height: `${20 + v * 80}%`, 
                                 minHeight: '4px',
@@ -146,7 +164,7 @@ export default function AudioPlayer({ src, durationMs, waveform, isMe, isHeard, 
             <div className="relative">
                 <button
                     onClick={togglePlay}
-                    className="w-10 h-10 rounded-full bg-slate-100/10 flex items-center justify-center hover:bg-slate-100/20 transition text-white shrink-0"
+                    className={`w-10 h-10 rounded-full flex items-center justify-center transition shrink-0 ${baseButton}`}
                 >
                     <span className="material-symbols-outlined text-[24px]">
                         {isPlaying ? 'pause' : 'play_arrow'}
@@ -169,11 +187,11 @@ export default function AudioPlayer({ src, durationMs, waveform, isMe, isHeard, 
                  <button
                     type="button"
                     onClick={togglePlaybackRate}
-                    className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-white/10 hover:bg-white/20 text-white transition-colors border border-white/5"
+                    className={`px-2 py-0.5 rounded-full text-[10px] font-bold transition-colors border ${badgeColor}`}
                 >
                     {playbackRate}x
                 </button>
-                <span className="text-[10px] font-medium text-white/70 tabular-nums">
+                <span className={`text-[10px] font-medium tabular-nums ${textColor}`}>
                     {isPlaying ? formatDuration(currentTime) : formatDuration(durationMs)}
                 </span>
             </div>

@@ -291,21 +291,19 @@ export default function AvatarEditorModal({ isOpen, onClose, ...props }) {
     if (!isOpen) return null;
 
     return (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 p-4">
-            <div className="bg-white dark:bg-gray-800 rounded-2xl w-full max-w-md overflow-hidden shadow-2xl flex flex-col max-h-[90vh]">
-                <div className="p-4 border-b dark:border-gray-700 flex justify-between items-center">
-                    <h3 className="text-lg font-bold dark:text-white">Edit Profile Photo</h3>
-                    <button onClick={onClose} className="text-gray-500 hover:text-gray-700 dark:hover:text-gray-300">
-                        ✕
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm transition-colors duration-300">
+            <div className="bg-white dark:bg-slate-900 rounded-2xl w-full max-w-md overflow-hidden shadow-2xl flex flex-col max-h-[90vh] transition-colors">
+                <div className="p-4 border-b border-slate-200 dark:border-slate-800 flex justify-between items-center transition-colors">
+                    <h3 className="text-lg font-bold text-slate-800 dark:text-white">Edit Profile Photo</h3>
+                    <button onClick={onClose} className="text-slate-400 hover:text-slate-600 dark:hover:text-white transition-colors">
+                        <span className="material-symbols-outlined">close</span>
                     </button>
                 </div>
 
                 <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-4">
                     {!imageSrc ? (
-                        <div className="relative border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-xl p-8 flex flex-col items-center justify-center gap-2 text-gray-500">
-                            <svg xmlns="http://www.w3.org/2000/svg" className="h-10 w-10 mb-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
-                            </svg>
+                        <div className="relative border-2 border-dashed border-slate-300 dark:border-slate-700 rounded-xl p-8 flex flex-col items-center justify-center gap-2 text-slate-500 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors">
+                            <span className="material-symbols-outlined text-4xl mb-2">cloud_upload</span>
                             <span>Click to upload or drag & drop</span>
                             <input
                                 type="file"
@@ -331,7 +329,7 @@ export default function AvatarEditorModal({ isOpen, onClose, ...props }) {
                             </div>
                             
                             <div className="flex flex-col gap-2">
-                                <label className="text-xs font-medium text-gray-500">Zoom</label>
+                                <label className="text-xs font-medium text-slate-500 dark:text-slate-400">Zoom</label>
                                 <input
                                     type="range"
                                     value={zoom}
@@ -340,12 +338,12 @@ export default function AvatarEditorModal({ isOpen, onClose, ...props }) {
                                     step={0.1}
                                     aria-labelledby="Zoom"
                                     onChange={(e) => setZoom(e.target.value)}
-                                    className="w-full accent-blue-500"
+                                    className="w-full accent-violet-500"
                                 />
                             </div>
 
                             <div className="flex flex-col gap-2">
-                                <label className="text-xs font-medium text-gray-500">Rotation</label>
+                                <label className="text-xs font-medium text-slate-500 dark:text-slate-400">Rotation</label>
                                 <input
                                     type="range"
                                     value={rotation}
@@ -354,7 +352,7 @@ export default function AvatarEditorModal({ isOpen, onClose, ...props }) {
                                     step={1}
                                     aria-labelledby="Rotation"
                                     onChange={(e) => setRotation(e.target.value)}
-                                    className="w-full accent-blue-500"
+                                    className="w-full accent-violet-500"
                                 />
                             </div>
                             
@@ -373,10 +371,10 @@ export default function AvatarEditorModal({ isOpen, onClose, ...props }) {
                     
                 </div>
                 
-                <div className="p-4 border-t dark:border-gray-700 flex justify-between gap-3 bg-gray-50 dark:bg-gray-800/50">
+                <div className="p-4 border-t border-slate-200 dark:border-slate-800 flex justify-between gap-3 bg-gray-50 dark:bg-slate-900 transition-colors">
                      <button
                         onClick={handleRemove}
-                        className="text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 px-4 py-2 rounded-lg text-sm font-medium transition-colors"
+                        className="text-red-500 hover:bg-red-50 dark:hover:bg-red-500/10 px-4 py-2 rounded-lg text-sm font-medium transition-colors"
                         disabled={loading}
                     >
                         Remove Photo
@@ -385,7 +383,7 @@ export default function AvatarEditorModal({ isOpen, onClose, ...props }) {
                     <div className="flex gap-3">
                         <button
                             onClick={onClose}
-                            className="text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 px-4 py-2 rounded-lg text-sm font-medium transition-colors"
+                            className="text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-800 px-4 py-2 rounded-lg text-sm font-medium transition-colors"
                             disabled={loading}
                         >
                             Cancel
@@ -393,7 +391,7 @@ export default function AvatarEditorModal({ isOpen, onClose, ...props }) {
                         <button
                             onClick={handleSave}
                             disabled={!imageSrc || loading}
-                            className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2 rounded-lg text-sm font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                            className="bg-violet-600 hover:bg-violet-700 text-white px-6 py-2 rounded-lg text-sm font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
                         >
                             {loading && <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>}
                             Save
