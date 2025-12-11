@@ -367,13 +367,45 @@ io.on('connection', async (socket) => {
             // Or a list of IDs.
             
             if (messageIds && messageIds.length > 0) {
-                 await db.query(
-                    'UPDATE messages SET status = $1 WHERE id = ANY($2) AND room_id = $3 AND user_id != $4',
-                    ['seen', messageIds, roomId, socket.user.id]
-                );
-                
-                // Broadcast update
-                io.to(`room:${roomId}`).emit('messages_status_update', { messageIds, status: 'seen', roomId });
+                 // 1. Get room member count
+                 const countRes = await db.query('SELECT count(*) FROM room_members WHERE room_id = $1', [roomId]);
+                 const totalMembers = parseInt(countRes.rows[0].count);
+
+                 // 2. Update read_by for these messages (append user_id if not present)
+                 // We only update messages not sent by this user
+                 const updateRes = await db.query(`
+                    UPDATE messages 
+                    SET read_by = array_append(read_by, $3)
+                    WHERE id = ANY($1) 
+                      AND room_id = $2 
+                      AND user_id != $3
+                      AND NOT ($3 = ANY(read_by))
+                    RETURNING id, cardinality(read_by) as read_count
+                 `, [messageIds, roomId, socket.user.id]);
+                 
+                 const updatedMessages = updateRes.rows;
+                 const fullyReadIds = [];
+
+                 // 3. Check if any message is now seen by everyone (except sender)
+                 // totalMembers includes the sender, so we need read_by count to be >= totalMembers - 1
+                 const threshold = totalMembers - 1;
+                 
+                 for (const msg of updatedMessages) {
+                     if (msg.read_count >= threshold) {
+                         fullyReadIds.push(msg.id);
+                     }
+                 }
+
+                 // 4. Update status to 'seen' only for fully read messages
+                 if (fullyReadIds.length > 0) {
+                    await db.query(
+                        'UPDATE messages SET status = $1 WHERE id = ANY($2)',
+                        ['seen', fullyReadIds]
+                    );
+                    
+                    // Broadcast update only for fully read messages
+                    io.to(`room:${roomId}`).emit('messages_status_update', { messageIds: fullyReadIds, status: 'seen', roomId });
+                 }
             }
         } catch (err) {
             console.error('Error marking seen:', err);

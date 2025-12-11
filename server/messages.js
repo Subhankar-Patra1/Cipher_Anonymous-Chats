@@ -110,7 +110,7 @@ router.post('/audio', upload.single('audio'), async (req, res) => {
 // Create new message (Text or GIF)
 router.post('/', async (req, res) => {
     try {
-        const { room_id, type = 'text', content, gif_url, preview_url, width, height, tempId } = req.body;
+        const { room_id, type = 'text', content, gif_url, preview_url, width, height, tempId, replyToMessageId } = req.body;
         
         // Basic validation
         if (!room_id) return res.status(400).json({ error: 'room_id is required' });
@@ -144,24 +144,24 @@ router.post('/', async (req, res) => {
 
         if (type === 'gif') {
             query = `
-                INSERT INTO messages (room_id, user_id, type, content, gif_url, preview_url, width, height)
-                VALUES ($1, $2, 'gif', $3, $4, $5, $6, $7)
-                RETURNING id, status, to_char(created_at, 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') as created_at
+                INSERT INTO messages (room_id, user_id, type, content, gif_url, preview_url, width, height, reply_to_message_id)
+                VALUES ($1, $2, 'gif', $3, $4, $5, $6, $7, $8)
+                RETURNING id, status, reply_to_message_id, to_char(created_at, 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') as created_at
             `;
             // Content is optional for GIF, but let's store "GIF" or something if empty? Prompt says "leave content optional".
             // If DB column not null default 'text', we might need something? 
             // In migration, I added default 'text' for type, but content?
             // Existing schema likely has content NOT NULL? I should check or provide default.
             // Let's provide "GIF" as fallback content for notifications/previews if `content` is empty.
-            params = [room_id, req.user.id, content || 'GIF', gif_url, preview_url, width, height];
+            params = [room_id, req.user.id, content || 'GIF', gif_url, preview_url, width, height, replyToMessageId || null];
         } else {
             // Fallback for text if we move text sending to REST later, though socket handles it now.
             query = `
-                INSERT INTO messages (room_id, user_id, content) 
-                VALUES ($1, $2, $3) 
-                RETURNING id, status, to_char(created_at, 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') as created_at
+                INSERT INTO messages (room_id, user_id, content, reply_to_message_id) 
+                VALUES ($1, $2, $3, $4) 
+                RETURNING id, status, reply_to_message_id, to_char(created_at, 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') as created_at
             `;
-            params = [room_id, req.user.id, content];
+            params = [room_id, req.user.id, content, replyToMessageId || null];
         }
 
         const result = await db.query(query, params);
@@ -185,6 +185,7 @@ router.post('/', async (req, res) => {
             width,
             height,
             status: info.status,
+            reply_to_message_id: info.reply_to_message_id,
             created_at: info.created_at,
             username: req.user.username,
             display_name: user ? user.display_name : req.user.display_name,

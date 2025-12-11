@@ -484,12 +484,17 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
             preview_url: finalPreviewUrl,
             width: gif.width,
             height: gif.height,
+            replyTo: replyTo || null, // Include replyTo context
             created_at: new Date().toISOString(),
             username: user.username,
             display_name: user ? user.display_name : 'Me',
             status: 'sending'
         };
         setMessages(prev => [...prev, tempMsg]);
+        
+        // Capture replyTo locally before clearing state
+        const replyToId = replyTo ? replyTo.id : null;
+        setReplyTo(null); // Clear reply state
 
         try {
             await fetch(`${import.meta.env.VITE_API_URL}/api/messages`, {
@@ -506,6 +511,7 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
                     preview_url: finalPreviewUrl,
                     width: gif.width,
                     height: gif.height,
+                    replyToMessageId: replyToId, // Send to backend
                     tempId
                 })
             });
