@@ -1,4 +1,5 @@
 require('dotenv').config();
+// Main Server Entry Point - Updated for restart
 const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
@@ -47,6 +48,10 @@ app.use('/api/messages', messageRoutes);
 
 const tenorRoutes = require('./tenor');
 app.use('/api/gifs', tenorRoutes);
+
+// AI Integration
+const { setupAI } = require('./ai');
+setupAI(app, io, db, redisClient);
 
 // Presence API Routes
 app.get('/api/users/status', async (req, res) => {
@@ -321,7 +326,7 @@ io.on('connection', async (socket) => {
                 const insertRes = await db.query(
                     `INSERT INTO messages (room_id, user_id, content, reply_to_message_id) 
                      VALUES ($1, $2, $3, $4) 
-                     RETURNING id, status, reply_to_message_id, to_char(created_at, 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') as created_at`,
+                     RETURNING id, status, reply_to_message_id, created_at`,
                     [roomId, socket.user.id, content, replyToMessageId || null]
                 );
                 const info = insertRes.rows[0];
@@ -367,6 +372,10 @@ io.on('connection', async (socket) => {
             // Or a list of IDs.
             
             if (messageIds && messageIds.length > 0) {
+                 // Filter out non-integer IDs (like 'streaming-ai')
+                 const validIds = messageIds.filter(id => Number.isInteger(id) || (typeof id === 'string' && /^\d+$/.test(id)));
+                 if (validIds.length === 0) return;
+
                  // 1. Get room member count
                  const countRes = await db.query('SELECT count(*) FROM room_members WHERE room_id = $1', [roomId]);
                  const totalMembers = parseInt(countRes.rows[0].count);
@@ -376,12 +385,12 @@ io.on('connection', async (socket) => {
                  const updateRes = await db.query(`
                     UPDATE messages 
                     SET read_by = array_append(read_by, $3)
-                    WHERE id = ANY($1) 
+                    WHERE id = ANY($1::int[]) 
                       AND room_id = $2 
                       AND user_id != $3
                       AND NOT ($3 = ANY(read_by))
                     RETURNING id, cardinality(read_by) as read_count
-                 `, [messageIds, roomId, socket.user.id]);
+                 `, [validIds, roomId, socket.user.id]);
                  
                  const updatedMessages = updateRes.rows;
                  const fullyReadIds = [];
@@ -409,6 +418,31 @@ io.on('connection', async (socket) => {
             }
         } catch (err) {
             console.error('Error marking seen:', err);
+        }
+    });
+
+    socket.on('message_delivered', async ({ messageId, roomId }) => {
+        try {
+            // Update delivered_to
+            const updateRes = await db.query(`
+                UPDATE messages 
+                SET delivered_to = array_append(COALESCE(delivered_to, '{}'), $1)
+                WHERE id = $2 
+                  AND room_id = $3
+                  AND NOT ($1 = ANY(COALESCE(delivered_to, '{}')))
+                RETURNING id, status
+            `, [socket.user.id, messageId, roomId]);
+
+            if (updateRes.rowCount > 0) {
+                const msg = updateRes.rows[0];
+                // If status is 'sent', update to 'delivered'
+                if (msg.status === 'sent') {
+                    await db.query('UPDATE messages SET status = $1 WHERE id = $2', ['delivered', messageId]);
+                    io.to(`room:${roomId}`).emit('messages_status_update', { messageIds: [messageId], status: 'delivered', roomId });
+                }
+            }
+        } catch (err) {
+            console.error('Error marking delivered:', err);
         }
     });
 

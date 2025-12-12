@@ -60,7 +60,7 @@ router.post('/audio', upload.single('audio'), async (req, res) => {
         const result = await db.query(
             `INSERT INTO messages (room_id, user_id, type, audio_url, audio_duration_ms, audio_waveform, content, reply_to_message_id) 
              VALUES ($1, $2, 'audio', $3, $4, $5, 'Voice message', $6) 
-             RETURNING id, status, to_char(created_at, 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') as created_at`,
+             RETURNING id, status, created_at`,
             [roomId, req.user.id, audioUrl, durationMs, waveform, replyToMessageId || null]
         );
         
@@ -146,7 +146,7 @@ router.post('/', async (req, res) => {
             query = `
                 INSERT INTO messages (room_id, user_id, type, content, gif_url, preview_url, width, height, reply_to_message_id)
                 VALUES ($1, $2, 'gif', $3, $4, $5, $6, $7, $8)
-                RETURNING id, status, reply_to_message_id, to_char(created_at, 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') as created_at
+                RETURNING id, status, reply_to_message_id, created_at
             `;
             // Content is optional for GIF, but let's store "GIF" or something if empty? Prompt says "leave content optional".
             // If DB column not null default 'text', we might need something? 
@@ -159,7 +159,7 @@ router.post('/', async (req, res) => {
             query = `
                 INSERT INTO messages (room_id, user_id, content, reply_to_message_id) 
                 VALUES ($1, $2, $3, $4) 
-                RETURNING id, status, reply_to_message_id, to_char(created_at, 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') as created_at
+                RETURNING id, status, reply_to_message_id, created_at
             `;
             params = [room_id, req.user.id, content, replyToMessageId || null];
         }

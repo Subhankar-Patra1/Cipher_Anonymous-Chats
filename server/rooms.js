@@ -430,8 +430,9 @@ router.get('/:id/messages', async (req, res) => {
                    m.is_deleted_for_everyone, m.deleted_for_user_ids, m.edited_at,
                    m.audio_url, m.audio_duration_ms, m.audio_waveform,
                    m.gif_url, m.preview_url, m.width, m.height,
+                   m.author_name, m.meta,
                    (aps.heard_at IS NOT NULL) as audio_heard,
-                   to_char(m.created_at, 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') as created_at,
+                   m.created_at,
                    u.display_name, u.username, u.avatar_thumb_url, u.avatar_url 
             FROM messages m 
             JOIN users u ON m.user_id = u.id 
@@ -728,6 +729,36 @@ router.post('/:id/clear', async (req, res) => {
         io.to(`user:${req.user.id}`).emit('chat:cleared', { roomId: req.params.id, userId: req.user.id });
         res.json({ ok: true });
     } catch (error) {
+        res.status(500).json({ error: 'Server error' });
+    }
+});
+
+// Clear Messages (DELETE method for AI Chat)
+router.delete('/:id/messages', async (req, res) => {
+    try {
+        const roomId = req.params.id;
+        
+        // Check room type
+        const roomRes = await db.query('SELECT type FROM rooms WHERE id = $1', [roomId]);
+        const roomType = roomRes.rows[0]?.type;
+
+        if (roomType === 'ai') {
+            // Hard delete for AI rooms
+            await db.query('DELETE FROM messages WHERE room_id = $1', [roomId]);
+            // Also reset cleared_at since messages are gone? Or keep it? 
+            // Resetting it is cleaner so future messages are visible without relying on old timestamp.
+            await db.query('UPDATE room_members SET cleared_at = NULL WHERE room_id = $1 AND user_id = $2', [roomId, req.user.id]);
+        } else {
+            // Soft delete (hide) for other rooms
+            // Use CURRENT_TIMESTAMP + interval to be safe against clock skew or concurrent inserts
+            await db.query("UPDATE room_members SET cleared_at = (CURRENT_TIMESTAMP + interval '1 second') WHERE room_id = $1 AND user_id = $2", [roomId, req.user.id]);
+        }
+        
+        const io = req.app.get('io');
+        io.to(`user:${req.user.id}`).emit('chat:cleared', { roomId: roomId, userId: req.user.id });
+        res.json({ ok: true });
+    } catch (error) {
+        console.error('[DEBUG] Error clearing messages:', error);
         res.status(500).json({ error: 'Server error' });
     }
 });

@@ -68,6 +68,7 @@ const createTables = async () => {
 
             -- Migration for messages table
             ALTER TABLE messages ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'sent'; -- sent, delivered, seen
+            ALTER TABLE messages ADD COLUMN IF NOT EXISTS delivered_to INTEGER[] DEFAULT '{}'; -- [NEW]
             ALTER TABLE messages ADD COLUMN IF NOT EXISTS reply_to_message_id INTEGER REFERENCES messages(id);
             ALTER TABLE messages ADD COLUMN IF NOT EXISTS is_deleted_for_everyone BOOLEAN DEFAULT FALSE;
             ALTER TABLE messages ADD COLUMN IF NOT EXISTS deleted_for_user_ids TEXT[] DEFAULT '{}';
