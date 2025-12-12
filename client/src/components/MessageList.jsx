@@ -391,7 +391,7 @@ const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone, onRetr
                     ${isMe ? 'right-full mr-2' : 'left-full ml-2'}
                     z-10
                 `}>
-                    {(isMe || (isAi && !msg.isStreaming && !msg.isSkeleton)) && ( // [FIX] Hide menu if streaming OR skeleton loading
+                    {(!msg.isStreaming && !msg.isSkeleton) && (
                         <button
                             type="button"
                             className={`
