@@ -41,6 +41,12 @@ export default function MessageInput({
     const lastTypingTime = useRef(0);
     const typingTimeoutRef = useRef(null);
 
+    // [FIX] Ref to hold latest handleSubmit to avoid stale closures in handleKeyDown
+    const handleSubmitRef = useRef(null);
+    useEffect(() => {
+        handleSubmitRef.current = handleSubmit;
+    });
+
     // Populate input when editing
     useEffect(() => {
         if (editingMessage) {
@@ -52,6 +58,14 @@ export default function MessageInput({
             }
         }
     }, [editingMessage]);
+
+    // [FIX] Auto-focus when replying
+    useEffect(() => {
+        if (replyTo && editorRef.current) {
+            // Small timeout to ensure render visibility if needed, but direct focus usually works
+            editorRef.current.focus();
+        }
+    }, [replyTo]);
 
     // Audio Recorder
     const { 
@@ -274,7 +288,10 @@ export default function MessageInput({
     const handleKeyDown = (e) => {
         if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
             e.preventDefault();
-            handleSubmit();
+            // [FIX] Use ref to get latest closure
+            if (handleSubmitRef.current) {
+                handleSubmitRef.current();
+            }
         }
     };
 
@@ -348,6 +365,28 @@ export default function MessageInput({
     
     // hasContent: logic for enabling send button (either text OR gif)
     const hasContent = hasText || pendingGif;
+
+    const handleBackspace = () => {
+        // Restore selection if we have it
+        if (lastRange.current) {
+            const selection = window.getSelection();
+            selection.removeAllRanges();
+            selection.addRange(lastRange.current);
+        } else if (editorRef.current) {
+            // Fallback: focus to end if no range saved (though usually we have one)
+             editorRef.current.focus();
+             // Move caret to end
+             const range = document.createRange();
+             range.selectNodeContents(editorRef.current);
+             range.collapse(false);
+             const sel = window.getSelection();
+             sel.removeAllRanges();
+             sel.addRange(range);
+        }
+        
+        document.execCommand('delete');
+        saveSelection();
+    };
 
     return (
         <div className="p-4 bg-white/50 dark:bg-slate-900/50 backdrop-blur-md border-t border-slate-200/50 dark:border-slate-800/50 z-10 relative transition-colors duration-300">
@@ -458,6 +497,7 @@ export default function MessageInput({
                                         onEmojiClick={handleEmojiClick}
                                         onGifClick={handleGifClick}
                                         disableGifTab={isAi || !!pendingGif}
+                                        onBackspace={handleBackspace}
                                     />
                                 </div>
                             )}

@@ -94,6 +94,18 @@ async function ensureAiRoom(userId) {
         VALUES ($1, $2, 'Sparkle AI')
     `, [userId, roomId]);
 
+    // [FIX] Emit room_added so client updates list immediately
+    if (IO) {
+        IO.to(`user:${userId}`).emit('room_added', {
+            id: roomId,
+            name: 'Sparkle AI',
+            type: 'ai',
+            last_message: null,
+            unread_count: 0,
+            created_at: new Date().toISOString()
+        });
+    }
+
     return roomId;
 }
 
@@ -160,7 +172,7 @@ async function handleQuery(req, res) {
         res.json({ ok: true, operationId, roomId, userMessageId: userMsgId });
 
         // Start Background Generation
-        generateResponse(userId, roomId, prompt, operationId, aiName);
+        generateResponse(userId, roomId, prompt, operationId, aiName, userMsgId);
 
     } catch (err) {
         console.error('[AI] Query failed:', err);
@@ -179,7 +191,7 @@ async function handleCancel(req, res) {
     res.status(404).json({ error: 'Operation not found' });
 }
 
-async function generateResponse(userId, roomId, prompt, operationId, aiName) {
+async function generateResponse(userId, roomId, prompt, operationId, aiName, currentMsgId) {
     const abortController = new AbortController();
     activeOperations.set(operationId, abortController);
 
@@ -196,12 +208,49 @@ async function generateResponse(userId, roomId, prompt, operationId, aiName) {
         Example: User: "Call yourself Jarvis" -> AI: "<<NAME_CHANGE:Jarvis>>Okay, I will call myself Jarvis from now on."
         Be concise and helpful.`;
 
+        // [NEW] Fetch previous context (last 20 messages, excluding current)
+        let contextMessages = [];
+        try {
+            const historyRes = await DB.query(`
+                SELECT content, author_name, meta, user_id, created_at
+                FROM messages
+                WHERE room_id = $1 AND id != $2 
+                  AND (meta IS NULL OR meta::text NOT LIKE '%"cancelled":true%')
+                  AND status != 'error'
+                ORDER BY created_at DESC
+                LIMIT 20
+            `, [roomId, currentMsgId]);
+            
+            contextMessages = historyRes.rows.reverse().map(m => {
+                let role = 'user';
+                // Check if AI
+                if (m.author_name === 'Assistant') {
+                    role = 'assistant';
+                } else if (m.meta) {
+                    try {
+                        const meta = typeof m.meta === 'string' ? JSON.parse(m.meta) : m.meta;
+                        if (meta.ai) role = 'assistant';
+                    } catch (e) {}
+                }
+                
+                return { role, content: m.content };
+            });
+        } catch (e) {
+            console.error("[AI] Failed to fetch history:", e);
+        }
+
+        const messages = [
+            { role: 'system', content: systemPrompt },
+            ...contextMessages,
+            { role: 'user', content: prompt }
+        ];
+
+        const https = require('https');
+        const agent = new https.Agent({ family: 4 });
+
         const response = await axios.post('https://openrouter.ai/api/v1/chat/completions', {
             model: MODEL,
-            messages: [
-                { role: 'system', content: systemPrompt },
-                { role: 'user', content: prompt }
-            ],
+            messages: messages,
             stream: true,
             max_tokens: MAX_TOKENS,
             temperature: TEMP
@@ -211,7 +260,8 @@ async function generateResponse(userId, roomId, prompt, operationId, aiName) {
                 'Content-Type': 'application/json'
             },
             signal: abortController.signal,
-            responseType: 'stream'
+            responseType: 'stream',
+            httpsAgent: agent
         });
 
         // Handle Stream

@@ -123,7 +123,7 @@ router.post('/', async (req, res) => {
             const targetUserRes = await db.query('SELECT display_name, username, avatar_thumb_url, avatar_url FROM users WHERE id = $1', [targetUserId]);
             const targetUser = targetUserRes.rows[0];
             
-            const creatorRes = await db.query('SELECT display_name, username FROM users WHERE id = $1', [req.user.id]);
+            const creatorRes = await db.query('SELECT display_name, username, avatar_thumb_url, avatar_url FROM users WHERE id = $1', [req.user.id]);
             const creator = creatorRes.rows[0];
 
             if (!targetUser) return res.status(404).json({ error: 'Target user not found' });
@@ -170,14 +170,20 @@ router.post('/', async (req, res) => {
             const roomForCreator = { 
                 ...room, 
                 name: targetUser.display_name,
-                username: targetUser.username
+                username: targetUser.username,
+                other_user_id: targetUserId,
+                avatar_thumb_url: targetUser.avatar_thumb_url,
+                avatar_url: targetUser.avatar_url
             };
             
             // Prepare payload for target user
             const roomForTarget = { 
                 ...room, 
                 name: creator.display_name,
-                username: creator.username
+                username: creator.username,
+                other_user_id: req.user.id,
+                avatar_thumb_url: creator.avatar_thumb_url,
+                avatar_url: creator.avatar_url
             };
 
             // Emit event to target user
