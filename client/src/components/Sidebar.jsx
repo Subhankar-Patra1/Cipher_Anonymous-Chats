@@ -6,17 +6,45 @@ import ProfileShareModal from './ProfileShareModal';
 import ProfilePanel from './ProfilePanel';
 import { linkifyText } from '../utils/linkify';
 import SparkleLogo from './icons/SparkleLogo';
+import { renderTextWithEmojis } from '../utils/emojiRenderer';
+import SidebarContextMenu from './SidebarContextMenu';
 
 
-export default function Sidebar({ rooms, activeRoom, onSelectRoom, loadingRoomId, onCreateRoom, onJoinRoom, user, onLogout }) {
+export default function Sidebar({ rooms, activeRoom, onSelectRoom, loadingRoomId, onCreateRoom, onJoinRoom, user, onLogout, onRefresh }) {
     const { presenceMap, fetchStatuses } = usePresence();
     const { theme, toggleTheme } = useTheme();
     const [tab, setTab] = useState('group'); // 'group' or 'direct'
+    const [searchQuery, setSearchQuery] = useState('');
+    const [archivedSearchQuery, setArchivedSearchQuery] = useState('');
     const [showShareProfile, setShowShareProfile] = useState(false);
     const [showMyProfile, setShowMyProfile] = useState(false);
-    const myProfileRef = useRef(null);
 
-    const filteredRooms = rooms.filter(r => r.type === tab);
+    const myProfileRef = useRef(null);
+    
+    // [NEW] Archived State
+    const [viewArchived, setViewArchived] = useState(false);
+    const [contextMenu, setContextMenu] = useState({ visible: false, x: 0, y: 0, room: null });
+
+    const filteredRooms = rooms.filter(r => {
+        if (viewArchived) {
+             if (!r.is_archived || r.type === 'ai') return false;
+             if (!archivedSearchQuery.trim()) return true;
+             return r.name.toLowerCase().includes(archivedSearchQuery.toLowerCase());
+        }
+        if (r.is_archived) return false; // Hide archived from main list
+
+        if (r.type !== tab) return false;
+        if (tab === 'ai') return true;
+        if (!searchQuery.trim()) return true;
+        return r.name.toLowerCase().includes(searchQuery.toLowerCase());
+    });
+    
+    // Reset viewArchived when tab changes
+    useEffect(() => {
+        setViewArchived(false);
+        setSearchQuery('');
+        setArchivedSearchQuery('');
+    }, [tab]);
     
     // Fetch status for direct chat users
     useEffect(() => {
@@ -54,23 +82,23 @@ export default function Sidebar({ rooms, activeRoom, onSelectRoom, loadingRoomId
         <div className="w-full h-full bg-white/50 dark:bg-slate-900/50 backdrop-blur-xl border-r border-slate-200 dark:border-slate-800 flex flex-col shadow-2xl transition-colors">
             {/* Header */}
             <div className="p-6 border-b border-slate-200/50 dark:border-slate-800/50 flex justify-between items-center bg-white/30 dark:bg-slate-900/30">
-                <div className="flex items-center gap-3">
+                <div className="flex items-center gap-3 flex-1 min-w-0 mr-2">
                     <div 
-                        className="flex items-center gap-3 cursor-pointer"
+                        className="flex items-center gap-3 cursor-pointer min-w-0"
                         ref={myProfileRef}
                         onClick={() => setShowMyProfile(!showMyProfile)}
                     >
-                        <div className={`w-10 h-10 rounded-full flex items-center justify-center text-white font-bold text-lg shadow-lg shadow-violet-500/20 overflow-hidden ${!user.avatar_thumb_url ? 'bg-gradient-to-br from-violet-500 to-indigo-600' : 'bg-slate-200 dark:bg-slate-800'}`}>
+                        <div className={`w-10 h-10 rounded-full flex items-center justify-center text-white font-bold text-lg shadow-lg shadow-violet-500/20 overflow-hidden shrink-0 ${!user.avatar_thumb_url ? 'bg-gradient-to-br from-violet-500 to-indigo-600' : 'bg-slate-200 dark:bg-slate-800'}`}>
                             {user.avatar_thumb_url ? (
                                 <img src={user.avatar_thumb_url} alt="Me" className="w-full h-full object-cover" />
                             ) : (
                                 user.display_name[0].toUpperCase()
                             )}
                         </div>
-                        <div>
-                            <h2 className="font-bold text-slate-800 dark:text-slate-100 truncate max-w-[100px] transition-colors">{user.display_name}</h2>
+                        <div className="min-w-0 flex-1">
+                            <h2 className="font-bold text-slate-800 dark:text-slate-100 truncate transition-colors flex items-center gap-1">{renderTextWithEmojis(user.display_name)}</h2>
                             <div className="flex items-center gap-1">
-                                <p className="text-xs text-slate-500 dark:text-slate-400 font-medium transition-colors">
+                                <p className="text-xs text-slate-500 dark:text-slate-400 font-medium transition-colors truncate">
                                     {user.username.startsWith('@') ? user.username : `@${user.username}`}
                                 </p>
                             </div>
@@ -144,7 +172,91 @@ export default function Sidebar({ rooms, activeRoom, onSelectRoom, loadingRoomId
                         </div>
                     </button>
                 </div>
-            </div>
+                </div>
+
+            
+
+            
+            {/* Search Bar - Only for Direct and Groups (Main View) */}
+            {tab !== 'ai' && !viewArchived && (
+                <div className="px-4 pb-2">
+                    <div className="relative">
+                        <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-lg">
+                            search
+                        </span>
+                        <input
+                            type="text"
+                            value={searchQuery}
+                            onChange={(e) => setSearchQuery(e.target.value)}
+                            placeholder={tab === 'group' ? "Search groups..." : "Search people..."}
+                            className="w-full bg-slate-100 dark:bg-slate-950/50 border border-slate-300 dark:border-slate-700 rounded-xl py-2 pl-9 pr-4 text-sm text-slate-700 dark:text-slate-200 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-violet-500/50 transition-all"
+                        />
+                        {searchQuery && (
+                            <button 
+                                onClick={() => setSearchQuery('')}
+                                className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
+                            >
+                                <span className="material-symbols-outlined text-sm">close</span>
+                            </button>
+                        )}
+                    </div>
+                </div>
+            )}
+
+            {/* Archived Toggle Row - Moved Below Search */}
+            {!viewArchived && rooms.some(r => r.is_archived) && tab !== 'ai' && !searchQuery && (
+                <div className="px-4 pb-1">
+                    <button 
+                        onClick={() => setViewArchived(true)}
+                        className="w-full flex items-center justify-between p-2 text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800/50 rounded-lg transition-colors text-sm font-medium"
+                    >
+                        <div className="flex items-center gap-2">
+                             <span className="material-symbols-outlined text-[18px]">inventory_2</span>
+                             <span>Archived</span>
+                        </div>
+                        <span className="text-xs bg-slate-200 dark:bg-slate-800 px-1.5 py-0.5 rounded-full">
+                            {rooms.filter(r => r.is_archived).length}
+                        </span>
+                    </button>
+                </div>
+            )}
+
+            {/* Back from Archived Header + Search */}
+            {viewArchived && (
+                 <div className="flex flex-col border-b border-slate-100 dark:border-slate-800/50">
+                     <div className="px-4 py-2 flex items-center gap-2">
+                         <button 
+                            onClick={() => setViewArchived(false)}
+                            className="p-1 rounded-full transition-colors text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white"
+                         >
+                             <span className="material-symbols-outlined text-sm">arrow_back</span>
+                         </button>
+                         <span className="text-sm font-bold text-slate-700 dark:text-slate-200">Archived Chats</span>
+                     </div>
+                     <div className="px-4 pb-2">
+                        <div className="relative">
+                            <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-lg">
+                                search
+                            </span>
+                            <input
+                                type="text"
+                                value={archivedSearchQuery}
+                                onChange={(e) => setArchivedSearchQuery(e.target.value)}
+                                placeholder="Search archived..."
+                                className="w-full bg-slate-100 dark:bg-slate-950/50 border border-slate-300 dark:border-slate-700 rounded-xl py-2 pl-9 pr-4 text-sm text-slate-700 dark:text-slate-200 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-violet-500/50 transition-all"
+                            />
+                            {archivedSearchQuery && (
+                                <button 
+                                    onClick={() => setArchivedSearchQuery('')}
+                                    className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
+                                >
+                                    <span className="material-symbols-outlined text-sm">close</span>
+                                </button>
+                            )}
+                        </div>
+                    </div>
+                 </div>
+            )}
 
             {/* Room List */}
             <div className="flex-1 overflow-y-auto p-3 space-y-1 custom-scrollbar">
@@ -171,6 +283,15 @@ export default function Sidebar({ rooms, activeRoom, onSelectRoom, loadingRoomId
                             ? 'bg-violet-100 dark:bg-violet-600/10 text-violet-700 dark:text-violet-300 border border-violet-200 dark:border-violet-500/20 shadow-sm' 
                             : 'text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800/50 hover:text-slate-900 dark:hover:text-slate-200 border border-transparent'
                         }`}
+                        onContextMenu={(e) => {
+                            e.preventDefault();
+                            setContextMenu({
+                                visible: true,
+                                x: e.clientX,
+                                y: e.clientY,
+                                room: room
+                            });
+                        }}
                     >
                         <div className={`w-10 h-10 flex items-center justify-center ${room.type === 'direct' || room.type === 'ai' ? 'rounded-full' : 'rounded-lg p-2'} ${activeRoom?.id === room.id ? 'bg-violet-200 dark:bg-violet-500/20' : 'bg-slate-200 dark:bg-slate-800 group-hover:bg-slate-300 dark:group-hover:bg-slate-700'} transition-colors relative`}>
                             {room.avatar_thumb_url ? (
@@ -213,7 +334,37 @@ export default function Sidebar({ rooms, activeRoom, onSelectRoom, loadingRoomId
                         </div>
                     </button>
                 ))}
+
             </div>
+
+            {/* Context Menu */}
+            {contextMenu.visible && (
+                <SidebarContextMenu
+                    x={contextMenu.x}
+                    y={contextMenu.y}
+                    onClose={() => setContextMenu({ ...contextMenu, visible: false })}
+                    options={[
+                        {
+                            label: contextMenu.room.is_archived ? 'Unarchive' : 'Archive',
+                            icon: contextMenu.room.is_archived ? 'unarchive' : 'inventory_2',
+                            onClick: async () => {
+                                try {
+                                    const action = contextMenu.room.is_archived ? 'unarchive' : 'archive';
+                                    const token = localStorage.getItem('token');
+                                    await fetch(`${import.meta.env.VITE_API_URL}/api/rooms/${contextMenu.room.id}/${action}`, {
+                                        method: 'POST',
+                                        headers: { Authorization: `Bearer ${token}` }
+                                    });
+                                    // Trigger refresh
+                                    if (onRefresh) onRefresh();
+                                } catch (e) {
+                                    console.error(e);
+                                }
+                            }
+                        }
+                    ]}
+                />
+            )}
 
             {/* Actions */}
             <div className="p-4 border-t border-slate-200/50 dark:border-slate-800/50 bg-white/30 dark:bg-slate-900/30 space-y-3 transition-colors duration-300">

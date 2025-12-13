@@ -10,6 +10,7 @@ import rehypeKatex from 'rehype-katex'; // [NEW]
 import 'highlight.js/styles/atom-one-dark.css';
 import 'katex/dist/katex.min.css'; // [NEW]
 import SparkleLogo from './icons/SparkleLogo';
+import { renderTextWithEmojis } from '../utils/emojiRenderer';
 
 const formatDuration = (ms) => {
     if (!ms) return '0:00';
@@ -206,7 +207,7 @@ const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone, onRetr
                         </div>
 
                         <span className={`text-xs font-medium transition-colors ${isAi ? 'text-transparent bg-clip-text bg-gradient-to-r from-fuchsia-500 to-purple-600 font-bold' : 'text-slate-500 dark:text-slate-400'}`}>
-                            {isAi ? (msg.display_name && msg.display_name !== 'Assistant' ? msg.display_name : 'Sparkle AI') : (msg.display_name || msg.username)}
+                            {renderTextWithEmojis(isAi ? (msg.display_name && msg.display_name !== 'Assistant' ? msg.display_name : 'Sparkle AI') : (msg.display_name || msg.username))}
                         </span>
                     </div>
                 )}
@@ -243,7 +244,7 @@ const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone, onRetr
                                 `}
                             >
                                 <div className={`text-xs font-bold mb-0.5 max-w-[200px] truncate ${isMe ? 'text-violet-200' : 'text-violet-600 dark:text-violet-300'}`}>
-                                    {msg.replyTo.sender}
+                                    {renderTextWithEmojis(msg.replyTo.sender)}
                                 </div>
                                 
                                 {msg.replyTo.type === 'audio' ? (

@@ -98,6 +98,7 @@ const createTables = async () => {
             -- Migration for room_members (Chat Visibility)
             ALTER TABLE room_members ADD COLUMN IF NOT EXISTS cleared_at TIMESTAMP DEFAULT NULL;
             ALTER TABLE room_members ADD COLUMN IF NOT EXISTS is_hidden BOOLEAN DEFAULT FALSE;
+            ALTER TABLE room_members ADD COLUMN IF NOT EXISTS is_archived BOOLEAN DEFAULT FALSE;
              
             -- Migration for messages (Editing)
             ALTER TABLE messages ADD COLUMN IF NOT EXISTS edited_at TIMESTAMP;

@@ -298,13 +298,31 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
         socket.on('typing:start', handleTypingStart);
         socket.on('typing:stop', handleTypingStop);
 
+
         socket.on('chat:cleared', ({ roomId }) => {
             if (String(roomId) === String(room.id)) {
                 setMessages([]); 
             }
         });
 
+        // [NEW] Update messages when a user changes their display name
+        const handleProfileUpdate = ({ userId, display_name }) => {
+            setMessages(prev => prev.map(msg => {
+                if (String(msg.user_id) === String(userId)) {
+                    return { ...msg, display_name };
+                }
+                return msg;
+            }));
 
+            setTypingUsers(prev => prev.map(u => {
+                if (String(u.userId) === String(userId)) {
+                    return { ...u, name: display_name };
+                }
+                return u;
+            }));
+        };
+
+        socket.on('user:profile:updated', handleProfileUpdate);
 
         return () => {
             socket.off('new_message', handleNewMessage);
@@ -313,7 +331,8 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
             socket.off('message_edited', handleMessageEdited);
             socket.off('typing:start', handleTypingStart);
             socket.off('typing:stop', handleTypingStop);
-
+            socket.off('chat:cleared'); // [FIX] forgot to cleanup this one? It was implicit but good to be explicit
+            socket.off('user:profile:updated', handleProfileUpdate);
             
             Object.values(typingTimeoutsRef.current).forEach(clearTimeout);
         };

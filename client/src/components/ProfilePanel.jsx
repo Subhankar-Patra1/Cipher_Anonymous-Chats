@@ -7,6 +7,7 @@ import AvatarEditorModal from './AvatarEditorModal';
 import PickerPanel from './PickerPanel';
 import ContentEditable from 'react-contenteditable';
 import { linkifyText } from '../utils/linkify';
+import { renderTextWithEmojis, renderTextWithEmojisToHtml } from '../utils/emojiRenderer';
 
 const timeAgo = (dateString) => {
     if (!dateString) return '';
@@ -22,7 +23,7 @@ const timeAgo = (dateString) => {
 };
 
 export default function ProfilePanel({ userId, onClose, roomId, onActionSuccess }) {
-    const { token, user: currentUser } = useAuth();
+    const { token, user: currentUser, updateUser } = useAuth();
     const { presenceMap, fetchStatuses } = usePresence();
     const [profile, setProfile] = useState(null);
     const [loading, setLoading] = useState(true);
@@ -37,7 +38,35 @@ export default function ProfilePanel({ userId, onClose, roomId, onActionSuccess 
     const [isEditingBio, setIsEditingBio] = useState(false);
     const [editedBio, setEditedBio] = useState('');
     const [bioLoading, setBioLoading] = useState(false);
+    
+    // Display Name State
+    const [isEditingName, setIsEditingName] = useState(false);
+    const [editedName, setEditedName] = useState(''); // HTML string now
+    const [nameLoading, setNameLoading] = useState(false);
+    const nameEditorRef = useRef(null);
+    const nameLastRange = useRef(null);
+
+    const saveNameSelection = () => {
+        const selection = window.getSelection();
+        if (selection.rangeCount > 0) {
+            const range = selection.getRangeAt(0);
+            if (nameEditorRef.current && nameEditorRef.current.contains(range.commonAncestorContainer)) {
+                nameLastRange.current = range.cloneRange();
+            }
+        }
+    };
+
     const [showEmoji, setShowEmoji] = useState(false);
+    const [emojiTarget, setEmojiTarget] = useState('bio'); // 'bio' or 'name'
+
+    useEffect(() => {
+        if (isEditingName && nameEditorRef.current) {
+            // Auto scroll to end
+            nameEditorRef.current.scrollLeft = nameEditorRef.current.scrollWidth;
+        }
+    }, [editedName, isEditingName]);
+
+
     
     // Refs for rich text editor
     const editorRef = useRef(null);
@@ -107,18 +136,28 @@ export default function ProfilePanel({ userId, onClose, roomId, onActionSuccess 
     };
 
     const getBioLength = (html) => {
-        // Replace images with a single character placeholder to count them as 1
-        // We use a specific placeholder that doesn't get messed up by HTML parsing, although any char works if we use textContent
         const withPlaceholders = html.replace(/<img[^>]*>/g, '❄'); 
         const tempDiv = document.createElement('div');
         tempDiv.innerHTML = withPlaceholders;
-        // Use textContent to get raw text length. 
-        // Note: Newlines in ContentEditable might be represented by divs or brs. 
-        // textContent might strip visual newlines from blocks if not careful, 
-        // but for a simple character count it is usually sufficient standard.
-        // For accurate newline counting 'innerText' is better but can be slower. 
-        // Given 140 chars, innerText is fine.
         return tempDiv.innerText.replace(/[\n\r]+/g, '').length; 
+    };
+
+    const getNameLength = (html) => {
+        const withPlaceholders = html.replace(/<img[^>]*>/g, '❄');
+        const tempDiv = document.createElement('div');
+        tempDiv.innerHTML = withPlaceholders;
+        return tempDiv.innerText.replace(/[\n\r]+/g, '').length;
+    };
+    
+    const htmlToRawText = (html) => {
+        const tempDiv = document.createElement('div');
+        tempDiv.innerHTML = html;
+        const imgs = tempDiv.querySelectorAll('img');
+        imgs.forEach(img => {
+            const alt = img.getAttribute('alt');
+            if (alt) img.replaceWith(alt);
+        });
+        return tempDiv.innerText.replace(/[\n\r]+/g, '');
     };
 
     const handleSaveBio = async () => {
@@ -159,23 +198,77 @@ export default function ProfilePanel({ userId, onClose, roomId, onActionSuccess 
     };
 
 
-    const handleEmojiClick = (emojiData) => {
-        if (getBioLength(editedBio) >= 140) return;
+    const handleSaveName = async () => {
+        const rawName = htmlToRawText(editedName).trim();
+        if (!rawName) return;
+        if (rawName.length > 64) return;
 
+        setNameLoading(true);
+        try {
+            const res = await fetch(`${import.meta.env.VITE_API_URL}/api/users/me/display-name`, {
+                method: 'PUT',
+                headers: { 
+                    'Content-Type': 'application/json',
+                    Authorization: `Bearer ${token}` 
+                },
+                body: JSON.stringify({ display_name: rawName })
+            });
+
+            if (res.ok) {
+                const data = await res.json();
+                setProfile(prev => ({ ...prev, display_name: data.display_name }));
+                setIsEditingName(false);
+                setShowEmoji(false);
+                if (onActionSuccess) onActionSuccess('name_update');
+            }
+        } catch (err) {
+            console.error("Failed to update display name", err);
+        } finally {
+            setNameLoading(false);
+        }
+    };
+
+    const handleEmojiGeneric = (emojiData, target) => {
         const hex = emojiData.unified.split('-').filter(c => c !== 'fe0f').join('-');
         const imageUrl = `https://cdn.jsdelivr.net/npm/emoji-datasource-apple/img/apple/64/${hex}.png`;
-        const imageTag = `<img src="${imageUrl}" alt="${emojiData.emoji}" class="w-5 h-5 inline-block align-text-bottom mx-0.5 select-none pointer-events-none" draggable="false" />`;
-        
-        if (lastRange.current) {
-            const selection = window.getSelection();
-            selection.removeAllRanges();
-            selection.addRange(lastRange.current);
-        } else if (editorRef.current) {
-            editorRef.current.focus();
-        }
+        const emojiChar = emojiData.emoji;
 
-        document.execCommand('insertHTML', false, imageTag);
-        saveSelection();
+        if (target === 'bio') {
+             if (getBioLength(editedBio) >= 140) return;
+             const imageTag = `<img src="${imageUrl}" alt="${emojiChar}" class="w-5 h-5 inline-block align-text-bottom mx-0.5 select-none pointer-events-none" draggable="false" />`;
+             
+             if (lastRange.current) {
+                const selection = window.getSelection();
+                selection.removeAllRanges();
+                selection.addRange(lastRange.current);
+            } else if (editorRef.current) {
+                editorRef.current.focus();
+            }
+            document.execCommand('insertHTML', false, imageTag);
+            saveSelection();
+        } else if (target === 'name') {
+            const emojiChar = emojiData.emoji;
+            if (getNameLength(editedName) + emojiChar.length > 64) return;
+            
+            const imageTag = `<img src="${imageUrl}" alt="${emojiChar}" class="w-5 h-5 inline-block align-text-bottom mx-0.5 select-none pointer-events-none" draggable="false" />`;
+
+            if (nameLastRange.current) {
+                 const selection = window.getSelection();
+                 selection.removeAllRanges();
+                 selection.addRange(nameLastRange.current);
+             } else if (nameEditorRef.current) {
+                 nameEditorRef.current.focus();
+             }
+             document.execCommand('insertHTML', false, imageTag);
+             if (nameEditorRef.current) {
+                setEditedName(nameEditorRef.current.innerHTML);
+             }
+             saveNameSelection();
+        }
+    };
+
+    const handleEmojiClick = (emojiData) => {
+        handleEmojiGeneric(emojiData, emojiTarget);
     };
 
     const isMe = currentUser && String(currentUser.id) === String(userId);
@@ -320,7 +413,142 @@ export default function ProfilePanel({ userId, onClose, roomId, onActionSuccess 
                             )}
                         </div>
 
-                        <h2 className="text-xl font-bold text-slate-800 dark:text-white mb-1 text-center transition-colors">{profile.display_name}</h2>
+                        {isEditingName ? (
+                            <div className="relative mb-2 w-full">
+                                <div className="flex items-center gap-2">
+                                    <div className="relative flex-1 min-w-0">
+                                        <div className="w-full bg-slate-50 dark:bg-slate-800 border-2 border-slate-200 dark:border-slate-700/50 rounded-xl py-2 pl-4 pr-12 focus-within:border-violet-500/50 focus-within:ring-4 focus-within:ring-violet-500/10 transition-all shadow-sm flex items-center min-w-0">
+                                            <ContentEditable
+                                                innerRef={nameEditorRef}
+                                                html={editedName}
+                                                disabled={nameLoading}
+                                                onChange={(evt) => {
+                                                    let val = evt.target.value;
+                                                    const currentLen = getNameLength(val);
+                                                    
+                                                    // Strict truncation if length exceeds limit
+                                                    if (currentLen > 31) {
+                                                        // Forcefully slice the text content to valid length
+                                                        // This is complex with HTML (emojis), so we resort to a simpler UX:
+                                                        // Revert to previous valid state if possible, or just slice text.
+                                                        // For now, let's just stick to the previous valid "editedName"
+                                                        // But React state updates might be too slow for high-speed typing/paste.
+                                                        
+                                                        // Better approach for stability:
+                                                        // 1. Get raw text
+                                                        // 2. Slice to 32
+                                                        // 3. Re-render (this might lose cursor position but enforces limit)
+                                                        // OR just rely on onKeyDown being tighter.
+                                                        
+                                                        // Let's try to just NOT update state, but ALSO force innerHTML reset
+                                                        if (nameEditorRef.current) {
+                                                            const validHtml = editedName; // Revert to last valid
+                                                            if (nameEditorRef.current.innerHTML !== validHtml) {
+                                                                nameEditorRef.current.innerHTML = validHtml;
+                                                            }
+                                                            // Move cursor to end to avoid getting stuck in middle (simple fix)
+                                                            placeCaretAtEnd(nameEditorRef.current); 
+                                                        }
+                                                        return;
+                                                    }
+                                                    setEditedName(val);
+                                                    saveNameSelection();
+                                                }}
+                                                onKeyDown={(e) => {
+                                                    if (e.key === 'Enter') {
+                                                        e.preventDefault();
+                                                        handleSaveName();
+                                                        return;
+                                                    }
+                                                    // Allow navigation keys, backspace, delete
+                                                    const allowedKeys = ['Backspace', 'Delete', 'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End'];
+                                                    
+                                                    // Check current content length directly from DOM to avoid stale state issues
+                                                    const currentContent = nameEditorRef.current ? nameEditorRef.current.innerHTML : editedName;
+                                                    const len = htmlToRawText(currentContent).length;
+
+                                                    if (!allowedKeys.includes(e.key) && !e.ctrlKey && !e.metaKey && len >= 31) {
+                                                        e.preventDefault();
+                                                    }
+                                                    saveNameSelection();
+                                                }}
+                                                onKeyUp={saveNameSelection}
+                                                onMouseUp={saveNameSelection}
+                                                className="w-full text-slate-800 dark:text-white font-bold text-left outline-none whitespace-nowrap overflow-x-auto overflow-y-hidden h-[24px]"
+                                                style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' }}
+                                                tagName="div"
+                                            />
+                                         </div>
+
+                                        <button 
+                                            onClick={() => {
+                                                setEmojiTarget('name');
+                                                setShowEmoji(!showEmoji);
+                                            }}
+                                            className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-violet-500 hover:bg-violet-50 dark:hover:bg-violet-900/30 w-8 h-8 rounded-full transition-all flex items-center justify-center z-10"
+                                        >
+                                            <span className="material-symbols-outlined text-[20px]">sentiment_satisfied</span>
+                                        </button>
+                                         {showEmoji && emojiTarget === 'name' && (
+                                            <div className="absolute top-full right-[-24px] mt-3 z-[100] shadow-2xl shadow-violet-500/10 rounded-2xl w-[320px] h-[400px] overflow-hidden border-2 border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-left font-normal animate-in fade-in slide-in-from-top-2 duration-200">
+                                                <PickerPanel 
+                                                    onEmojiClick={(emojiData, event) => {
+                                                         handleEmojiGeneric(emojiData, 'name');
+                                                         // Refocus is handled by handleEmojiGeneric using range restore
+                                                    }}
+                                                    disableGifTab={true}
+                                                    onClose={() => setShowEmoji(false)}
+                                                />
+                                            </div>
+                                        )}
+                                    </div>
+                                </div>
+                                <div className="flex items-center justify-between mt-1 px-1">
+                                    <span className={`text-[10px] font-medium ${getNameLength(editedName) >= 31 ? 'text-red-500' : 'text-slate-400'}`}>
+                                        {getNameLength(editedName)}/31
+                                    </span>
+                                    <div className="flex gap-2">
+                                        <button 
+                                            onClick={() => {
+                                                setIsEditingName(false);
+                                                setShowEmoji(false);
+                                            }}
+                                            className="p-1 text-slate-400 hover:text-red-500 transition-colors"
+                                            disabled={nameLoading}
+                                        >
+                                            <span className="material-symbols-outlined text-[20px]">close</span>
+                                        </button>
+                                        <button 
+                                            onClick={handleSaveName}
+                                            className="p-1 text-slate-400 hover:text-emerald-500 transition-colors"
+                                            disabled={nameLoading || !getNameLength(editedName)}
+                                        >
+                                            <span className="material-symbols-outlined text-[20px]">check</span>
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        ) : (
+                            <div className="flex justify-center mb-1 group/name">
+                                <div className="relative">
+                                    <h2 className="text-xl font-bold text-slate-800 dark:text-white text-center transition-colors flex items-center justify-center gap-1">
+                                        {renderTextWithEmojis(profile.display_name)}
+                                    </h2>
+                                    {isMe && (
+                                        <button 
+                                            onClick={() => {
+                                                setEditedName(renderTextWithEmojisToHtml(profile.display_name));
+                                                setIsEditingName(true);
+                                                setShowEmoji(false);
+                                            }}
+                                            className="absolute left-full top-1/2 -translate-y-1/2 ml-2 opacity-0 group-hover/name:opacity-100 text-slate-400 hover:text-violet-500 transition-all"
+                                        >
+                                            <span className="material-symbols-outlined text-[16px]">edit</span>
+                                        </button>
+                                    )}
+                                </div>
+                            </div>
+                        )}
                         <p className="text-slate-500 text-sm mb-2">{profile.username}</p>
                         
                         {!isMe && (
@@ -443,17 +671,21 @@ export default function ProfilePanel({ userId, onClose, roomId, onActionSuccess 
                                 <div className="flex justify-between items-center">
                                     <div className="relative">
                                         <button 
-                                            onClick={() => setShowEmoji(!showEmoji)}
-                                            className={`p-2 transition-colors flex items-center justify-center rounded-lg ${showEmoji ? 'text-violet-500 bg-violet-50 dark:bg-slate-800 dark:text-white' : 'text-slate-400 hover:text-slate-600 dark:hover:text-white'}`}
+                                            onClick={() => {
+                                                setEmojiTarget('bio');
+                                                setShowEmoji(!showEmoji);
+                                            }}
+                                            className={`p-2 transition-colors flex items-center justify-center rounded-lg ${showEmoji && emojiTarget === 'bio' ? 'text-violet-500 bg-violet-50 dark:bg-slate-800 dark:text-white' : 'text-slate-400 hover:text-slate-600 dark:hover:text-white'}`}
                                             title="Insert Emoji"
                                         >
                                             <span className="material-symbols-outlined text-[20px]">sentiment_satisfied</span>
                                         </button>
-                                         {showEmoji && (
-                                            <div className="absolute top-full left-0 mt-2 z-50 shadow-2xl rounded-lg w-[320px] h-[400px] overflow-hidden border border-slate-200 dark:border-slate-700">
+                                         {showEmoji && emojiTarget === 'bio' && (
+                                            <div className="absolute top-full left-0 mt-2 z-50 shadow-2xl rounded-lg w-[320px] h-[400px] overflow-hidden border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900">
                                                 <PickerPanel 
                                                     onEmojiClick={handleEmojiClick}
                                                     disableGifTab={true}
+                                                    onClose={() => setShowEmoji(false)}
                                                 />
                                             </div>
                                         )}
@@ -611,7 +843,14 @@ export default function ProfilePanel({ userId, onClose, roomId, onActionSuccess 
                 </div>
             )}
 
-             <AvatarEditorModal isOpen={isEditModalOpen} onClose={() => setIsEditModalOpen(false)} />
+             <AvatarEditorModal 
+                isOpen={isEditModalOpen} 
+                onClose={() => setIsEditModalOpen(false)}
+                onSuccess={(data) => {
+                    setProfile(prev => ({ ...prev, ...data }));
+                    updateUser(data);
+                }}
+            />
             
             {/* Image Viewer */}
             {viewingImage && (

@@ -3,7 +3,7 @@ import EmojiPicker, { EmojiStyle } from 'emoji-picker-react';
 import GifPicker from './GifPicker';
 import { useTheme } from '../context/ThemeContext';
 
-export default function PickerPanel({ onEmojiClick, onGifClick, disableGifTab = false, onBackspace }) {
+export default function PickerPanel({ onEmojiClick, onGifClick, disableGifTab = false, onBackspace, onClose }) {
     const [activeTab, setActiveTab] = useState('emoji'); // 'emoji' | 'gif'
     const { theme } = useTheme();
 
@@ -43,20 +43,34 @@ export default function PickerPanel({ onEmojiClick, onGifClick, disableGifTab = 
                     )}
                 </div>
 
-                {/* Backspace Button - Only visible in Emoji tab */}
-                {activeTab === 'emoji' && onBackspace && (
-                    <button
-                        type="button"
-                        onMouseDown={(e) => {
-                            e.preventDefault(); // Prevent focus loss
-                            onBackspace();
-                        }}
-                        className="p-2 flex items-center justify-center text-slate-500 dark:text-slate-400 hover:text-red-500 dark:hover:text-red-400 transition-colors"
-                        title="Backspace"
-                    >
-                        <span className="material-symbols-outlined text-[20px]">backspace</span>
-                    </button>
-                )}
+                <div className="flex items-center gap-1">
+                    {/* Backspace Button - Only visible in Emoji tab */}
+                    {activeTab === 'emoji' && onBackspace && (
+                        <button
+                            type="button"
+                            onMouseDown={(e) => {
+                                e.preventDefault(); // Prevent focus loss
+                                onBackspace();
+                            }}
+                            className="p-2 flex items-center justify-center text-slate-500 dark:text-slate-400 hover:text-red-500 dark:hover:text-red-400 transition-colors"
+                            title="Backspace"
+                        >
+                            <span className="material-symbols-outlined text-[20px]">backspace</span>
+                        </button>
+                    )}
+                    
+                    {/* Close Button */}
+                    {onClose && (
+                        <button
+                            type="button"
+                            onClick={onClose}
+                            className="p-2 flex items-center justify-center text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-white transition-colors"
+                            title="Close"
+                        >
+                            <span className="material-symbols-outlined text-[20px]">close</span>
+                        </button>
+                    )}
+                </div>
             </div>
 
             {/* Content */}

@@ -372,7 +372,7 @@ router.post('/:id/members', async (req, res) => {
 router.get('/', async (req, res) => {
     try {
         const roomsRes = await db.query(`
-            SELECT r.*, rm.role, rm.last_read_at,
+            SELECT r.*, rm.role, rm.last_read_at, rm.is_archived,
             (SELECT u.display_name FROM room_members rm2 JOIN users u ON rm2.user_id = u.id WHERE rm2.room_id = r.id AND rm2.user_id != $1 LIMIT 1) as other_user_name,
             (SELECT u.username FROM room_members rm2 JOIN users u ON rm2.user_id = u.id WHERE rm2.room_id = r.id AND rm2.user_id != $1 LIMIT 1) as other_user_username,
             (SELECT u.avatar_thumb_url FROM room_members rm2 JOIN users u ON rm2.user_id = u.id WHERE rm2.room_id = r.id AND rm2.user_id != $1 LIMIT 1) as other_user_avatar_thumb,
@@ -387,7 +387,7 @@ router.get('/', async (req, res) => {
             JOIN room_members rm ON r.id = rm.room_id 
             LEFT JOIN group_permissions gp ON r.id = gp.group_id
             WHERE rm.user_id = $1 AND (rm.is_hidden IS FALSE OR rm.is_hidden IS NULL)
-            ORDER BY r.created_at DESC
+            ORDER BY rm.is_archived ASC, r.created_at DESC
         `, [req.user.id]);
         
         const rooms = roomsRes.rows;
@@ -1071,6 +1071,28 @@ router.delete('/:id/avatar', async (req, res) => {
 
         res.json({ success: true });
 
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ error: 'Server error' });
+    }
+});
+
+// Archive Chat
+router.post('/:id/archive', async (req, res) => {
+    try {
+        await db.query('UPDATE room_members SET is_archived = TRUE WHERE room_id = $1 AND user_id = $2', [req.params.id, req.user.id]);
+        res.json({ success: true });
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ error: 'Server error' });
+    }
+});
+
+// Unarchive Chat
+router.post('/:id/unarchive', async (req, res) => {
+    try {
+        await db.query('UPDATE room_members SET is_archived = FALSE WHERE room_id = $1 AND user_id = $2', [req.params.id, req.user.id]);
+        res.json({ success: true });
     } catch (error) {
         console.error(error);
         res.status(500).json({ error: 'Server error' });

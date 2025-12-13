@@ -15,7 +15,7 @@ import notificationSound from '../assets/notification.ogg';
 import sentSound from '../assets/sent.ogg';
 
 export default function Dashboard() {
-    const { user, token, logout } = useAuth();
+    const { user, token, logout, updateUser } = useAuth();
     const [rooms, setRooms] = useState([]);
     const [activeRoom, setActiveRoom] = useState(null);
     const [loadingRoomId, setLoadingRoomId] = useState(null); // [NEW] Loading state for chat switching
@@ -58,19 +58,27 @@ export default function Dashboard() {
         setShowGroupInfo(false); // Close group info modal when changing rooms
     }, [activeRoom]);
 
+    const fetchRooms = useCallback(async () => {
+        if (!token) return;
+        try {
+            const res = await fetch(`${import.meta.env.VITE_API_URL}/api/rooms`, {
+                headers: { Authorization: `Bearer ${token}` }
+            });
+            if (res.ok) {
+                const data = await res.json();
+                if (Array.isArray(data)) {
+                    setRooms(data);
+                }
+            }
+        } catch (err) {
+            console.error(err);
+        }
+    }, [token]);
+
     // Fetch rooms on mount
     useEffect(() => {
-        fetch(`${import.meta.env.VITE_API_URL}/api/rooms`, {
-            headers: { Authorization: `Bearer ${token}` }
-        })
-        .then(res => res.json())
-        .then(data => {
-            if (Array.isArray(data)) {
-                setRooms(data);
-            }
-        })
-        .catch(err => console.error(err));
-    }, [token]);
+        fetchRooms();
+    }, [fetchRooms]);
 
     useEffect(() => {
         const newSocket = io(import.meta.env.VITE_API_URL, {
@@ -196,20 +204,7 @@ export default function Dashboard() {
         // [NEW] Force refresh rooms list (fallback for syncing)
         newSocket.on('rooms:refresh', () => {
             console.log('[DEBUG] Received rooms:refresh request');
-            const fetchData = async () => {
-                try {
-                    const res = await fetch(`${import.meta.env.VITE_API_URL}/api/rooms`, {
-                        headers: { Authorization: `Bearer ${token}` }
-                    });
-                    if (res.ok) {
-                        const data = await res.json();
-                        setRooms(data);
-                    }
-                } catch (err) {
-                    console.error(err);
-                }
-            };
-            fetchData();
+            fetchRooms();
         });
 
         // [NEW] Group Avatar/Bio Updates
@@ -245,6 +240,40 @@ export default function Dashboard() {
             }
         });
 
+        // [NEW] User Profile Updates (Display Name)
+        newSocket.on('user:profile:updated', ({ userId, display_name }) => {
+            console.log('[DEBUG] User profile updated:', userId, display_name);
+            
+            if (String(userId) === String(user.id)) {
+                updateUser({ display_name });
+            }
+
+            // 1. Update Sidebar Rooms (for DMs)
+            setRooms(prev => prev.map(r => {
+                if (r.type === 'direct' && String(r.other_user_id) === String(userId)) {
+                    // Update the derived name for DMs
+                    return { 
+                        ...r, 
+                        name: display_name,
+                        other_user_name: display_name 
+                    };
+                }
+                return r;
+            }));
+
+            // 2. Update Active Room if it is a DM with this user
+            setActiveRoom(prev => {
+                if (prev && prev.type === 'direct' && String(prev.other_user_id) === String(userId)) {
+                    return { 
+                        ...prev, 
+                        name: display_name,
+                        other_user_name: display_name 
+                    };
+                }
+                return prev;
+            });
+        });
+
         setSocket(newSocket);
 
         return () => newSocket.close();
@@ -264,61 +293,49 @@ export default function Dashboard() {
         if (!token) return;
 
         console.log('Dashboard mounted/token changed. Fetching data...');
-
-        const fetchData = async () => {
-            try {
-                // Fetch Rooms
-                console.log('Fetching rooms...');
-                const res = await fetch(`${import.meta.env.VITE_API_URL}/api/rooms`, {
-                    headers: { Authorization: `Bearer ${token}` }
-                });
-                
-                if (res.ok) {
-                    const data = await res.json();
-                    console.log('Rooms fetched:', data.length);
-                    setRooms(data);
-                } else {
-                    console.error('Failed to fetch rooms:', res.status);
-                }
-
-                // Handle Pending Invites (moved here to run sequentially)
-                await handlePendingInvite();
-            } catch (err) {
-                console.error('Error in data fetch:', err);
-            }
-        };
+        fetchRooms();
 
         const handlePendingInvite = async () => {
-            const params = new URLSearchParams(window.location.search);
-            const joinCode = params.get('joinCode');
-            const chatUser = params.get('chatUser');
-
-            if (joinCode) {
-                window.history.replaceState({}, document.title, window.location.pathname);
-                await handleJoinRoom(joinCode);
-                return;
-            }
-
-            if (chatUser) {
-                window.history.replaceState({}, document.title, window.location.pathname);
-                try {
-                    const searchRes = await fetch(`${import.meta.env.VITE_API_URL}/api/auth/search?q=${chatUser}`, {
-                        headers: { Authorization: `Bearer ${token}` }
-                    });
-                    const users = await searchRes.json();
-                    const target = users.find(u => u.username === chatUser);
-                    if (target) {
-                        await handleCreateRoom({ type: 'direct', targetUserId: target.id });
-                    }
-                } catch (err) {
-                    console.error('Error resolving invite:', err);
-                }
-                return;
-            }
+             const params = new URLSearchParams(window.location.search);
+             const joinCode = params.get('joinCode');
+             const chatUser = params.get('chatUser');
+ 
+             if (joinCode) {
+                 window.history.replaceState({}, document.title, window.location.pathname);
+                 await handleJoinRoom(joinCode);
+                 return;
+             }
+ 
+             if (chatUser) {
+                 window.history.replaceState({}, document.title, window.location.pathname);
+                 try {
+                     const searchRes = await fetch(`${import.meta.env.VITE_API_URL}/api/auth/search?q=${chatUser}`, {
+                         headers: { Authorization: `Bearer ${token}` }
+                     });
+                     const users = await searchRes.json();
+                     const target = users.find(u => u.username === chatUser);
+                     if (target) {
+                         await handleCreateRoom({ type: 'direct', targetUserId: target.id });
+                     }
+                 } catch (err) {
+                     console.error('Error resolving invite:', err);
+                 }
+                 return;
+             }
         };
 
-        fetchData();
-    }, [token]);
+        (async () => {
+             const params = new URLSearchParams(window.location.search);
+             if (params.get('joinCode') || params.get('chatUser')) {
+                 await handlePendingInvite(); 
+             }
+        })();
+    }, [token, fetchRooms]); // fetchRooms in dep array? It depends on token so stable.
+
+    // Re-implement handlePendingInvite since we cut it in the diff?
+    // Wait, the original block lines 297-355 was large. 
+    // I need to be careful not to lose handlePendingInvite logic.
+    // Let me rewrite the whole block effectively.
 
     const markAsRead = async (roomId) => {
         try {
@@ -485,7 +502,7 @@ export default function Dashboard() {
                     onCreateRoom={() => setShowCreateModal(true)}
                     onJoinRoom={() => setShowJoinModal(true)}
                     user={user}
-
+                    onRefresh={fetchRooms}           // [NEW] Pass refresh handler
                     onLogout={() => setShowLogoutModal(true)}
                 />
             </div>

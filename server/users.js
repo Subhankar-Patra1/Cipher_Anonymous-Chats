@@ -243,6 +243,38 @@ router.put('/me/bio', async (req, res) => {
     }
 });
 
+// Update Display Name
+router.put('/me/display-name', async (req, res) => {
+    const { display_name } = req.body;
+    
+    if (!display_name || typeof display_name !== 'string') {
+        return res.status(400).json({ error: 'Display name required' });
+    }
+
+    if (display_name.length > 64) {
+        return res.status(400).json({ error: 'Display name cannot exceed 64 characters' });
+    }
+
+    try {
+        // Update DB
+        await db.query('UPDATE users SET display_name = $1 WHERE id = $2', [display_name, req.user.id]);
+
+        // Broadcast profile update
+        const io = req.app.get('io');
+        if (io) {
+            io.emit('user:profile:updated', { 
+                userId: req.user.id,
+                display_name
+            });
+        }
+
+        res.json({ success: true, display_name });
+    } catch (err) {
+        console.error("Update display name error:", err);
+        res.status(500).json({ error: "Failed to update display name" });
+    }
+});
+
 
 // 4. Get User Profile with Groups in Common
 router.get('/:id/profile', async (req, res) => {
