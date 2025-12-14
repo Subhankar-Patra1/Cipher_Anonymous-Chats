@@ -303,16 +303,16 @@ export default function MessageInput({
                 <div className="flex gap-3 max-w-4xl mx-auto items-center justify-between h-[56px] px-4 rounded-2xl bg-white dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700 shadow-sm dark:shadow-none transition-colors">
                     
                     {/* Left Side: Status / Delete */}
-                    <div className="flex items-center gap-3">
-                        <div className={`w-3 h-3 rounded-full ${isRecording ? 'bg-red-500 animate-pulse' : 'bg-slate-400'}`} />
-                        <span className="text-slate-700 dark:text-slate-200 font-mono min-w-[50px]">{formatDuration(duration)}</span>
+                    <div className="flex items-center gap-3 flex-1 min-w-0">
+                        <div className={`w-3 h-3 rounded-full shrink-0 ${isRecording ? 'bg-red-500 animate-pulse' : 'bg-slate-400'}`} />
+                        <span className="text-slate-700 dark:text-slate-200 font-mono min-w-[50px] shrink-0">{formatDuration(duration)}</span>
                         
                         {isRecording && (
-                           <div className="flex items-center gap-[2px] h-6 ml-2">
+                           <div className="flex items-center gap-[2px] h-6 ml-2 overflow-hidden mask-linear-fade">
                                {liveWaveform.map((v, i) => (
                                    <div 
                                        key={i}
-                                       className="w-[3px] bg-red-400 rounded-full transition-all duration-75"
+                                       className="w-[3px] bg-red-400 rounded-full transition-all duration-75 shrink-0"
                                        style={{ height: `${20 + v * 80}%`, opacity: 0.5 + v * 0.5 }}
                                    />
                                ))}

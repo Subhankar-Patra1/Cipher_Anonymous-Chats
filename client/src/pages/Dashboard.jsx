@@ -45,11 +45,17 @@ export default function Dashboard() {
     }, [isResizing]);
 
     useEffect(() => {
+        const handleWindowResize = () => {
+            // Force re-render on resize boundaries
+             setSidebarWidth(prev => prev); 
+        };
         window.addEventListener("mousemove", resize);
         window.addEventListener("mouseup", stopResizing);
+        window.addEventListener("resize", handleWindowResize); // [NEW] Listen to resize
         return () => {
             window.removeEventListener("mousemove", resize);
             window.removeEventListener("mouseup", stopResizing);
+            window.removeEventListener("resize", handleWindowResize);
         };
     }, [resize, stopResizing]);
 
@@ -587,10 +593,70 @@ export default function Dashboard() {
                         />
                     )
                 ) : (
-                    <div className="flex-1 flex items-center justify-center text-slate-500 dark:text-slate-400">
-                        <div className="text-center">
-                            <span className="material-symbols-outlined text-6xl text-slate-300 dark:text-slate-700 mb-4 transition-colors">chat_bubble_outline</span>
-                            <p>Select a room to start chatting</p>
+                    <div className="flex-1 flex flex-col items-center justify-center bg-gray-50/50 dark:bg-slate-950 relative overflow-hidden">
+                        {/* Background Ambient Effects */}
+                        <div className="absolute inset-0 pointer-events-none overflow-hidden">
+                            <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-violet-500/10 rounded-full blur-3xl animate-pulse-slow mix-blend-multiply dark:mix-blend-screen" />
+                            <div className="absolute bottom-1/4 right-1/4 w-96 h-96 bg-indigo-500/10 rounded-full blur-3xl animate-pulse-slow mix-blend-multiply dark:mix-blend-screen" style={{ animationDelay: '1s' }} />
+                        </div>
+
+                        <div className="relative z-10 text-center p-8 max-w-lg animate-fade-in-up">
+                            {/* Animated Illustration */}
+                            <div className="mb-8 relative inline-block group cursor-default">
+                                <div className="absolute inset-0 bg-violet-500/20 blur-xl rounded-full scale-0 group-hover:scale-110 transition-transform duration-500" />
+                                <div className="relative w-32 h-32 bg-white dark:bg-slate-900 rounded-3xl shadow-2xl flex items-center justify-center border border-slate-200 dark:border-slate-800 transform rotate-3 group-hover:rotate-6 transition-transform duration-500">
+                                    <div className="absolute inset-2 border border-dashed border-slate-300 dark:border-slate-700 rounded-2xl" />
+                                    <div className="flex gap-1 animate-bounce-slight">
+                                        <div className="w-2 h-2 rounded-full bg-violet-500" style={{ animationDelay: '0ms' }} />
+                                        <div className="w-2 h-2 rounded-full bg-indigo-500" style={{ animationDelay: '150ms' }} />
+                                        <div className="w-2 h-2 rounded-full bg-sky-500" style={{ animationDelay: '300ms' }} />
+                                    </div>
+                                    <span className="material-symbols-outlined text-4xl text-slate-400 dark:text-slate-500 absolute bottom-6 right-6 transform -rotate-12 group-hover:rotate-0 transition-transform">
+                                        send
+                                    </span>
+                                </div>
+                                {/* Floating Elements */}
+                                <div className="absolute -top-4 -right-4 bg-white dark:bg-slate-800 p-2 rounded-xl shadow-lg border border-slate-100 dark:border-slate-700 animate-float" style={{ animationDelay: '0.5s' }}>
+                                    <span className="material-symbols-outlined text-green-500 text-lg">lock</span>
+                                </div>
+                                <div className="absolute -bottom-2 -left-6 bg-white dark:bg-slate-800 px-3 py-1 rounded-full shadow-lg border border-slate-100 dark:border-slate-700 animate-float" style={{ animationDelay: '1.5s' }}>
+                                    <span className="text-xs font-mono text-slate-500">
+                                        <span className="w-1.5 h-1.5 rounded-full bg-green-500 inline-block mr-1" />
+                                        Online
+                                    </span>
+                                </div>
+                            </div>
+
+                            <h2 className="text-3xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-slate-900 via-violet-800 to-slate-900 dark:from-white dark:via-violet-200 dark:to-white mb-3">
+                                Welcome, {user?.display_name || 'Guest'}
+                            </h2>
+                            <p className="text-slate-500 dark:text-slate-400 text-lg mb-8 leading-relaxed">
+                                Select a conversation from the sidebar or start a new room to begin secure messaging.
+                            </p>
+
+                            <div className="flex flex-wrap justify-center gap-4">
+                                <button 
+                                    onClick={() => setShowCreateModal(true)}
+                                    className="px-6 py-3 rounded-xl bg-violet-600 hover:bg-violet-700 text-white font-medium shadow-lg shadow-violet-500/20 hover:shadow-violet-500/30 transition-all transform hover:-translate-y-0.5 flex items-center gap-2"
+                                >
+                                    <span className="material-symbols-outlined text-xl">add</span>
+                                    New Room
+                                </button>
+                                <button 
+                                    onClick={() => setShowJoinModal(true)}
+                                    className="px-6 py-3 rounded-xl bg-white dark:bg-slate-800 hover:bg-gray-50 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 font-medium border border-slate-200 dark:border-slate-700 shadow-sm transition-all flex items-center gap-2"
+                                >
+                                    <span className="material-symbols-outlined text-xl">login</span>
+                                    Join Room
+                                </button>
+                            </div>
+                        </div>
+                        
+                        <div className="absolute bottom-8 left-0 w-full text-center">
+                            <p className="text-xs text-slate-400 dark:text-slate-600 font-mono flex items-center justify-center gap-2 opacity-60 hover:opacity-100 transition-opacity">
+                                <span className="material-symbols-outlined text-sm">encrypted</span>
+                                End-to-end encrypted • Zero logs
+                            </p>
                         </div>
                     </div>
                 )}
