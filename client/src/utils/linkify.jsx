@@ -19,33 +19,87 @@ export const textToHtml = (text) => {
     });
 };
 
+// ... (previous imports and helpers)
+
 // Main function to linkify text and render emojis
 export const linkifyText = (text, searchTerm = '') => {
     if (!text) return null;
 
+    // Regex for mentions: @[Name](user:ID)
+    const mentionRegex = /@\[(.*?)\]\(user:(\d+)\)/g;
     const urlRegex = /(https?:\/\/[^\s]+|www\.[^\s]+)/gi;
+    
+    // We need to parse everything in order. 
+    // Strategy: Split by Mentions first, then process chunks for URLs and Emojis.
+
     const parts = [];
-    let lastIndex = 0;
-    let match;
     let globalKey = 0;
 
-    // Helper to highlight text if searchTerm exists
+    // Helper process generic text (URLs + Emojis + Search Highlight)
+    // NOTE: This is formerly the main body logic, extracted to reusable function
+    const processGenericText = (genericText) => {
+        if (!genericText) return;
+        
+        let localLastIndex = 0;
+        let match;
+        
+        // Find URLs in this chunk
+        while ((match = urlRegex.exec(genericText)) !== null) {
+            const url = match[0];
+            const start = match.index;
+
+            // Before URL: Emojis + Search
+            if (start > localLastIndex) {
+                 processTextSegment(genericText.slice(localLastIndex, start));
+            }
+
+            let href = url;
+            if (href.startsWith("www.")) {
+                href = "https://" + href;
+            }
+
+            parts.push(
+                <a
+                    key={globalKey++}
+                    href={href}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-white hover:text-slate-200 underline break-words decoration-violet-400 decoration-1 hover:decoration-2"
+                >
+                    {url}
+                </a>
+            );
+
+            localLastIndex = start + url.length;
+        }
+
+        // Tail after last URL
+        if (localLastIndex < genericText.length) {
+            processTextSegment(genericText.slice(localLastIndex));
+        }
+    };
+    
     const highlightText = (content) => {
         if (!content) return null;
         if (!searchTerm || !searchTerm.trim()) return content;
 
-        const regex = new RegExp(`(${searchTerm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi');
+        // Escape regex special chars in searchTerm
+        const safeTerm = searchTerm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const regex = new RegExp(`(${safeTerm})`, 'gi');
         const theseParts = content.split(regex);
         
         return theseParts.map((part, i) => {
             if (part.toLowerCase() === searchTerm.toLowerCase()) {
-                return <mark key={`hl-${globalKey++}`} className="bg-yellow-200 dark:bg-yellow-500/30 text-slate-900 dark:text-white rounded-sm px-0.5">{part}</mark>;
+                return (
+                     <mark key={`hl-${globalKey++}`} className="bg-yellow-300 dark:bg-yellow-500/50 text-slate-900 dark:text-white rounded-sm px-0.5 mx-0.5 font-semibold">
+                        {part}
+                    </mark>
+                );
             }
             return part;
         });
     };
 
-    // Inner helper to process text segments for emojis
     const processTextSegment = (segment) => {
         if (!segment) return;
         const regex = emojiRegex();
@@ -57,7 +111,6 @@ export const linkifyText = (text, searchTerm = '') => {
             const index = emojiMatch.index;
 
             if (index > lastEmojiIndex) {
-               // Apply (optional) highlighting to text between emojis
                const sub = segment.substring(lastEmojiIndex, index);
                const highlighted = highlightText(sub);
                if (Array.isArray(highlighted)) {
@@ -73,11 +126,10 @@ export const linkifyText = (text, searchTerm = '') => {
                     key={globalKey++}
                     src={`https://cdn.jsdelivr.net/npm/emoji-datasource-apple/img/apple/64/${hex}.png`}
                     alt={emojiChar}
-                    className="w-5 h-5 inline-block align-middle mb-[3px] mx-[1px]"
-                    draggable="false"
+                    className="w-5 h-5 inline-block align-text-bottom mx-[1px] select-none"
+                    draggable="false" 
                     loading="lazy"
                     onError={(e) => {
-                         // Fallback to native text if image fails
                          e.currentTarget.style.display = 'none';
                          const span = document.createElement('span');
                          span.textContent = emojiChar;
@@ -93,45 +145,51 @@ export const linkifyText = (text, searchTerm = '') => {
         if (lastEmojiIndex < segment.length) {
             const sub = segment.substring(lastEmojiIndex);
             const highlighted = highlightText(sub);
-            if (Array.isArray(highlighted)) {
-                highlighted.forEach(h => parts.push(<span key={globalKey++}>{h}</span>));
-            } else {
-                parts.push(<span key={globalKey++}>{highlighted}</span>);
-            }
+             if (Array.isArray(highlighted)) {
+                   highlighted.forEach(h => parts.push(<span key={globalKey++}>{h}</span>));
+               } else {
+                   parts.push(<span key={globalKey++}>{highlighted}</span>);
+               }
         }
     };
 
-    while ((match = urlRegex.exec(text)) !== null) {
-        const url = match[0];
-        const start = match.index;
 
-        if (start > lastIndex) {
-            processTextSegment(text.slice(lastIndex, start));
+    // --- Main Loop: Split by Mentions ---
+    let mainMatch;
+    let mainLastIndex = 0;
+
+    while ((mainMatch = mentionRegex.exec(text)) !== null) {
+        const fullMatch = mainMatch[0]; // @[Name](user:123)
+        const name = mainMatch[1];
+        const userId = mainMatch[2];
+        const start = mainMatch.index;
+
+        // Process text BEFORE mention
+        if (start > mainLastIndex) {
+            processGenericText(text.slice(mainLastIndex, start));
         }
 
-        let href = url;
-        if (href.startsWith("www.")) {
-            href = "https://" + href;
-        }
-
-        // We use a clean structure for links
+        // Render Mention
+        // We use dangerouslySetInnerHTML for name to render emojis insde name correctly (since name comes from processed source or just raw text)
+        // Actually, name here is raw text "Name 🕶️". We can use textToHtml on it.
+        const nameHtml = textToHtml(name);
+        
         parts.push(
-            <a
-                key={globalKey++}
-                href={href}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-violet-300 hover:text-violet-200 underline break-words"
+            <span 
+                key={globalKey++} 
+                className="text-violet-600 dark:text-violet-300 font-bold bg-violet-50 dark:bg-violet-900/40 rounded px-1.5 py-0.5 mx-0.5 inline-flex items-center gap-0.5 border border-violet-100 dark:border-violet-700/50"
+                title={`User ID: ${userId}`}
             >
-                {url}
-            </a>
+                @<span dangerouslySetInnerHTML={{ __html: nameHtml }} className="inline-flex items-center gap-0.5" />
+            </span>
         );
 
-        lastIndex = start + url.length;
+        mainLastIndex = start + fullMatch.length;
     }
 
-    if (lastIndex < text.length) {
-        processTextSegment(text.slice(lastIndex));
+    // Process TAIL
+    if (mainLastIndex < text.length) {
+        processGenericText(text.slice(mainLastIndex));
     }
 
     return parts;

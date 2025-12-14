@@ -3,7 +3,9 @@ import { useState, useEffect, useRef } from 'react';
 import PickerPanel from './PickerPanel';
 import ContentEditable from 'react-contenteditable';
 import useAudioRecorder from '../utils/useAudioRecorder';
-import { renderTextWithEmojis } from '../utils/emojiRenderer';
+import { renderTextWithEmojis, renderTextWithEmojisToHtml } from '../utils/emojiRenderer';
+
+
 
 const formatDuration = (ms) => {
     if (!ms) return '0:00';
@@ -29,10 +31,37 @@ export default function MessageInput({
     onTypingStop,
     isAi = false,
     isGenerating = false, // [FIX] Add missing prop
-    onStop = () => {}     // [FIX] Add missing prop
+    onStop = () => {},     // [FIX] Add missing prop
+    members = [],           // [NEW] Mention members
+    currentUser            // [NEW] To filter self
 }) {
     const [html, setHtml] = useState('');
     const [showEmoji, setShowEmoji] = useState(false);
+    
+    // [NEW] Mention State
+    const [showMentionPopup, setShowMentionPopup] = useState(false);
+    const [mentionSearch, setMentionSearch] = useState('');
+    const [mentionIndex, setMentionIndex] = useState(0);
+
+    const filteredMembers = showMentionPopup ? members.filter(m => {
+        // 1. Filter out self
+        if (currentUser && m.id === currentUser.id) return false;
+        
+        // 2. Filter out already mentioned users
+        // Check if data-mention="ID" exists in current HTML
+        if (html.includes(`data-mention="${m.id}"`)) return false;
+
+        const query = mentionSearch.toLowerCase();
+        return (
+            m.display_name.toLowerCase().includes(query) || 
+            (m.username && m.username.toLowerCase().includes(query))
+        );
+    }).slice(0, 5) : [];
+
+    useEffect(() => {
+        setMentionIndex(0);
+    }, [mentionSearch, filteredMembers.length]); // Reset index when list changes
+
     const pickerRef = useRef(null);
     const editorRef = useRef(null);
     const lastRange = useRef(null);
@@ -157,9 +186,46 @@ export default function MessageInput({
         return () => document.removeEventListener('mousedown', handleClickOutside);
     }, []);
 
+    const handleSelectMention = (user) => {
+        const selection = window.getSelection();
+        if (!selection.rangeCount) return;
+        
+        const range = selection.getRangeAt(0);
+        const textNode = range.startContainer;
+        if (textNode.nodeType !== Node.TEXT_NODE) return;
+        
+        const textStr = textNode.textContent;
+        const caret = range.startOffset;
+        const textBefore = textStr.slice(0, caret);
+        const lastAt = textBefore.lastIndexOf('@');
+        
+        if (lastAt === -1) return;
+
+        const newRange = document.createRange();
+        newRange.setStart(textNode, lastAt);
+        newRange.setEnd(textNode, caret);
+        selection.removeAllRanges();
+        selection.addRange(newRange);
+        
+        const mentionHtml = `<span data-mention="${user.id}" class="text-violet-600 dark:text-violet-400 font-bold bg-violet-50 dark:bg-violet-900/30 rounded px-1" contenteditable="false">@${renderTextWithEmojisToHtml(user.display_name)}</span>&nbsp;`;
+        document.execCommand('insertHTML', false, mentionHtml);
+        
+        setShowMentionPopup(false);
+        setMentionSearch('');
+    };
+
     const handleSubmit = (e) => {
         if (e) e.preventDefault();
         
+        if (showMentionPopup) {
+            if (filteredMembers.length > 0) {
+                handleSelectMention(filteredMembers[mentionIndex]);
+            } else {
+                setShowMentionPopup(false);
+            }
+            return;
+        }
+
         const domHtml = editorRef.current?.innerHTML || "";
         let content = domHtml;
 
@@ -167,6 +233,15 @@ export default function MessageInput({
         const tempDiv = document.createElement('div');
         tempDiv.innerHTML = content;
         
+        // [NEW] Encode Mentions
+        const mentions = tempDiv.querySelectorAll('span[data-mention]');
+        mentions.forEach(span => {
+            const id = span.getAttribute('data-mention');
+            const name = span.textContent.replace('@', ''); // Assuming textContent is "@Name"
+            const encoded = `@[${name}](user:${id})`;
+            span.replaceWith(document.createTextNode(encoded));
+        });
+
         const images = tempDiv.getElementsByTagName('img');
         while (images.length > 0) {
             const img = images[0];
@@ -259,6 +334,43 @@ export default function MessageInput({
         setHtml(newHtml);
         saveSelection();
 
+        // Mention Detection
+        if (members && members.length > 0) {
+            const selection = window.getSelection();
+            if (selection.rangeCount > 0) {
+                const range = selection.getRangeAt(0);
+                const textNode = range.startContainer;
+                // Only if we are typing in text
+                if (textNode.nodeType === Node.TEXT_NODE) {
+                    const text = textNode.textContent;
+                    const caret = range.startOffset;
+                    const textBefore = text.slice(0, caret);
+                    const lastAt = textBefore.lastIndexOf('@');
+                    
+                    if (lastAt !== -1) {
+                        const prevChar = textBefore[lastAt - 1];
+                        // Start of line or space before @
+                        if (lastAt === 0 || prevChar === ' ' || prevChar === '\u00A0' || prevChar === '\n') {
+                            const query = textBefore.slice(lastAt + 1);
+                            // Simple heuristic: if query is too long, stop showing
+                            if (query.length < 20 && !query.includes(' ')) {
+                                setMentionSearch(query);
+                                setShowMentionPopup(true);
+                            } else {
+                                setShowMentionPopup(false);
+                            }
+                        } else {
+                            setShowMentionPopup(false);
+                        }
+                    } else {
+                        setShowMentionPopup(false);
+                    }
+                } else {
+                    setShowMentionPopup(false);
+                }
+            }
+        }
+
         // Typing Detection
         if (!editingMessage && onTypingStart && onTypingStop) {
              const now = Date.now();
@@ -287,6 +399,29 @@ export default function MessageInput({
     };
 
     const handleKeyDown = (e) => {
+        if (showMentionPopup && filteredMembers.length > 0) {
+             if (e.key === 'ArrowDown') {
+                 e.preventDefault();
+                 setMentionIndex(prev => (prev + 1) % filteredMembers.length);
+                 return;
+             }
+             if (e.key === 'ArrowUp') {
+                 e.preventDefault();
+                 setMentionIndex(prev => (prev - 1 + filteredMembers.length) % filteredMembers.length);
+                 return;
+             }
+             if (e.key === 'Enter' || e.key === 'Tab') {
+                 e.preventDefault();
+                 handleSelectMention(filteredMembers[mentionIndex]);
+                 return;
+             }
+             if (e.key === 'Escape') {
+                 e.preventDefault();
+                 setShowMentionPopup(false);
+                 return;
+             }
+        }
+
         if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
             e.preventDefault();
             // [FIX] Use ref to get latest closure
@@ -488,7 +623,40 @@ export default function MessageInput({
                         )}
 
                         
+                        
                         <div className="flex items-end relative">
+                         {showMentionPopup && filteredMembers.length > 0 && (
+                            <div className="absolute bottom-full mb-2 left-0 z-50 w-64 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg shadow-xl overflow-hidden animate-in fade-in zoom-in-95 duration-100">
+                                <div className="p-1 max-h-[200px] overflow-y-auto custom-scrollbar">
+                                    {filteredMembers.map((member, idx) => (
+                                        <button
+                                            key={member.id}
+                                            onClick={() => handleSelectMention(member)}
+                                            onMouseEnter={() => setMentionIndex(idx)}
+                                            className={`w-full flex items-center gap-2 p-2 rounded-md transition-colors text-left ${
+                                                idx === mentionIndex 
+                                                ? 'bg-violet-50 dark:bg-violet-900/30 text-violet-700 dark:text-violet-300' 
+                                                : 'hover:bg-slate-100 dark:hover:bg-slate-700/50 text-slate-700 dark:text-slate-200'
+                                            }`}
+                                        >
+                                            {member.avatar_thumb_url ? (
+                                                <img src={member.avatar_thumb_url} alt="" className="w-6 h-6 rounded-full object-cover" />
+                                            ) : (
+                                                <div className="w-6 h-6 rounded-full bg-slate-200 dark:bg-slate-700 flex items-center justify-center text-[10px] font-bold">
+                                                    {member.display_name?.[0]}
+                                                </div>
+                                            )}
+                                            <div className="flex flex-col min-w-0">
+                                                <span className="text-sm font-medium truncate">{renderTextWithEmojis(member.display_name)}</span>
+                                                <span className="text-xs text-slate-400 truncate">
+                                                    {member.username.startsWith('@') ? member.username : `@${member.username}`}
+                                                </span>
+                                            </div>
+                                        </button>
+                                    ))}
+                                </div>
+                            </div>
+                         )}
                             {showEmoji && (
                                 <div 
                                     className="fixed bottom-[80px] left-1/2 -translate-x-1/2 z-50 shadow-2xl rounded-lg w-[90vw] h-[400px] sm:w-[400px] sm:absolute sm:bottom-full sm:mb-2 sm:left-auto sm:right-0 sm:translate-x-0 overflow-hidden" 

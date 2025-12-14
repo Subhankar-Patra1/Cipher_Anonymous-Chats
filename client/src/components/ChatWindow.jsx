@@ -144,6 +144,21 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
         }
     }, [room.initialMessages]);
 
+    // [NEW] Fetch members for mentions
+    const [members, setMembers] = useState([]);
+    useEffect(() => {
+        if (room.type === 'group') {
+            fetch(`${import.meta.env.VITE_API_URL}/api/rooms/${room.id}/members`, {
+                headers: { Authorization: `Bearer ${token}` }
+            })
+            .then(res => res.json())
+            .then(data => setMembers(data))
+            .catch(console.error);
+        } else {
+            setMembers([]);
+        }
+    }, [room.id, room.type, token]);
+
     useEffect(() => {
         if (room.type === 'direct' && room.other_user_id) {
             fetchStatuses([room.other_user_id]);
@@ -849,6 +864,8 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
                     onEditMessage={handleEditMessage}
                     onTypingStart={() => socket?.emit('typing:start', { roomId: room.id })}
                     onTypingStop={() => socket?.emit('typing:stop', { roomId: room.id })}
+                    members={members}
+                    currentUser={user}
                 />
             ) : (
                 <div className="p-4 bg-white/50 dark:bg-slate-900/50 backdrop-blur-md border-t border-slate-200/50 dark:border-slate-800/50 z-10 flex justify-center items-center h-[88px] transition-colors duration-300">

@@ -343,7 +343,12 @@ router.post('/:id/members', async (req, res) => {
              user_id: req.user.id,
              content: `${targetRes.rows[0].display_name} was added by ${actorRes.rows[0].display_name}`,
              type: 'system',
-             created_at: new Date().toISOString()
+             created_at: new Date().toISOString(),
+             // [NEW] Metadata for client-side personalization
+             targetUserId: targetUserId,
+             actorId: req.user.id,
+             targetName: targetRes.rows[0].display_name,
+             actorName: actorRes.rows[0].display_name
         });
 
         // Broadcast Member Added

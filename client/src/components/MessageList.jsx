@@ -77,7 +77,7 @@ const CodeBlock = ({ inline, className, children, ...props }) => {
     );
 };
 
-const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone, onRetry, onMarkHeard, onEdit, onImageLoad, onRegenerate, searchTerm }) => { // [MODIFIED] Added searchTerm
+const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone, onRetry, onMarkHeard, onEdit, onImageLoad, onRegenerate, searchTerm, scrollToMessage }) => { // [MODIFIED] Added searchTerm, scrollToMessage
     const [showMenu, setShowMenu] = useState(false);
     const [showFeedback, setShowFeedback] = useState(false); // [NEW] Feedback state
     const menuRef = useRef(null);
@@ -89,7 +89,6 @@ const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone, onRetr
         setShowMenu(prev => !prev);
     };
 
-    // ... (rest of useEffects) ... 
     useEffect(() => {
         const handleClickOutside = (event) => {
             if (menuRef.current && !menuRef.current.contains(event.target)) {
@@ -104,18 +103,6 @@ const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone, onRetr
             document.removeEventListener('mousedown', handleClickOutside);
         };
     }, [showMenu]);
-
-    // ... (rest of functions) ...
-    const scrollToMessage = (id) => {
-        const el = document.getElementById(`msg-${id}`);
-        if (!el) return;
-
-        el.scrollIntoView({ behavior: "smooth", block: "center" });
-        el.classList.add("reply-highlight");
-        setTimeout(() => {
-            el.classList.remove("reply-highlight");
-        }, 2000);
-    };
 
     const handleDeleteForMe = async () => {
         try {
@@ -175,12 +162,14 @@ const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone, onRetr
     }
 
     const isAi = msg.user_id === 'ai-assistant' || msg.author_name === 'Assistant' || (msg.meta && msg.meta.ai) || msg.isStreaming;
-
+    
     return (
 
         <div 
             id={`msg-${msg.id}`}
-            className={`flex ${isMe ? 'justify-end' : 'justify-start'} group max-w-full animate-slide-in-up ${showMenu ? 'z-[100] relative' : ''}`}
+            className={`
+                flex ${isMe ? 'justify-end' : 'justify-start'} group max-w-full animate-slide-in-up ${showMenu ? 'z-[100] relative' : ''}
+            `}
         >
             <div className={`max-w-[75%] flex flex-col ${isMe ? 'items-end' : 'items-start'}`}>
                 {/* ... (Avatar logic remains same) ... */}
@@ -709,16 +698,86 @@ export default function MessageList({ messages, setMessages, currentUser, roomId
         }
     };
 
+    // [NEW] Track unread mentions
+    const [unreadMentionId, setUnreadMentionId] = useState(null);
+    const lastSeenMsgIdRef = useRef(null);
+
+    // [NEW] Check for new mentions when messages change
+    useEffect(() => {
+        if (!messages.length) return;
+        
+        const lastMsg = messages[messages.length - 1];
+        const lastSeenId = lastSeenMsgIdRef.current;
+        
+        // Update ref for next run
+        lastSeenMsgIdRef.current = lastMsg.id;
+
+        // Find all NEW messages since last check
+        let newMessages = [];
+        if (lastSeenId) {
+            const lastIndex = messages.findIndex(m => m.id === lastSeenId);
+            if (lastIndex !== -1) {
+                newMessages = messages.slice(lastIndex + 1);
+            } else {
+                // Determine heuristic: maybe all are new if lastSeenId not found (e.g. room change)
+                newMessages = messages; 
+            }
+        } else {
+            // First run or room switch, treat only latest batch as potentially new? 
+            // Or mostly relying on scroll position. 
+            // For now, let's just check the last few (heuristic) to cover the "initial load" case being ignored
+            // strictly, we only want "arriving" messages.
+            newMessages = [lastMsg]; 
+        }
+
+        // Find the LATEST mention in new messages
+        // Filter out my own messages
+        const mentions = newMessages.filter(m => 
+            m.user_id !== currentUser.id && 
+            m.content && 
+            typeof m.content === 'string' && 
+            m.content.includes(`(user:${currentUser.id})`)
+        );
+
+        if (mentions.length > 0) {
+             const latestMention = mentions[mentions.length - 1];
+             const div = scrollRef.current;
+             const isAtBottom = div ? div.scrollHeight - div.scrollTop - div.clientHeight < 100 : true;
+             
+             if (!isAtBottom) {
+                 setUnreadMentionId(latestMention.id);
+             }
+        }
+    }, [messages, currentUser.id]);
+
     const handleScroll = () => {
         const div = scrollRef.current;
         if (!div) return;
         const distanceToBottom = div.scrollHeight - div.scrollTop - div.clientHeight;
         setShowScrollButton(distanceToBottom > 100);
+        
+        if (distanceToBottom < 100) {
+            setUnreadMentionId(null);
+            // Also update ref to latest if we are at bottom? 
+            // Actually useEffect handles ref update.
+        }
     };
 
     const scrollToBottom = () => {
         bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
         setShowScrollButton(false);
+        setUnreadMentionId(null);
+    };
+
+    const scrollToMessage = (id) => {
+        const el = document.getElementById(`msg-${id}`);
+        if (!el) return;
+
+        el.scrollIntoView({ behavior: "smooth", block: "center" });
+        el.classList.add("reply-highlight");
+        setTimeout(() => {
+            el.classList.remove("reply-highlight");
+        }, 2000);
     };
 
     return (
@@ -769,7 +828,15 @@ export default function MessageList({ messages, setMessages, currentUser, roomId
                                          {icon}
                                      </span>
                                      <span className="text-xs text-slate-600 dark:text-slate-400 font-medium">
-                                         {linkifyText(msg.content)}
+                                         {(() => {
+                                             // Customize "User added" message if metadata exists
+                                             if (msg.targetUserId && msg.actorId && msg.content.includes('added by')) {
+                                                 if (String(msg.targetUserId) === String(currentUser.id)) {
+                                                      return `You were added by ${msg.actorName || 'someone'}`;
+                                                 }
+                                             }
+                                             return linkifyText(msg.content);
+                                         })()}
                                      </span>
                                      <span className="text-[10px] text-slate-500 dark:text-slate-600 opacity-0 group-hover/system:opacity-100 transition-opacity ml-2">
                                          {formatTime(msg.created_at)}
@@ -793,6 +860,7 @@ export default function MessageList({ messages, setMessages, currentUser, roomId
                             onImageLoad={handleImageLoad}
                             onRegenerate={onRegenerate}
                             searchTerm={searchTerm} // [MODIFIED] Pass search term
+                            scrollToMessage={scrollToMessage} // [NEW] Pass scrollToMessage
                         />
                     );
                 })}
@@ -801,6 +869,25 @@ export default function MessageList({ messages, setMessages, currentUser, roomId
             </div>
             
             {/* ... (rest of scroll button and delete modal) ... */}
+            {/* Unread Mention Button */}
+            {unreadMentionId && showScrollButton && (
+                <button
+                    onClick={() => {
+                        scrollToMessage(unreadMentionId);
+                        setUnreadMentionId(null);
+                    }}
+                    className={`
+                        absolute bottom-20 right-5 w-10 h-10 rounded-full bg-orange-500 text-white
+                        border border-orange-400 shadow-lg shadow-orange-500/30 
+                        flex items-center justify-center z-20 transition-all duration-300 ease-in-out
+                        hover:bg-orange-600 hover:scale-110 active:scale-95
+                    `}
+                    title="New mention!"
+                >
+                    <span className="material-symbols-outlined text-xl">alternate_email</span>
+                </button>
+            )}
+
             <button
                 onClick={scrollToBottom}
                 className={`

@@ -78,9 +78,42 @@ export default function Sidebar({ rooms, activeRoom, onSelectRoom, loadingRoomId
         }
     }, [tab, rooms]);
 
+    // [NEW] Helper to render preview with mentions highlighted
+    const renderPreview = (content) => {
+        if (!content) return 'No messages yet';
+        
+        // Split by mention pattern: @[Name](user:ID)
+        // Capture groups: 1=Name, 2=ID. The split will include full match and capture groups if we regex text.
+        // Better: user regex match all or split. 
+        // Let's use split with capturing groups to interleave text and matches.
+        
+        const parts = content.split(/(@\[.*?\]\(user:\d+\))/g);
+        
+        return parts.map((part, i) => {
+            const match = part.match(/@\[(.*?)\]\(user:(\d+)\)/);
+            if (match) {
+                const name = match[1];
+                const id = match[2];
+                // Check if it's me
+                const isMe = String(id) === String(user.id);
+                
+                return (
+                    <span 
+                        key={i} 
+                        className={isMe ? "text-violet-600 dark:text-violet-400 font-bold" : "font-semibold text-slate-700 dark:text-slate-300"}
+                    >
+                        @{name}
+                    </span>
+                );
+            }
+            // Regular text: render with emojis
+            return renderTextWithEmojis(part);
+        });
+    };
+
     return (
         <div className="w-full h-full bg-white/50 dark:bg-slate-900/50 backdrop-blur-xl border-r border-slate-200 dark:border-slate-800 flex flex-col shadow-2xl transition-colors">
-            {/* Header */}
+            {/* ... (Header) ... */}
             <div className="p-6 border-b border-slate-200/50 dark:border-slate-800/50 flex justify-between items-center bg-white/30 dark:bg-slate-900/30">
                 <div className="flex items-center gap-3 flex-1 min-w-0 mr-2">
                     <div 
@@ -274,15 +307,15 @@ export default function Sidebar({ rooms, activeRoom, onSelectRoom, loadingRoomId
                     </div>
                 )}
                 {filteredRooms.map(room => (
-                    <button
+                    <div
                         key={room.id}
                         onClick={() => onSelectRoom(room)}
-                        disabled={loadingRoomId === room.id} 
-                        className={`w-full text-left p-3 rounded-lg flex items-center gap-3 transition-all duration-200 group hover:translate-x-1 ${
+                        // disabled={loadingRoomId === room.id} // Div doesn't support disabled, handle via class or logic
+                        className={`w-full text-left p-3 rounded-lg flex items-center gap-3 transition-all duration-200 group hover:translate-x-1 cursor-pointer select-none ${
                             activeRoom?.id === room.id 
                             ? 'bg-violet-100 dark:bg-violet-600/10 text-violet-700 dark:text-violet-300 border border-violet-200 dark:border-violet-500/20 shadow-sm' 
                             : 'text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800/50 hover:text-slate-900 dark:hover:text-slate-200 border border-transparent'
-                        }`}
+                        } ${loadingRoomId === room.id ? 'opacity-50 pointer-events-none' : ''}`}
                         onContextMenu={(e) => {
                             e.preventDefault();
                             setContextMenu({
@@ -333,48 +366,57 @@ export default function Sidebar({ rooms, activeRoom, onSelectRoom, loadingRoomId
                                             {room.last_message_type === 'image' ? 'Sent an image' :
                                              room.last_message_type === 'audio' ? 'Sent an audio' :
                                              room.last_message_type === 'gif' ? 'Sent a GIF' :
-                                             renderTextWithEmojis(room.last_message_content || 'No messages yet')}
+                                             renderPreview(room.last_message_content)}
                                         </span>
                                     </div>
                                 )}
                             </div>
                             </div>
 
-                         {/* Right Side Column: Menu + Badge */}
-                         <div className="flex flex-col items-end gap-1 ml-2">
-                            {/* Three-dot Menu Button - Shows on Hover */}
-                            <button
-                                onClick={(e) => {
-                                    e.stopPropagation();
-                                    setContextMenu({
-                                        visible: true,
-                                        x: e.clientX,
-                                        y: e.clientY,
-                                        room: room
-                                    });
-                                }}
-                                className={`w-5 h-5 rounded-full hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-400 hover:text-slate-600 dark:text-slate-500 dark:hover:text-slate-300 flex items-center justify-center transition-all shrink-0 mb-auto ${
-                                    contextMenu.visible && contextMenu.room?.id === room.id 
-                                    ? 'opacity-100 bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300' 
-                                    : 'opacity-0 group-hover:opacity-100'
-                                }`}
-                                title="More options"
-                            >
-                                <span className="material-symbols-outlined text-[16px]">more_horiz</span>
-                            </button>
+                            {/* Right Side Column: Menu + Badge */}
+                            <div className="flex flex-col items-end gap-1 ml-2">
+                                {/* Three-dot Menu Button - Shows on Hover */}
+                                <div
+                                    onClick={(e) => {
+                                        e.stopPropagation();
+                                        setContextMenu({
+                                            visible: true,
+                                            x: e.clientX,
+                                            y: e.clientY,
+                                            room: room
+                                        });
+                                    }}
+                                    className={`w-5 h-5 rounded-full hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-400 hover:text-slate-600 dark:text-slate-500 dark:hover:text-slate-300 flex items-center justify-center transition-all shrink-0 mb-auto cursor-pointer ${
+                                        contextMenu.visible && contextMenu.room?.id === room.id 
+                                        ? 'opacity-100 bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300' 
+                                        : 'opacity-0 group-hover:opacity-100'
+                                    }`}
+                                    title="More options"
+                                >
+                                    <span className="material-symbols-outlined text-[16px]">more_horiz</span>
+                                </div>
 
-                            {/* Loading Indicator or Badge - At Bottom */}
-                            {loadingRoomId === room.id ? (
-                                <div className="w-5 h-5 border-2 border-violet-500/30 border-t-violet-500 rounded-full animate-spin"></div>
-                            ) : (
-                                room.unread_count > 0 && (
-                                    <span className="bg-violet-600 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full min-w-[20px] h-[20px] flex items-center justify-center">
-                                        {room.unread_count > 99 ? '99+' : room.unread_count}
-                                    </span>
-                                )
-                            )}
-                        </div>
-                    </button>
+                                {/* Loading Indicator or Badge - At Bottom */}
+                                {loadingRoomId === room.id ? (
+                                    <div className="w-5 h-5 border-2 border-violet-500/30 border-t-violet-500 rounded-full animate-spin"></div>
+                                ) : (
+                                    <div className="flex items-center gap-1">
+                                         {/* Mention Badge */}
+                                         {room.unread_count > 0 && room.last_message_content && room.last_message_content.includes(`(user:${user.id})`) && (
+                                            <span className="bg-orange-500 text-white w-5 h-5 rounded-full flex items-center justify-center shadow-sm animate-pulse">
+                                                <span className="material-symbols-outlined text-[14px]">alternate_email</span>
+                                            </span>
+                                        )}
+
+                                        {room.unread_count > 0 && (
+                                            <span className="bg-violet-600 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full min-w-[20px] h-[20px] flex items-center justify-center">
+                                                {room.unread_count > 99 ? '99+' : room.unread_count}
+                                            </span>
+                                        )}
+                                    </div>
+                                )}
+                            </div>
+                    </div>
                 ))}
 
             </div>
