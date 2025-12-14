@@ -643,7 +643,7 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
     };
 
     return (
-        <div className="flex flex-col h-full bg-gray-50 dark:bg-slate-950 relative overflow-hidden transition-colors">
+        <div className="flex flex-col h-[100dvh] bg-gray-50 dark:bg-slate-950 relative overflow-hidden transition-colors">
             {/* ... (Modal and Background remain same, but easier to just wrap MessageList) */}
             <PrivilegedUsersModal 
                 isOpen={showPrivilegedModal} 

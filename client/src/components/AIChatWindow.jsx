@@ -221,7 +221,7 @@ export default function AIChatWindow({ socket, room, user, onBack, isLoading }) 
 
     // AI Chat distinct UI
     return (
-        <div className="flex flex-col h-full bg-slate-50 dark:bg-slate-950 relative overflow-hidden transition-colors">
+        <div className="flex flex-col h-[100dvh] bg-slate-50 dark:bg-slate-950 relative overflow-hidden transition-colors">
             {/* Distinct Background for AI */}
             <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,_var(--tw-gradient-stops))] from-fuchsia-100/40 via-slate-50 to-slate-50 dark:from-fuchsia-900/10 dark:via-slate-950 dark:to-slate-950 pointer-events-none transition-colors" />
 
