@@ -20,6 +20,8 @@ import AISendIcon from './icons/AISendIcon';
 export default function MessageInput({ 
     onSend, 
     onSendAudio, 
+    onImageSelected, // [NEW] Scoped Handler
+    onSendImage, // Keep for backward compatibility or remove if unused 
     disabled, 
     replyTo, 
     setReplyTo,
@@ -42,6 +44,8 @@ export default function MessageInput({
     const [showMentionPopup, setShowMentionPopup] = useState(false);
     const [mentionSearch, setMentionSearch] = useState('');
     const [mentionIndex, setMentionIndex] = useState(0);
+
+    const fileInputRef = useRef(null);
 
     const filteredMembers = showMentionPopup ? members.filter(m => {
         // 1. Filter out self
@@ -80,7 +84,9 @@ export default function MessageInput({
     // Populate input when editing
     useEffect(() => {
         if (editingMessage) {
-            setHtml(editingMessage.content);
+            // [FIX] Use caption for images
+            const initialContent = editingMessage.type === 'image' ? (editingMessage.caption || '') : editingMessage.content;
+            setHtml(initialContent);
             if (editorRef.current) editorRef.current.focus();
         } else {
             if (!editingMessage && html === editingMessage?.content) {
@@ -282,7 +288,8 @@ export default function MessageInput({
         if (plainText) {
             if (editingMessage) {
                 // Handle edit submission
-                if (plainText !== editingMessage.content) {
+                const originalText = editingMessage.type === 'image' ? (editingMessage.caption || '') : editingMessage.content;
+                if (plainText !== originalText) {
                     onEditMessage(editingMessage.id, plainText);
                 } else {
                     onCancelEdit();
@@ -327,6 +334,19 @@ export default function MessageInput({
 
     const handleRemoveGif = () => {
         setPendingGif(null);
+    };
+
+    // [NEW] Image Handlers
+    const handleImageChange = async (e) => {
+        const file = e.target.files?.[0];
+        if (file) {
+             // [NEW] Delegate to parent for Scoped Preview
+             if (onImageSelected) {
+                 onImageSelected(file);
+             }
+             // Clear input so same file can be selected again
+             if (fileInputRef.current) fileInputRef.current.value = '';
+        }
     };
 
     const handleChange = (evt) => {
@@ -537,7 +557,10 @@ export default function MessageInput({
                             rounded-t-2xl rounded-b-md
                             px-4 py-2 transition-colors
                          ">
-                             <div className="flex flex-col">
+                             <div className="flex items-center gap-2">
+                                 {editingMessage.type === 'image' && (
+                                     <span className="material-symbols-outlined text-violet-600 dark:text-violet-300 text-[18px]">image</span>
+                                 )}
                                  <span className="text-sm font-bold text-violet-600 dark:text-violet-300">Editing message</span>
                              </div>
                              <div className="flex gap-2">
@@ -692,7 +715,7 @@ export default function MessageInput({
                                 </div>
                             )}
 
-                            <div className="pr-2 pb-2">
+                            <div className="pr-2 pb-2 flex items-center gap-1">
                                 <button
                                     type="button"
                                     onClick={() => setShowEmoji(!showEmoji)}
@@ -705,10 +728,28 @@ export default function MessageInput({
                                 >
                                     <span className="material-symbols-outlined text-[20px]">sentiment_satisfied</span>
                                 </button>
+                                
+                                <button
+                                    type="button"
+                                    onClick={() => fileInputRef.current?.click()}
+                                    className="p-2 text-slate-400 hover:text-slate-600 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors flex items-center justify-center rounded-lg"
+                                    title="Attach Image"
+                                    disabled={disabled || isAi} // Disable for AI for now if requested? Prompt says "supports WhatsApp-grade image messaging". Usually AI supports images too, but let's allow it unless explicitly blocked. Prompt doesn't block. Wait, 'isAi' comes from prop. If AI chat, maybe we support multimodal later. For now let's allow it or check constraints. Prompt: "Works for Direct + Group chats". Didn't explicitly mention AI. I'll enable it.
+                                >
+                                    <span className="material-symbols-outlined text-[20px]">image</span>
+                                </button>
+                                <input 
+                                    type="file" 
+                                    ref={fileInputRef} 
+                                    accept="image/*" 
+                                    className="hidden" 
+                                    onChange={handleImageChange} 
+                                />
                             </div>
                         </div>
                     </div>
                 </div>
+
 
                 {hasContent || isAi ? ( // [FIX] Always show Send button for AI (hide Mic)
                     <button 

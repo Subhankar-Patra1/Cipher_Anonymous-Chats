@@ -4,6 +4,7 @@ import { usePresence } from '../context/PresenceContext';
 import MessageList from './MessageList';
 import MessageInput from './MessageInput';
 import ProfilePanel from './ProfilePanel';
+import ImagePreviewModal from './ImagePreviewModal'; // [NEW] Import here
 import { linkifyText } from '../utils/linkify';
 
 const timeAgo = (dateString) => {
@@ -95,6 +96,7 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
     const [replyTo, setReplyTo] = useState(null); 
     const [editingMessage, setEditingMessage] = useState(null);
     const [typingUsers, setTypingUsers] = useState([]);
+    const [selectedImage, setSelectedImage] = useState(null); // [NEW] Scoped Image Preview State
 
     const typingTimeoutsRef = useRef({});
 
@@ -236,7 +238,12 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
                         const newMsgs = [...prev];
                         const preservedMsg = { 
                             ...processedMsg, 
-                            replyTo: processedMsg.replyTo || prev[optimisticIndex].replyTo 
+                            replyTo: processedMsg.replyTo || prev[optimisticIndex].replyTo,
+                            // [FIX] Preserve local image blob to prevent flickering/shrinking
+                            image_url: (prev[optimisticIndex].image_url && prev[optimisticIndex].image_url.startsWith('blob:')) 
+                                ? prev[optimisticIndex].image_url 
+                                : processedMsg.image_url,
+                            localBlob: prev[optimisticIndex].localBlob // Preserve the raw file if needed
                         };
                         newMsgs[optimisticIndex] = preservedMsg;
                         return newMsgs;
@@ -269,6 +276,7 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
                          return { 
                              ...msg, 
                              content: updatedMsg.content,
+                             caption: updatedMsg.caption !== undefined ? updatedMsg.caption : msg.caption, // [NEW] Update caption if present
                              edited_at: updatedMsg.edited_at,
                              edit_version: updatedMsg.edit_version
                          };
@@ -483,7 +491,13 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
     const handleEditMessage = async (msgId, newContent) => {
         setMessages(prev => prev.map(m => 
             m.id === msgId 
-            ? { ...m, content: newContent, edited_at: new Date().toISOString(), edit_version: (m.edit_version || 0) + 1 } 
+            ? { 
+                ...m, 
+                content: newContent, // Always update content (matches backend)
+                caption: m.type === 'image' ? newContent : m.caption, // [NEW] Update caption if image
+                edited_at: new Date().toISOString(), 
+                edit_version: (m.edit_version || 0) + 1 
+            } 
             : m
         ));
         setEditingMessage(null);
@@ -512,6 +526,91 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
         if (typingUsers.length === 1) return `${typingUsers[0].name} is typing...`;
         if (typingUsers.length === 2) return `${typingUsers[0].name} and ${typingUsers[1].name} are typing...`;
         return `${typingUsers[0].name}, ${typingUsers[1].name}, and ${typingUsers.length - 2} others are typing...`;
+    };
+
+    const handleSendImage = async (file, caption, width, height) => {
+        console.log('[DEBUG] ChatWindow handleSendImage:', width, 'x', height);
+        const tempId = `temp-${Date.now()}`;
+        // Optimistic UI
+        const tempMsg = {
+            id: tempId,
+            room_id: room.id,
+            user_id: user.id,
+            type: 'image',
+            content: 'Image',
+            caption: caption || '',
+            image_url: URL.createObjectURL(file), // Local preview
+            image_width: width || 0,
+            image_height: height || 0,
+            image_size: file.size,
+            replyTo: replyTo || null,
+            created_at: new Date().toISOString(),
+            username: user.username,
+            display_name: user ? user.display_name : 'Me',
+            status: 'sending',
+            uploadStatus: 'uploading',
+            uploadProgress: 0,
+            localBlob: file
+        };
+        setMessages(prev => [...prev, tempMsg]);
+        setReplyTo(null); // Clear reply context
+
+        const formData = new FormData();
+        formData.append('image', file);
+        formData.append('roomId', room.id);
+        formData.append('caption', caption || '');
+        if (width) formData.append('width', width);
+        if (height) formData.append('height', height);
+        if (replyTo) formData.append('replyToMessageId', replyTo.id);
+        formData.append('tempId', tempId);
+
+        try {
+            await uploadImageWithProgress(formData, tempId);
+        } catch (err) {
+            console.error(err);
+             setMessages(prev => prev.map(m =>
+                m.id === tempId ? { ...m, status: 'error' } : m
+            ));
+        }
+    };
+
+    const uploadImageWithProgress = async (formData, tempId) => {
+        return new Promise((resolve, reject) => {
+            const xhr = new XMLHttpRequest();
+            xhr.open('POST', `${import.meta.env.VITE_API_URL}/api/messages/image`);
+            xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+            
+            xhr.upload.onprogress = (event) => {
+                if (event.lengthComputable) {
+                    const percent = event.loaded / event.total;
+                    setMessages(prev => prev.map(m => 
+                        m.id === tempId ? { ...m, uploadProgress: percent } : m
+                    ));
+                }
+            };
+
+            xhr.onload = () => {
+                if (xhr.status >= 200 && xhr.status < 300) {
+                    resolve(JSON.parse(xhr.responseText));
+                } else {
+                    reject(new Error('Upload failed'));
+                }
+            };
+
+            xhr.onerror = () => reject(new Error('Network error'));
+            
+            xhr.send(formData);
+        });
+    };
+    // [NEW] Handler for when image is selected in MessageInput
+    const handleImageSelected = (file) => {
+        setSelectedImage(file);
+    };
+
+    // [NEW] Handler for sending from Preview Modal
+    const handleSendImageConfirm = (file, caption, width, height) => {
+         handleSendImage(file, caption, width, height);
+         setSelectedImage(null);
     };
 
     const handleSendGif = async (gif, caption) => {
@@ -643,7 +742,7 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
     };
 
     return (
-        <div className="flex flex-col h-[100dvh] bg-gray-50 dark:bg-slate-950 relative overflow-hidden transition-colors">
+        <div className="flex flex-col h-[100dvh] bg-gray-50 dark:bg-slate-950 relative overflow-hidden transition-colors chat-container"> {/* Added class for reference */}
             {/* ... (Modal and Background remain same, but easier to just wrap MessageList) */}
             <PrivilegedUsersModal 
                 isOpen={showPrivilegedModal} 
@@ -854,6 +953,7 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
                 <MessageInput 
                     onSend={(content) => handleSend(content, replyTo)} 
                     onSendAudio={(blob, duration, waveform) => handleSendAudio(blob, duration, waveform, replyTo)}
+                    onImageSelected={handleImageSelected} // [NEW] Pass handler
                     onSendGif={handleSendGif} 
                     disabled={isExpired} 
                     replyTo={replyTo}          
@@ -896,6 +996,19 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
                         }
                     }}
                 />
+            )}
+
+            {/* [NEW] Scoped Image Preview Modal */}
+            {selectedImage && (
+                <div className="absolute inset-0 z-20 flex flex-col bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
+                     <ImagePreviewModal
+                        file={selectedImage}
+                        onClose={() => setSelectedImage(null)}
+                        onSend={handleSendImageConfirm}
+                        recipientName={room.name || 'Chat'} 
+                        recipientAvatar={room.avatar_url || null}
+                     />
+                </div>
             )}
         </div>
     );

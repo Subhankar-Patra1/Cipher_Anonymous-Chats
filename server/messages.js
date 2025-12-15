@@ -2,7 +2,7 @@ const express = require('express');
 const db = require('./db');
 const router = express.Router();
 const upload = require('./upload');
-const { uploadFile } = require('./s3');
+const { uploadFile, generateGetPresignedUrl, getKeyFromUrl } = require('./s3');
 
 // Middleware to check auth
 const authenticate = (req, res, next) => {
@@ -111,6 +111,95 @@ router.post('/audio', upload.single('audio'), async (req, res) => {
 
     } catch (err) {
         console.error('Error sending voice note:', err);
+        res.status(500).json({ error: 'Server error' });
+    }
+});
+
+// Send Image
+router.post('/image', upload.single('image'), async (req, res) => {
+    try {
+        const { roomId, caption, width, height, size, tempId, replyToMessageId } = req.body;
+        const file = req.file;
+
+        if (!file) return res.status(400).json({ error: 'No image file provided' });
+        
+        // Verify room membership
+        const memberRes = await db.query('SELECT * FROM room_members WHERE room_id = $1 AND user_id = $2', [roomId, req.user.id]);
+        if (!memberRes.rows[0]) {
+            return res.status(403).json({ error: 'Not a member of this room' });
+        }
+        const member = memberRes.rows[0];
+
+        // Check Permissions
+        const permRes = await db.query('SELECT send_mode FROM group_permissions WHERE group_id = $1', [roomId]);
+        const sendMode = permRes.rows[0]?.send_mode || 'everyone';
+        if (sendMode === 'admins_only' && !['admin', 'owner'].includes(member.role)) {
+             return res.status(403).json({ error: 'Only admins can send messages' });
+        }
+        if (sendMode === 'owner_only' && member.role !== 'owner') {
+             return res.status(403).json({ error: 'Only owner can send messages' });
+        }
+
+        // Generate Filename
+        const ext = file.mimetype.split('/')[1] || 'png';
+        const finalFileName = `${roomId}/images/${Date.now()}-${req.user.id}.${ext}`;
+
+        const imageUrl = await uploadFile(file.buffer, finalFileName, file.mimetype);
+
+        // Insert into DB
+        const result = await db.query(
+            `INSERT INTO messages (room_id, user_id, type, image_url, image_width, image_height, image_size, content, caption, reply_to_message_id) 
+             VALUES ($1, $2, 'image', $3, $4, $5, $6, $7, $8, $9) 
+             RETURNING id, status, created_at`,
+            [roomId, req.user.id, imageUrl, parseInt(width) || 0, parseInt(height) || 0, parseInt(size) || file.size, 'Image', caption || '', replyToMessageId || null]
+        );
+        
+        // Update Room Last Message At
+        await db.query('UPDATE rooms SET last_message_at = NOW() WHERE id = $1', [roomId]);
+        
+        const info = result.rows[0];
+        const createdAtISO = info.created_at;
+
+        // Fetch user display name
+        const userRes = await db.query('SELECT display_name, avatar_thumb_url, avatar_url FROM users WHERE id = $1', [req.user.id]);
+        const user = userRes.rows[0];
+
+        let finalUrl = imageUrl;
+        // [REVERTED] No proxy/signing for new messages.
+        /*
+        const key = getKeyFromUrl(imageUrl);
+        if (key) { ... }
+        */
+
+        const message = {
+            id: info.id,
+            room_id: roomId,
+            user_id: req.user.id,
+            type: 'image',
+            content: 'Image',
+            caption: caption || '',
+            image_url: finalUrl,
+            image_width: parseInt(width || 0),
+            image_height: parseInt(height || 0),
+            image_size: parseInt(size || file.size),
+            status: info.status,
+            reply_to_message_id: replyToMessageId,
+            created_at: createdAtISO,
+
+            username: req.user.username,
+            display_name: user ? user.display_name : req.user.display_name,
+            avatar_thumb_url: user ? user.avatar_thumb_url : null,
+            avatar_url: user ? user.avatar_url : null,
+            tempId: tempId
+        };
+        
+        const io = req.app.get('io');
+        io.to(`room:${roomId}`).emit('new_message', message);
+
+        res.json(message);
+
+    } catch (err) {
+        console.error('Error sending image:', err);
         res.status(500).json({ error: 'Server error' });
     }
 });
@@ -398,20 +487,30 @@ router.put('/:id/edit', async (req, res) => {
         }
 
         // Constraints check
-        if (message.type !== 'text') {
-             return res.status(400).json({ error: 'Only text messages can be edited' });
+        if (message.type !== 'text' && message.type !== 'image') {
+             return res.status(400).json({ error: 'Only text and image messages can be edited' });
         }
         if (message.is_deleted_for_everyone) {
             return res.status(400).json({ error: 'Cannot edit deleted message' });
         }
 
         // 2. Update
-        const updateRes = await db.query(`
-            UPDATE messages 
-            SET content = $1, edited_at = NOW(), edit_version = edit_version + 1
-            WHERE id = $2
-            RETURNING id, content, edited_at, edit_version, room_id, user_id, type, reply_to_message_id, created_at
-        `, [new_content, messageId]);
+        let updateRes;
+        if (message.type === 'image') {
+            updateRes = await db.query(`
+                UPDATE messages 
+                SET caption = $1, content = $1, edited_at = NOW(), edit_version = edit_version + 1
+                WHERE id = $2
+                RETURNING id, content, caption, edited_at, edit_version, room_id, user_id, type, reply_to_message_id, created_at
+            `, [new_content, messageId]);
+        } else {
+            updateRes = await db.query(`
+                UPDATE messages 
+                SET content = $1, edited_at = NOW(), edit_version = edit_version + 1
+                WHERE id = $2
+                RETURNING id, content, caption, edited_at, edit_version, room_id, user_id, type, reply_to_message_id, created_at
+            `, [new_content, messageId]);
+        }
 
         const updatedMsg = updateRes.rows[0];
 
@@ -423,6 +522,7 @@ router.put('/:id/edit', async (req, res) => {
             id: updatedMsg.id,
             room_id: updatedMsg.room_id,
             content: updatedMsg.content,
+            caption: updatedMsg.caption, // [NEW] Include caption
             edited_at: updatedMsg.edited_at,
             edit_version: updatedMsg.edit_version
         });

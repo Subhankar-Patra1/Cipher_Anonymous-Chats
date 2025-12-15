@@ -10,11 +10,11 @@ const upload = multer({
     },
     fileFilter: (req, file, cb) => {
         console.log("Checking file type:", file.mimetype, "Original name:", file.originalname);
-        if (file.mimetype.startsWith('audio/')) {
+        if (file.mimetype.startsWith('audio/') || file.mimetype.startsWith('image/')) {
             cb(null, true);
         } else {
             console.error("File rejected. Mime:", file.mimetype);
-            cb(new Error('Only audio files are allowed!'), false);
+            cb(new Error('Only audio and image files are allowed!'), false);
         }
     }
 });

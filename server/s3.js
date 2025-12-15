@@ -1,4 +1,4 @@
-const { S3Client, PutObjectCommand, HeadObjectCommand, DeleteObjectCommand, PutBucketCorsCommand } = require('@aws-sdk/client-s3');
+const { S3Client, PutObjectCommand, HeadObjectCommand, DeleteObjectCommand, PutBucketCorsCommand, GetObjectCommand } = require('@aws-sdk/client-s3');
 const { getSignedUrl } = require('@aws-sdk/s3-request-presigner');
 require('dotenv').config();
 
@@ -54,7 +54,8 @@ const uploadFile = async (fileBuffer, fileName, mimeType) => {
         Bucket: bucketName,
         Body: fileBuffer,
         Key: fileName,
-        ContentType: mimeType
+        ContentType: mimeType,
+        CacheControl: 'max-age=31536000' // cache for 1 year
     };
 
     try {
@@ -82,6 +83,38 @@ const generatePresignedUrl = async (key, contentType, expiresIn = 300) => {
     } catch (err) {
         console.error("Presigned URL Error", err);
         throw err;
+    }
+};
+
+const generateGetPresignedUrl = async (key, expiresIn = 3600 * 24 * 7) => { // Default to 7 days
+    const command = new GetObjectCommand({
+        Bucket: bucketName,
+        Key: key
+    });
+
+    try {
+        const url = await getSignedUrl(s3Client, command, { expiresIn });
+        return url;
+    } catch (err) {
+        console.error("Get Presigned URL Error", err);
+        throw err;
+    }
+};
+
+const getKeyFromUrl = (url) => {
+    if (!url) return null;
+    try {
+        const urlObj = new URL(url);
+        // Pattern: https://bucket.s3.region.amazonaws.com/KEY
+        // pathname is /KEY
+        return urlObj.pathname.substring(1); // Remove leading slash
+    } catch (e) {
+        // Fallback for string matching if URL parse fails or format differs
+        const base = `https://${bucketName}.s3.${region}.amazonaws.com/`;
+        if (url.startsWith(base)) {
+            return url.substring(base.length);
+        }
+        return null; // Not an S3 URL from this bucket
     }
 };
 
@@ -114,6 +147,8 @@ const deleteObject = async (key) => {
 module.exports = { 
     uploadFile,
     generatePresignedUrl,
+    generateGetPresignedUrl,
+    getKeyFromUrl,
     checkObjectExists,
     deleteObject,
     configureBucketCors,

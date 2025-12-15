@@ -11,6 +11,7 @@ import 'highlight.js/styles/atom-one-dark.css';
 import 'katex/dist/katex.min.css'; // [NEW]
 import SparkleLogo from './icons/SparkleLogo';
 import { renderTextWithEmojis } from '../utils/emojiRenderer';
+import ImageViewerModal from './ImageViewerModal';
 
 const formatDuration = (ms) => {
     if (!ms) return '0:00';
@@ -77,12 +78,14 @@ const CodeBlock = ({ inline, className, children, ...props }) => {
     );
 };
 
-const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone, onRetry, onMarkHeard, onEdit, onImageLoad, onRegenerate, searchTerm, scrollToMessage }) => { // [MODIFIED] Added searchTerm, scrollToMessage
+
+const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone, onRetry, onMarkHeard, onEdit, onImageLoad, onRegenerate, searchTerm, scrollToMessage, onImageClick }) => { // [MODIFIED] Added onImageClick
     const [showMenu, setShowMenu] = useState(false);
     const [showFeedback, setShowFeedback] = useState(false); // [NEW] Feedback state
     const menuRef = useRef(null);
     const { token, user } = useAuth(); 
     const isAudio = msg.type === 'audio';
+    const [imgLoaded, setImgLoaded] = useState(false);
 
     const toggleMenu = (e) => {
         e.stopPropagation();
@@ -168,7 +171,7 @@ const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone, onRetr
         <div 
             id={`msg-${msg.id}`}
             className={`
-                flex ${isMe ? 'justify-end' : 'justify-start'} group max-w-full animate-slide-in-up ${showMenu ? 'z-[100] relative' : ''}
+                flex ${isMe ? 'justify-end' : 'justify-start'} group max-w-full ${showMenu ? 'z-[100] relative' : ''}
             `}
         >
             <div className={`max-w-[75%] flex flex-col ${isMe ? 'items-end' : 'items-start'}`}>
@@ -205,7 +208,8 @@ const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone, onRetr
                 <div className="relative group">
                     <div className={`
                         message-bubble
-                        px-4 py-3 shadow-md text-sm leading-relaxed break-all relative overflow-hidden
+                        ${(msg.type === 'image' || msg.type === 'gif') ? 'p-1' : 'px-4 py-3'}
+                        shadow-md text-sm leading-relaxed break-all relative overflow-hidden
                         ${isMe 
                             ? 'bg-violet-600 text-white rounded-2xl rounded-tr-sm whitespace-pre-wrap' 
                             : isAi 
@@ -291,7 +295,6 @@ const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone, onRetr
                                 )}
                             </div>
                         ) : msg.type === 'gif' ? (
-                            // ... (GIF rendering same)
                             <>
                             <div className="relative group/gif mt-1 mb-1 max-w-[200px] sm:max-w-[300px]">
                                 {msg.gif_url && msg.gif_url.endsWith('.mp4') ? (
@@ -326,6 +329,74 @@ const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone, onRetr
                                 </p>
                             )}
                             </>
+                        ) : msg.type === 'image' ? (
+                            <div className="flex flex-col mt-1 mb-1 max-w-[280px] sm:max-w-[320px] min-w-[120px]">
+                                <div 
+                                    className="relative group/image bg-slate-200 dark:bg-slate-700 rounded-lg overflow-hidden w-full transition-all duration-200"
+                                    style={{
+                                        aspectRatio: (msg.image_width && msg.image_height) ? `${msg.image_width} / ${msg.image_height}` : '1 / 1',
+                                        width: msg.image_width ? `${Math.min(msg.image_width, 320)}px` : '100%',
+                                        maxHeight: '600px'
+                                    }}
+                                >
+                                    <img 
+                                        src={msg.image_url} 
+                                        alt={msg.caption || "Image"} 
+                                        className={`w-full h-full object-cover cursor-pointer transition-opacity duration-300 display-block ${imgLoaded ? 'opacity-100' : 'opacity-0'}`}
+                                        loading="eager" 
+                                        decoding="async"
+                                        onLoad={() => {
+                                            setImgLoaded(true);
+                                            onImageLoad && onImageLoad();
+                                        }}
+                                        onClick={(e) => { e.stopPropagation(); onImageClick(msg); }}
+                                    />
+                                    {/* Small fuzzy blurred thumbnail or icon could go here if we had one, for now background color serves as placeholder */}
+                                    {!imgLoaded && (msg.image_width && msg.image_height) && (
+                                         <div className="absolute inset-0 flex items-center justify-center text-slate-400">
+                                             <span className="material-symbols-outlined text-[32px] opacity-20">image</span>
+                                         </div>
+                                    )}
+                                    {msg.status === 'sending' && (
+                                        <div className="absolute inset-0 bg-black/40 backdrop-blur-[2px] flex flex-col items-center justify-center transition-all duration-300 z-10">
+                                            {(msg.uploadProgress || 0) < 1 ? (
+                                                <div className="relative w-10 h-10">
+                                                    <svg className="w-full h-full transform -rotate-90" viewBox="0 0 36 36">
+                                                        <path
+                                                            className="text-white/20"
+                                                            d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
+                                                            fill="none"
+                                                            stroke="currentColor"
+                                                            strokeWidth="4"
+                                                        />
+                                                        <path
+                                                            className="text-white drop-shadow-md transition-all duration-200 ease-out"
+                                                            d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
+                                                            fill="none"
+                                                            stroke="currentColor"
+                                                            strokeWidth="4"
+                                                            strokeDasharray={`${Math.round((msg.uploadProgress || 0) * 100)}, 100`}
+                                                        />
+                                                    </svg>
+                                                    <div className="absolute inset-0 flex items-center justify-center text-[10px] font-bold text-white shadow-black/50 drop-shadow-sm">
+                                                        {Math.round((msg.uploadProgress || 0) * 100)}%
+                                                    </div>
+                                                </div>
+                                            ) : (
+                                                <div className="flex flex-col items-center gap-2 animate-in fade-in duration-300">
+                                                    <div className="w-8 h-8 rounded-full border-[3px] border-white/30 border-t-white animate-spin shadow-lg"></div>
+                                                    <span className="text-[10px] font-bold text-white shadow-black/50">Processing</span>
+                                                </div>
+                                            )}
+                                        </div>
+                                    )}
+                                </div>
+                                {msg.caption && (
+                                    <p className="text-sm mt-1 mb-1 whitespace-pre-wrap break-words px-1">
+                                        {linkifyText(msg.caption, searchTerm)}
+                                    </p>
+                                )}
+                            </div>
                         ) : (
                             <div className={`pr-2 ${!isMe && isAi ? 'markdown-content' : 'pr-6'}`}>
                                 {isAi && !isMe ? (
@@ -362,7 +433,7 @@ const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone, onRetr
                         
                         {isMe && (
                             <div className="absolute bottom-1 right-3 flex items-center gap-1 text-violet-200/80">
-                                {msg.status === 'sending' && <span className="material-symbols-outlined text-[10px] animate-spin">progress_activity</span>}
+                                {msg.status === 'sending' && msg.type !== 'image' && <span className="material-symbols-outlined text-[10px] animate-spin">progress_activity</span>}
                                 {msg.status === 'error' && <span className="material-symbols-outlined text-[14px] text-red-300">error</span>}
                                 {msg.status === 'sent' && <span className="material-symbols-outlined text-[14px]">check</span>}
                                 {msg.status === 'delivered' && <span className="material-symbols-outlined text-[14px] text-slate-300 dark:text-slate-400">done_all</span>}
@@ -487,7 +558,7 @@ const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone, onRetr
                             )}
 
                             {/* [NEW] Edit Option */}
-                            {isMe && !isAudio && msg.type !== 'gif' && !msg.is_deleted_for_everyone && (
+                            {isMe && !isAudio && msg.type !== 'gif' && !msg.is_deleted_for_everyone && (msg.type !== 'image' || msg.caption) && (
                                 <button 
                                     className="w-full flex items-center gap-2 px-3 py-2.5 text-left text-sm text-slate-700 dark:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors first:rounded-t-2xl last:rounded-b-2xl"
                                     onClick={(e) => {
@@ -594,6 +665,9 @@ const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone, onRetr
 export default function MessageList({ messages, setMessages, currentUser, roomId, socket, onReply, onDelete, onRetry, onEdit, onRegenerate, searchTerm }) { // [MODIFIED] Added searchTerm
     const { token } = useAuth();
     const [confirmDeleteMessage, setConfirmDeleteMessage] = useState(null);
+
+    // [NEW] Viewer State
+    const [viewingImage, setViewingImage] = useState(null);
 
     const [showScrollButton, setShowScrollButton] = useState(false);
     const scrollRef = useRef(null);
@@ -787,6 +861,13 @@ export default function MessageList({ messages, setMessages, currentUser, roomId
                 className="absolute inset-0 overflow-y-auto p-6 space-y-6 custom-scrollbar z-0"
                 onScroll={handleScroll}
             >
+                {viewingImage && (
+                    <ImageViewerModal 
+                        imageUrl={viewingImage.image_url} 
+                        caption={viewingImage.caption} 
+                        onClose={() => setViewingImage(null)} 
+                    />
+                )}
                 {messages.map((msg, index) => {
                     // [FIX] AI messages might have same user_id but are NOT 'me' for display purposes
                     const isAi = msg.user_id === 'ai-assistant' || msg.author_name === 'Assistant' || (msg.meta && msg.meta.ai) || msg.isStreaming;
@@ -861,6 +942,7 @@ export default function MessageList({ messages, setMessages, currentUser, roomId
                             onRegenerate={onRegenerate}
                             searchTerm={searchTerm} // [MODIFIED] Pass search term
                             scrollToMessage={scrollToMessage} // [NEW] Pass scrollToMessage
+                            onImageClick={(m) => setViewingImage(m)} // [NEW] Pass handler
                         />
                     );
                 })}

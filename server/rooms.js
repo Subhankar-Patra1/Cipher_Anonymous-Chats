@@ -1,7 +1,7 @@
 const express = require('express');
 const db = require('./db');
 const crypto = require('crypto');
-const { generatePresignedUrl, checkObjectExists, deleteObject, bucketName, region } = require('./s3');
+const { generatePresignedUrl, generateGetPresignedUrl, getKeyFromUrl, checkObjectExists, deleteObject, bucketName, region } = require('./s3');
 const S3_AVATAR_FOLDER = process.env.S3_AVATAR_FOLDER || 'avatars/';
 
 const router = express.Router();
@@ -444,6 +444,7 @@ router.get('/:id/messages', async (req, res) => {
                    m.author_name, m.meta,
                    (aps.heard_at IS NOT NULL) as audio_heard,
                    m.created_at,
+                   m.image_url, m.caption, m.image_width, m.image_height,
                    u.display_name, u.username, u.avatar_thumb_url, u.avatar_url 
             FROM messages m 
             LEFT JOIN users u ON m.user_id = u.id 
@@ -454,7 +455,7 @@ router.get('/:id/messages', async (req, res) => {
             ORDER BY m.created_at ASC
         `, [roomId, req.user.id]);
 
-        const messages = messagesRes.rows.map(msg => {
+        const messages = await Promise.all(messagesRes.rows.map(async (msg) => {
             let parsedWaveform = [];
             if (msg.audio_waveform) {
                 try {
@@ -463,12 +464,16 @@ router.get('/:id/messages', async (req, res) => {
                     // ignore
                 }
             }
+
+            // [REVERTED] No dynamic signing/proxying. AWS Bucket should be Public.
+            // if (msg.type === 'image' && msg.image_url) { ... }
+
             return { 
                 ...msg, 
                 audio_waveform: parsedWaveform,
                 created_at: msg.created_at
             };
-        });
+        }));
 
         res.json(messages);
     } catch (error) {
