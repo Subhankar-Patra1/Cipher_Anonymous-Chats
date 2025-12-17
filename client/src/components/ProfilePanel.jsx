@@ -4,6 +4,7 @@ import { useAuth } from '../context/AuthContext';
 import { usePresence } from '../context/PresenceContext';
 import StatusDot from './StatusDot';
 import AvatarEditorModal from './AvatarEditorModal';
+import PasscodeSettingsModal from './PasscodeSettingsModal';
 import PickerPanel from './PickerPanel';
 import ContentEditable from 'react-contenteditable';
 import { linkifyText } from '../utils/linkify';
@@ -40,6 +41,9 @@ export default function ProfilePanel({ userId, roomId, onClose, onActionSuccess,
     const [isEditingBio, setIsEditingBio] = useState(false);
     const [editedBio, setEditedBio] = useState('');
     const [bioLoading, setBioLoading] = useState(false);
+    
+    // [NEW] Passcode Modal
+    const [showPasscodeModal, setShowPasscodeModal] = useState(false);
     
     // Display Name State
     const [isEditingName, setIsEditingName] = useState(false);
@@ -872,19 +876,29 @@ export default function ProfilePanel({ userId, roomId, onClose, onActionSuccess,
                         )}
                         
                         {isMe && (
-                             <button 
-                                onClick={() => setConfirmModal({ 
-                                    type: 'account_delete', 
-                                    title: 'Delete Account?', 
-                                    desc: 'This will permanently delete your account. Messages will be anonymized. This cannot be undone.',
-                                    actionReq: handleDeleteAccount,
-                                    destructive: true
-                                })}
-                                className="w-full flex items-center gap-4 p-3 hover:bg-red-50 dark:hover:bg-slate-800/50 rounded-lg text-red-600 dark:text-red-500 hover:bg-red-50 dark:hover:bg-red-500/10 transition-colors text-left"
-                            >
-                                <span className="material-symbols-outlined">no_accounts</span>
-                                <span className="text-sm font-bold">Delete Account</span>
-                            </button>
+                             <>
+                                <button 
+                                    onClick={() => setShowPasscodeModal(true)}
+                                    className="w-full flex items-center gap-4 p-3 hover:bg-slate-100 dark:hover:bg-slate-800/50 rounded-lg text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors text-left"
+                                >
+                                    <span className="material-symbols-outlined text-slate-400 dark:text-slate-500">lock</span>
+                                    <span className="text-sm font-medium">App Lock</span>
+                                </button>
+
+                                <button 
+                                    onClick={() => setConfirmModal({ 
+                                        type: 'account_delete', 
+                                        title: 'Delete Account?', 
+                                        desc: 'This will permanently delete your account. Messages will be anonymized. This cannot be undone.',
+                                        actionReq: handleDeleteAccount,
+                                        destructive: true
+                                    })}
+                                    className="w-full flex items-center gap-4 p-3 hover:bg-red-50 dark:hover:bg-slate-800/50 rounded-lg text-red-600 dark:text-red-500 hover:bg-red-50 dark:hover:bg-red-500/10 transition-colors text-left"
+                                >
+                                    <span className="material-symbols-outlined">no_accounts</span>
+                                    <span className="text-sm font-bold">Delete Account</span>
+                                </button>
+                             </>
                         )}
                     </div>
                 </div>
@@ -924,6 +938,10 @@ export default function ProfilePanel({ userId, roomId, onClose, onActionSuccess,
                     updateUser(data);
                 }}
             />
+            
+            {showPasscodeModal && (
+                <PasscodeSettingsModal onClose={() => setShowPasscodeModal(false)} />
+            )}
             
             {/* Image Viewer */}
             {viewingImage && (

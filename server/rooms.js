@@ -361,6 +361,34 @@ router.post('/:id/members', async (req, res) => {
         // Notify Target (Invite)
         io.to(`user:${targetUserId}`).emit('group:invited', { groupId: parseInt(roomId), invitedBy: req.user.id });
 
+        // [NEW] Emit room_added to the target user so it appears in their list immediately
+        const roomRes = await db.query('SELECT * FROM rooms WHERE id = $1', [roomId]);
+        const roomData = roomRes.rows[0];
+
+        const permsRes = await db.query('SELECT * FROM group_permissions WHERE group_id=$1', [roomId]);
+        const perms = permsRes.rows.length ? permsRes.rows[0] : {
+            allow_name_change: true,
+            allow_description_change: true,
+            allow_add_members: true,
+            allow_remove_members: true,
+            send_mode: 'everyone'
+        };
+
+        const roomForTarget = {
+            ...roomData,
+            role: 'member',
+            unread_count: 1, // System message
+            last_message_content: `${targetRes.rows[0].display_name} was added by ${actorRes.rows[0].display_name}`,
+            last_message_type: 'system',
+            last_message_sender_id: req.user.id,
+            last_message_status: 'sent',
+            last_message_id: sysMsgRes.rows[0].id,
+            last_message_at: new Date().toISOString(),
+            ...perms
+        };
+        
+        io.to(`user:${targetUserId}`).emit('room_added', roomForTarget);
+
         res.json({ success: true });
 
     } catch (error) {
@@ -377,7 +405,7 @@ router.post('/:id/members', async (req, res) => {
 router.get('/', async (req, res) => {
     try {
         const roomsRes = await db.query(`
-            SELECT r.*, rm.role, rm.last_read_at, rm.is_archived,
+            SELECT r.*, rm.role, rm.last_read_at, rm.is_archived, rm.is_pinned, rm.pinned_at,
             (SELECT u.display_name FROM room_members rm2 JOIN users u ON rm2.user_id = u.id WHERE rm2.room_id = r.id AND rm2.user_id != $1::integer LIMIT 1) as other_user_name,
             (SELECT u.username FROM room_members rm2 JOIN users u ON rm2.user_id = u.id WHERE rm2.room_id = r.id AND rm2.user_id != $1::integer LIMIT 1) as other_user_username,
             (SELECT u.avatar_thumb_url FROM room_members rm2 JOIN users u ON rm2.user_id = u.id WHERE rm2.room_id = r.id AND rm2.user_id != $1::integer LIMIT 1) as other_user_avatar_thumb,
@@ -408,7 +436,7 @@ router.get('/', async (req, res) => {
                 LIMIT 1
             ) last_msg ON true
             WHERE rm.user_id = $1::integer AND (rm.is_hidden IS FALSE OR rm.is_hidden IS NULL)
-            ORDER BY rm.is_archived ASC, COALESCE(r.last_message_at, r.created_at) DESC
+            ORDER BY rm.is_archived ASC, rm.is_pinned DESC, rm.pinned_at DESC, COALESCE(r.last_message_at, r.created_at) DESC
         `, [req.user.id]);
         
         const rooms = roomsRes.rows;
@@ -1176,7 +1204,7 @@ router.delete('/:id/avatar', async (req, res) => {
 // Archive Chat
 router.post('/:id/archive', async (req, res) => {
     try {
-        await db.query('UPDATE room_members SET is_archived = TRUE WHERE room_id = $1 AND user_id = $2', [req.params.id, req.user.id]);
+        await db.query('UPDATE room_members SET is_archived = TRUE, is_pinned = FALSE, pinned_at = NULL WHERE room_id = $1 AND user_id = $2', [req.params.id, req.user.id]);
         res.json({ success: true });
     } catch (error) {
         console.error(error);
@@ -1188,6 +1216,54 @@ router.post('/:id/archive', async (req, res) => {
 router.post('/:id/unarchive', async (req, res) => {
     try {
         await db.query('UPDATE room_members SET is_archived = FALSE WHERE room_id = $1 AND user_id = $2', [req.params.id, req.user.id]);
+        res.json({ success: true });
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ error: 'Server error' });
+    }
+});
+
+// Pin Chat
+// Pin Chat
+router.post('/:id/pin', async (req, res) => {
+    try {
+        const roomId = req.params.id;
+
+        // 1. Get Room Type
+        const roomRes = await db.query('SELECT type FROM rooms WHERE id = $1', [roomId]);
+        const room = roomRes.rows[0];
+        if (!room) return res.status(404).json({ error: 'Room not found' });
+        
+        // 2. Check current pin count for this specific type
+        const countRes = await db.query(`
+            SELECT COUNT(*) 
+            FROM room_members rm
+            JOIN rooms r ON rm.room_id = r.id
+            WHERE rm.user_id = $1 
+            AND rm.is_pinned = TRUE 
+            AND rm.is_archived = FALSE
+            AND r.type = $2
+        `, [req.user.id, room.type]);
+
+        const count = parseInt(countRes.rows[0].count);
+
+        if (count >= 8) {
+            const typeLabel = room.type === 'direct' ? 'direct chats' : 'groups';
+            return res.status(400).json({ error: `You can only pin up to 8 ${typeLabel}` });
+        }
+
+        await db.query('UPDATE room_members SET is_pinned = TRUE, pinned_at = NOW() WHERE room_id = $1 AND user_id = $2', [roomId, req.user.id]);
+        res.json({ success: true });
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ error: 'Server error' });
+    }
+});
+
+// Unpin Chat
+router.post('/:id/unpin', async (req, res) => {
+    try {
+        await db.query('UPDATE room_members SET is_pinned = FALSE, pinned_at = NULL WHERE room_id = $1 AND user_id = $2', [req.params.id, req.user.id]);
         res.json({ success: true });
     } catch (error) {
         console.error(error);

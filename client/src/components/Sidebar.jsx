@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { usePresence } from '../context/PresenceContext';
+import { useAppLock } from '../context/AppLockContext';
 import { useTheme } from '../context/ThemeContext';
 import StatusDot from './StatusDot';
 import ProfileShareModal from './ProfileShareModal';
@@ -12,6 +13,7 @@ import SidebarContextMenu from './SidebarContextMenu';
 
 export default function Sidebar({ rooms, activeRoom, onSelectRoom, loadingRoomId, onCreateRoom, onJoinRoom, user, onLogout, onRefresh }) {
     const { presenceMap, fetchStatuses } = usePresence();
+    const { hasPasscode, lockApp } = useAppLock();
     const { theme, toggleTheme } = useTheme();
     const [tab, setTab] = useState('group'); // 'group' or 'direct'
     const [searchQuery, setSearchQuery] = useState('');
@@ -111,6 +113,17 @@ export default function Sidebar({ rooms, activeRoom, onSelectRoom, loadingRoomId
         });
     };
 
+    const [isLocking, setIsLocking] = useState(false);
+
+    const handleLockClick = () => {
+        setIsLocking(true);
+        // Play animation (icon switch) then lock
+        setTimeout(() => {
+            lockApp();
+            setIsLocking(false);
+        }, 600);
+    };
+
     return (
         <div className="w-full h-full bg-white/50 dark:bg-slate-900/50 backdrop-blur-xl border-r border-slate-200 dark:border-slate-800 flex flex-col shadow-2xl transition-colors">
             {/* ... (Header) ... */}
@@ -161,11 +174,33 @@ export default function Sidebar({ rooms, activeRoom, onSelectRoom, loadingRoomId
                     </button>
                     <button 
                         onClick={onLogout} 
-                        className="p-2 rounded-full text-slate-400 hover:text-red-500 hover:bg-red-100 dark:hover:text-red-400 dark:hover:bg-red-500/10 transition-all duration-200"
+                        className="w-10 h-10 flex items-center justify-center rounded-full text-slate-400 hover:text-red-500 hover:bg-red-100 dark:hover:text-red-400 dark:hover:bg-red-500/10 transition-all duration-200"
                         title="Logout"
                     >
                         <span className="material-symbols-outlined text-xl">logout</span>
                     </button>
+                    
+                    {hasPasscode && (
+                        <div className="relative group/lock-container">
+                             <button 
+                                onClick={handleLockClick}
+                                className="w-10 h-10 flex items-center justify-center rounded-full text-slate-400 hover:text-violet-500 hover:bg-violet-100 dark:hover:text-violet-400 dark:hover:bg-violet-900/20 transition-all duration-200 relative"
+                            >
+                                <span className={`material-symbols-outlined text-xl transition-all duration-300 ${isLocking ? 'scale-110 text-violet-500' : ''}`}>
+                                    {isLocking ? 'lock' : 'lock_open'}
+                                </span>
+                            </button>
+                            
+                            {/* Custom Tooltip */}
+                            <div className="absolute top-12 right-0 w-max pointer-events-none opacity-0 group-hover/lock-container:opacity-100 transition-opacity duration-200 z-50">
+                                <div className="bg-[#2a2a2a] text-white text-xs py-2 px-3 rounded-lg shadow-xl border border-white/5 relative">
+                                    Tap to lock Cipher.
+                                    {/* Triangle pointer */}
+                                    <div className="absolute -top-1 right-3 w-2 h-2 bg-[#2a2a2a] border-t border-l border-white/5 transform rotate-45"></div>
+                                </div>
+                            </div>
+                        </div>
+                    )}
                 </div>
             </div>
 
@@ -381,31 +416,37 @@ export default function Sidebar({ rooms, activeRoom, onSelectRoom, loadingRoomId
                             {/* Right Side Column: Menu + Badge */}
                             <div className="flex flex-col items-end gap-1 ml-2">
                                 {/* Three-dot Menu Button - Shows on Hover */}
-                                <div
-                                    onClick={(e) => {
-                                        e.stopPropagation();
-                                        setContextMenu({
-                                            visible: true,
-                                            x: e.clientX,
-                                            y: e.clientY,
-                                            room: room
-                                        });
-                                    }}
-                                    className={`w-5 h-5 rounded-full hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-400 hover:text-slate-600 dark:text-slate-500 dark:hover:text-slate-300 flex items-center justify-center transition-all shrink-0 mb-auto cursor-pointer ${
-                                        contextMenu.visible && contextMenu.room?.id === room.id 
-                                        ? 'opacity-100 bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300' 
-                                        : 'opacity-0 group-hover:opacity-100'
-                                    }`}
-                                    title="More options"
-                                >
-                                    <span className="material-symbols-outlined text-[16px]">more_horiz</span>
-                                </div>
+                                {room.type !== 'ai' && (
+                                    <div
+                                        onClick={(e) => {
+                                            e.stopPropagation();
+                                            setContextMenu({
+                                                visible: true,
+                                                x: e.clientX,
+                                                y: e.clientY,
+                                                room: room
+                                            });
+                                        }}
+                                        className={`w-5 h-5 rounded-full hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-400 hover:text-slate-600 dark:text-slate-500 dark:hover:text-slate-300 flex items-center justify-center transition-all shrink-0 mb-auto cursor-pointer ${
+                                            contextMenu.visible && contextMenu.room?.id === room.id 
+                                            ? 'opacity-100 bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300' 
+                                            : 'opacity-0 group-hover:opacity-100'
+                                        }`}
+                                        title="More options"
+                                    >
+                                        <span className="material-symbols-outlined text-[16px]">more_horiz</span>
+                                    </div>
+                                )}
 
                                 {/* Loading Indicator or Badge - At Bottom */}
                                 {loadingRoomId === room.id ? (
                                     <div className="w-5 h-5 border-2 border-violet-500/30 border-t-violet-500 rounded-full animate-spin"></div>
                                 ) : (
                                     <div className="flex items-center gap-1">
+                                        {/* Pinned Icon */}
+                                        {room.is_pinned && (
+                                            <span className="material-symbols-outlined text-[16px] text-slate-400 dark:text-slate-500 transform rotate-45">push_pin</span>
+                                        )}
                                          {/* Mention Badge */}
                                          {room.unread_count > 0 && room.last_message_content && room.last_message_content.includes(`(user:${user.id})`) && (
                                             <span className="bg-orange-500 text-white w-5 h-5 rounded-full flex items-center justify-center shadow-sm animate-pulse">
@@ -433,6 +474,35 @@ export default function Sidebar({ rooms, activeRoom, onSelectRoom, loadingRoomId
                     y={contextMenu.y}
                     onClose={() => setContextMenu({ ...contextMenu, visible: false })}
                     options={[
+                        !contextMenu.room.is_archived && {
+                            label: contextMenu.room.is_pinned ? 'Unpin' : 'Pin',
+                            icon: 'push_pin',
+                            onClick: async () => {
+                                try {
+                                    const action = contextMenu.room.is_pinned ? 'unpin' : 'pin';
+                                    const token = localStorage.getItem('token');
+                                    const res = await fetch(`${import.meta.env.VITE_API_URL}/api/rooms/${contextMenu.room.id}/${action}`, {
+                                        method: 'POST',
+                                        headers: { Authorization: `Bearer ${token}` }
+                                    });
+                                    const data = await res.json();
+                                    
+                                    if (!res.ok) {
+                                        if (data.error && (data.error.includes('pin up to 8') || data.error.includes('8 chats'))) {
+                                            alert(data.error);
+                                        } else {
+                                            console.error(data.error);
+                                        }
+                                        return;
+                                    }
+
+                                    // Trigger refresh
+                                    if (onRefresh) onRefresh();
+                                } catch (e) {
+                                    console.error(e);
+                                }
+                            }
+                        },
                         {
                             label: contextMenu.room.is_archived ? 'Unarchive' : 'Archive',
                             icon: contextMenu.room.is_archived ? 'unarchive' : 'inventory_2',
@@ -451,7 +521,7 @@ export default function Sidebar({ rooms, activeRoom, onSelectRoom, loadingRoomId
                                 }
                             }
                         }
-                    ]}
+                    ].filter(Boolean)}
                 />
             )}
 

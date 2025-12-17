@@ -122,7 +122,7 @@ const GroupAddParticipantsView = ({
                         </div>
                         <div className="flex-1 min-w-0">
                             <div className="text-sm font-bold text-slate-800 dark:text-slate-200 truncate transition-colors">{renderTextWithEmojis(user.display_name)}</div>
-                            <div className="text-xs text-slate-500 dark:text-slate-500 truncate transition-colors">@{user.username}</div>
+                            <div className="text-xs text-slate-500 dark:text-slate-500 truncate transition-colors">{user.username.startsWith('@') ? user.username : '@' + user.username}</div>
                         </div>
                         {adding ? (
                              <div className="animate-spin rounded-full h-5 w-5 border-2 border-slate-500 border-t-transparent"></div>

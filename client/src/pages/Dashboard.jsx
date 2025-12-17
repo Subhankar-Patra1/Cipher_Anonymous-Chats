@@ -33,6 +33,35 @@ export default function Dashboard() {
     const [isResizing, setIsResizing] = useState(false);
     const sidebarRef = useRef(null);
 
+    // [NEW] Helper to sort rooms: Pinned first (by pin time), then by last message/creation time
+    const sortRooms = (roomsToSort) => {
+        return [...roomsToSort].sort((a, b) => {
+            // 1. Pinned
+            if (a.is_pinned && !b.is_pinned) return -1;
+            if (!a.is_pinned && b.is_pinned) return 1;
+
+            if (a.is_pinned && b.is_pinned) {
+                 // Sort by pin time (desc) - "Stack" behavior
+                 const pinTimeA = a.pinned_at ? new Date(a.pinned_at).getTime() : 0;
+                 const pinTimeB = b.pinned_at ? new Date(b.pinned_at).getTime() : 0;
+                 
+                 if (pinTimeA !== pinTimeB) {
+                     return pinTimeB - pinTimeA;
+                 }
+                 // Tie-breaker: Fallback to last message time
+            }
+
+            // 2. Archived (Though archived usually hidden or filtered, we sort them last just in case)
+            if (a.is_archived && !b.is_archived) return 1;
+            if (!a.is_archived && b.is_archived) return -1;
+            
+            // 3. Time (desc)
+            const timeA = new Date(a.last_message_at || a.created_at).getTime();
+            const timeB = new Date(b.last_message_at || b.created_at).getTime();
+            return timeB - timeA;
+        });
+    };
+
     const startResizing = useCallback(() => setIsResizing(true), []);
     const stopResizing = useCallback(() => setIsResizing(false), []);
 
@@ -100,11 +129,14 @@ export default function Dashboard() {
             console.error('[DEBUG] Socket connection error:', err.message);
         });
 
+        // Helper moved to component scope
+
+
         newSocket.on('room_added', (newRoom) => {
             console.log('[DEBUG-CLIENT] room_added received:', newRoom);
             setRooms(prev => {
                 if (prev.find(r => r.id === newRoom.id)) return prev;
-                return [newRoom, ...prev];
+                return sortRooms([newRoom, ...prev]);
             });
             newSocket.emit('join_room', newRoom.id);
         });
@@ -121,7 +153,7 @@ export default function Dashboard() {
                     });
                     if (res.ok) {
                         const data = await res.json();
-                        setRooms(data);
+                        setRooms(data); // API already sorts, but maybe safer to sort client side too? API result is usually trusted.
                     }
                 } catch (err) {
                     console.error(err);
@@ -146,10 +178,7 @@ export default function Dashboard() {
                 const roomIndex = updatedRooms.findIndex(r => String(r.id) === String(msg.room_id));
                 
                 // [NEW] Emit delivered globally if received (e.g. in sidebar)
-                // We check if it's not our own message to avoid self-ack
                 if (String(msg.user_id) !== String(user.id)) {
-                    // We can emit 'message_delivered' here. 
-                    // Server handles idempotency so safe if ChatWindow also emits it.
                     console.log('[DEBUG-CLIENT] Emitting global message_delivered for msg:', msg.id);
                     newSocket.emit('message_delivered', { messageId: msg.id, roomId: msg.room_id });
                 }
@@ -164,13 +193,14 @@ export default function Dashboard() {
                      room.last_message_content = msg.content;
                      room.last_message_type = msg.type;
                      room.last_message_sender_id = msg.user_id;
-                     room.last_message_status = msg.status || 'sent'; // Default to sent if missing
+                     room.last_message_status = msg.status || 'sent';
                      room.last_message_id = msg.id;
                      room.last_message_caption = msg.caption;
+                     room.last_message_at = new Date().toISOString(); // Update timestamp for sorting
 
-                     // Remove and unshift to top
-                     updatedRooms.splice(roomIndex, 1);
-                     updatedRooms.unshift(room);
+                     updatedRooms[roomIndex] = room;
+                     // Re-sort using our helper
+                     return sortRooms(updatedRooms);
                 }
                 return updatedRooms;
             });
@@ -507,7 +537,7 @@ export default function Dashboard() {
                 // Check if room already exists in list
                 const exists = rooms.find(r => r.id === newRoom.id);
                 if (!exists) {
-                    setRooms([newRoom, ...rooms]);
+                    setRooms(prev => sortRooms([newRoom, ...prev]));
                 }
                 
                 setShowCreateModal(false);
@@ -532,7 +562,7 @@ export default function Dashboard() {
             if (res.ok) {
                 // Check if already in list
                 if (!rooms.find(r => r.id === newRoom.id)) {
-                    setRooms(prev => [newRoom, ...prev]);
+                    setRooms(prev => sortRooms([newRoom, ...prev]));
                 }
                 setShowJoinModal(false);
                 

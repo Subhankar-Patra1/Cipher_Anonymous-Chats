@@ -58,3 +58,8 @@ I have successfully implemented the profile picture feature, allowing users to u
 ## Code Changes
 - **Server:** Updated `db.js`, `s3.js`, `users.js`, `rooms.js`, `messages.js`, and `index.js`.
 - **Client:** Updated `AuthContext.jsx`, `Dashboard.jsx`, `Sidebar.jsx`, `ChatWindow.jsx`, `MessageList.jsx`, and created `AvatarEditorModal.jsx`. 
+
+## Bug Fixes
+- **Username Display:** Fixed an issue where usernames were displayed with a double "@" symbol in the "Add Participants" view (`GroupAddParticipantsView.jsx`) by conditionally prepending the prefix.
+- **Pinned Chats:** Fixed sorting, limit enforcement, and archive behavior for pinned chats.
+- **Group Updates:** Fixed real-time updates when a user is added to a group.
