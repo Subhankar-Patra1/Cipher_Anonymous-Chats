@@ -22,6 +22,8 @@
 - **💬 Typing Indicators**: See when others are typing in real-time.
 - **🔐 App Lock**: Secure your access with a robust passcode entry system.
 - **🖼️ Advanced Media Viewer**: Full touch support with pinch-to-zoom, pan, and swipe navigation for images.
+- **🖼️ Smart Image Grouping**: Upload multiple images with individual captions, or group them into a beautiful grid with a shared caption.
+- **📂 Advanced File Sharing**: Share any file type with instant previews and dedicated download controls.
 - **📱 Native-Like Mobile Experience**: Highly polished responsive design with smooth transitions and touch-friendly controls.
 
 ## 🛠️ Tech Stack
