@@ -119,7 +119,7 @@ router.post('/audio', upload.single('audio'), async (req, res) => {
 // Send Image (Multiple)
 router.post('/image', upload.array('images', 10), async (req, res) => {
     try {
-        const { roomId, caption, size, tempId, replyToMessageId } = req.body;
+        const { roomId, caption, size, tempId, replyToMessageId, isViewOnce } = req.body;
         // width/height might come as arrays or single values depending on implementation. 
         // For simplicity, let's assume we calculate dimensions on server or client sends JSON metadata.
         // Client plan: Client sends files. Client also needs to send metadata? 
@@ -133,8 +133,13 @@ router.post('/image', upload.array('images', 10), async (req, res) => {
             if (req.file) files = [req.file]; // Should not happen with upload.array but just in case of mixed middleware use
         }
 
-        if (!files || files.length === 0) return res.status(400).json({ error: 'No image files provided' });
+        if (!files || files.length === 0) {
+            return res.status(400).json({ error: 'No image files provided' });
+        }
         
+        console.log('[DEBUG] Upload Image Body:', JSON.stringify(req.body, null, 2));
+        console.log('[DEBUG] Files received:', files.length);
+
         // Verify room membership
         const memberRes = await db.query('SELECT * FROM room_members WHERE room_id = $1 AND user_id = $2', [roomId, req.user.id]);
         if (!memberRes.rows[0]) {
@@ -179,10 +184,10 @@ router.post('/image', upload.array('images', 10), async (req, res) => {
         // Insert into DB
         // Insert into DB
         const result = await db.query(
-            `INSERT INTO messages (room_id, user_id, type, image_url, image_width, image_height, image_size, content, caption, reply_to_message_id, attachments) 
-             VALUES ($1, $2, 'image', $3, $4, $5, $6, $7, $8, $9, $10) 
+            `INSERT INTO messages (room_id, user_id, type, image_url, image_width, image_height, image_size, content, caption, reply_to_message_id, attachments, is_view_once) 
+             VALUES ($1, $2, 'image', $3, $4, $5, $6, $7, $8, $9, $10, $11) 
              RETURNING id, status, created_at`,
-            [roomId, req.user.id, primaryImage.url, primaryImage.width, primaryImage.height, primaryImage.size, 'Image', caption || '', replyToMessageId || null, JSON.stringify(attachments)]
+            [roomId, req.user.id, primaryImage.url, primaryImage.width, primaryImage.height, primaryImage.size, 'Image', caption || '', replyToMessageId || null, JSON.stringify(attachments), isViewOnce === 'true' || isViewOnce === true]
         );
         
         // Update Room Last Message At
@@ -214,7 +219,9 @@ router.post('/image', upload.array('images', 10), async (req, res) => {
             display_name: user ? user.display_name : req.user.display_name,
             avatar_thumb_url: user ? user.avatar_thumb_url : null,
             avatar_url: user ? user.avatar_url : null,
-            tempId: tempId
+            tempId: tempId,
+            is_view_once: isViewOnce === 'true' || isViewOnce === true,
+            viewed_by: []
         };
         
         const io = req.app.get('io');
@@ -584,6 +591,75 @@ router.get('/proxy-download', async (req, res) => {
     } catch (err) {
         console.error('Proxy download error:', err);
         res.status(500).json({ error: 'Download failed' });
+    }
+});
+
+// View Once - Get Image
+router.get('/:id/view-once', async (req, res) => {
+    const messageId = req.params.id;
+    const userId = req.user.id;
+
+    try {
+        const result = await db.query(`
+            SELECT m.*, 
+            (SELECT COUNT(*) FROM room_members rm WHERE rm.room_id = m.room_id) as room_member_count
+            FROM messages m WHERE m.id = $1
+        `, [messageId]);
+        if (result.rows.length === 0) return res.status(404).json({ error: 'Message not found' });
+
+        const message = result.rows[0];
+
+        if (!message.is_view_once) {
+            return res.status(400).json({ error: 'Not a view-once message' });
+        }
+
+        // Check if user already viewed
+        if (message.viewed_by && message.viewed_by.includes(userId)) {
+             return res.status(403).json({ error: 'Photo expired' });
+        }
+
+        // Mark as viewed
+        await db.query(`
+            UPDATE messages 
+            SET viewed_by = array_append(COALESCE(viewed_by, '{}'), $1)
+            WHERE id = $2
+        `, [userId, messageId]);
+        
+        // Notify room
+        const io = req.app.get('io');
+        const updatedViewedBy = [...(message.viewed_by || []), userId];
+        const eventData = {
+            id: messageId,
+            room_id: message.room_id,
+            userId: userId,
+            viewed_by: updatedViewedBy,
+            room_member_count: parseInt(message.room_member_count || 0)
+        };
+        console.log(`[DEBUG] Emitting message_viewed for msg ${messageId} to room:${message.room_id}`, eventData);
+        
+        // Emit to room (ensure string logic matches join)
+        io.to(`room:${message.room_id}`).emit('message_viewed', eventData);
+        
+        // Also emit to the sender specifically if possible (safety net)
+        if (message.user_id) {
+             console.log(`[DEBUG] Also emitting to user:${message.user_id}`);
+             io.to(`user:${message.user_id}`).emit('message_viewed', eventData);
+        }
+
+        // Stream image
+        const axios = require('axios');
+        const response = await axios({
+            method: 'get',
+            url: message.image_url,
+            responseType: 'stream'
+        });
+
+        res.setHeader('Content-Type', response.headers['content-type']);
+        response.data.pipe(res);
+
+    } catch (err) {
+        console.error('Error fetching view once:', err);
+        res.status(500).json({ error: 'Server error' });
     }
 });
 

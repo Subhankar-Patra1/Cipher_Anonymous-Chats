@@ -97,6 +97,83 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
     const [editingMessage, setEditingMessage] = useState(null);
     const [typingUsers, setTypingUsers] = useState([]);
     const [selectedImages, setSelectedImages] = useState(null); // [NEW] Scoped Image Preview State (Array)
+    const [loadingMore, setLoadingMore] = useState(false);
+    const [hasMore, setHasMore] = useState(true);
+
+    const hydrateMessages = (newMsgs, existingMsgs = []) => {
+        const all = [...newMsgs, ...existingMsgs];
+        const byId = new Map(all.map(m => [m.id, m]));
+        
+        return newMsgs.map(m => {
+             if (!m.reply_to_message_id) return m;
+             const original = byId.get(m.reply_to_message_id);
+             if (!original) return m;
+
+             const raw = original.content || "";
+             const normalized = raw.replace(/\s+/g, " ").trim();
+             const maxLen = 120;
+             const snippet = normalized.length > maxLen ? normalized.slice(0, maxLen) + "…" : normalized;
+
+             return {
+                 ...m,
+                 replyTo: {
+                     id: original.id,
+                     sender: original.display_name || original.username,
+                     text: snippet,
+                     type: original.type,
+                     is_view_once: original.is_view_once,
+                     audio_duration_ms: original.audio_duration_ms
+                 }
+             };
+        });
+    };
+
+    const handleLoadOlderMessages = async () => {
+        if (loadingMore || !hasMore || messages.length === 0) return;
+
+        setLoadingMore(true);
+        const oldestMsg = messages[0];
+        const oldestId = oldestMsg.created_at; 
+
+        try {
+            const res = await fetch(`${import.meta.env.VITE_API_URL}/api/rooms/${room.id}/messages?limit=50&before=${oldestId}`, {
+                headers: { Authorization: `Bearer ${token}` }
+            });
+
+            if (res.ok) {
+                const newMessages = await res.json();
+                
+                // Hydrate
+                const hydratedMessages = hydrateMessages(newMessages, messages);
+                 
+                if (hydratedMessages.length < 50) {
+                    setHasMore(false);
+                }
+
+                if (hydratedMessages.length > 0) {
+                    setMessages(prev => [...hydratedMessages, ...prev]);
+                }
+            }
+        } catch (err) {
+            console.error("Failed to load older messages", err);
+        } finally {
+            setLoadingMore(false);
+        }
+    };
+
+    // [NEW] Persist Cache (Latest 50)
+    useEffect(() => {
+        if (messages.length > 0) {
+            const latest50 = messages.slice(-50);
+            localStorage.setItem(`chat_messages_${room.id}`, JSON.stringify(latest50));
+        }
+    }, [messages, room.id]);
+
+    // Reset Pagination on Room Change
+    useEffect(() => {
+        setHasMore(true);
+        setLoadingMore(false);
+    }, [room.id]);
 
     const typingTimeoutsRef = useRef({});
 
@@ -296,6 +373,21 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
              }
         };
 
+        const handleMessageViewed = ({ id, userId, viewed_by, room_member_count }) => {
+            console.log("Socket message_viewed received:", id, userId);
+            setMessages(prev => prev.map(msg => {
+                if (String(msg.id) === String(id)) {
+                    const nextViewedBy = viewed_by || [...(msg.viewed_by || []), userId];
+                    return { 
+                        ...msg, 
+                        viewed_by: nextViewedBy,
+                        room_member_count: room_member_count || msg.room_member_count
+                    };
+                }
+                return msg;
+            }));
+        };
+
         const handleTypingStart = ({ room_id, user_id, user_name }) => {
              if (String(room_id) !== String(room.id)) return;
              
@@ -328,6 +420,7 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
         socket.on('messages_status_update', handleStatusUpdate);
         socket.on('message_deleted', handleMessageDeleted);
         socket.on('message_edited', handleMessageEdited);
+        socket.on('message_viewed', handleMessageViewed);
         socket.on('typing:start', handleTypingStart);
         socket.on('typing:stop', handleTypingStop);
 
@@ -364,7 +457,8 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
             socket.off('message_edited', handleMessageEdited);
             socket.off('typing:start', handleTypingStart);
             socket.off('typing:stop', handleTypingStop);
-            socket.off('chat:cleared'); // [FIX] forgot to cleanup this one? It was implicit but good to be explicit
+            socket.off('message_viewed', handleMessageViewed);
+            socket.off('chat:cleared'); 
             socket.off('user:profile:updated', handleProfileUpdate);
             
             Object.values(typingTimeoutsRef.current).forEach(clearTimeout);
@@ -569,7 +663,7 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
         return `${typingUsers[0].name}, ${typingUsers[1].name}, and ${typingUsers.length - 2} others are typing...`;
     };
 
-    const handleSendImages = async (files, caption, configs) => {
+    const handleSendImages = async (files, caption, configs, isViewOnce) => {
         // configs is array of { width, height, ... } corresponding to files
         console.log('[DEBUG] ChatWindow handleSendImages:', files.length, 'files');
         const tempId = `temp-${Date.now()}`;
@@ -604,16 +698,21 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
             status: 'sending',
             uploadStatus: 'uploading',
             uploadProgress: 0,
-            localBlobs: files // Store all blobs for retry
+            localBlobs: files, // Store all blobs for retry
+            is_view_once: isViewOnce,
+            viewed_by: []
         };
         setMessages(prev => [...prev, tempMsg]);
         setReplyTo(null); // Clear reply context
 
         const formData = new FormData();
-        files.forEach(f => formData.append('images', f));
+        // Append text fields first (Multer best practice)
         formData.append('roomId', room.id);
         formData.append('caption', caption || '');
-        
+        formData.append('isViewOnce', isViewOnce);
+        if (replyTo) formData.append('replyToMessageId', replyTo.id);
+        formData.append('tempId', tempId);
+
         // Append dims
         if (configs) {
             configs.forEach(c => {
@@ -621,9 +720,9 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
                  formData.append('heights', c.height);
             });
         }
-        
-        if (replyTo) formData.append('replyToMessageId', replyTo.id);
-        formData.append('tempId', tempId);
+
+        // Append files last
+        files.forEach(f => formData.append('images', f));
 
         try {
             await uploadImageWithProgress(formData, tempId);
@@ -671,8 +770,8 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
     };
 
     // [NEW] Handler for sending from Preview Modal
-    const handleSendImageConfirm = (files, caption, configs) => {
-         handleSendImages(files, caption, configs);
+    const handleSendImageConfirm = (files, caption, configs, isViewOnce) => {
+         handleSendImages(files, caption, configs, isViewOnce);
          setSelectedImages(null);
     };
 
@@ -998,9 +1097,13 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
                     onDelete={handleLocalDelete}
                     onRetry={handleRetry} 
                     onEdit={setEditingMessage}
-                    searchTerm={searchTerm} // [NEW] Pass search term
+                    searchTerm={searchTerm} 
+                    onLoadMore={handleLoadOlderMessages}
+                    hasMore={hasMore}
+                    loadingMore={loadingMore}
                 />
             )}
+
             
 
             

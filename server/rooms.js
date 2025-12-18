@@ -421,12 +421,14 @@ router.get('/', async (req, res) => {
             last_msg.id as last_message_id,
             last_msg.status as last_message_status,
             last_msg.caption as last_message_caption,
+            last_msg.is_view_once as last_message_is_view_once,
+            last_msg.viewed_by as last_message_viewed_by,
             gp.send_mode, gp.allow_name_change, gp.allow_description_change, gp.allow_add_members, gp.allow_remove_members
             FROM rooms r 
             JOIN room_members rm ON r.id = rm.room_id 
             LEFT JOIN group_permissions gp ON r.id = gp.group_id
             LEFT JOIN LATERAL (
-                SELECT content, type, user_id, id, status, caption
+                SELECT content, type, user_id, id, status, caption, is_view_once, viewed_by
                 FROM messages m
                 WHERE m.room_id = r.id
                 AND m.created_at > COALESCE(rm.cleared_at, '1970-01-01')
@@ -456,7 +458,9 @@ router.get('/', async (req, res) => {
             last_message_type: r.last_message_type,
             last_message_sender_id: r.last_message_sender_id,
             last_message_status: r.last_message_status,
-            last_message_id: r.last_message_id
+            last_message_id: r.last_message_id,
+            last_message_is_view_once: r.last_message_is_view_once,
+            last_message_viewed_by: r.last_message_viewed_by
         }));
 
         res.json(mappedRooms);
@@ -466,24 +470,29 @@ router.get('/', async (req, res) => {
     }
 });
 
-// Get Messages
+// Get Messages (Paginated)
 router.get('/:id/messages', async (req, res) => {
     const roomId = req.params.id;
+    const { limit = 50, before } = req.query; // limit defaults to 50
+    
+    // Check membership
     const memberCheck = await db.query('SELECT * FROM room_members WHERE room_id = $1 AND user_id = $2', [roomId, req.user.id]);
     if (memberCheck.rows.length === 0) {
         return res.status(403).json({ error: 'Not a member' });
     }
 
     try {
-        const messagesRes = await db.query(`
+        let query = `
             SELECT m.id, m.room_id, m.user_id, m.content, m.type, m.status, m.reply_to_message_id, 
-                   m.is_deleted_for_everyone, m.deleted_for_user_ids, m.edited_at,
+                   m.is_deleted_for_everyone, m.deleted_for_user_ids, m.edited_at, m.edit_version,
                    m.audio_url, m.audio_duration_ms, m.audio_waveform,
                    m.gif_url, m.preview_url, m.width, m.height,
                    m.author_name, m.meta,
                    (aps.heard_at IS NOT NULL) as audio_heard,
                    m.created_at,
                    m.image_url, m.caption, m.image_width, m.image_height, m.image_size, m.attachments,
+                   m.is_view_once, m.viewed_by,
+                   (SELECT COUNT(*) FROM room_members rm_cnt WHERE rm_cnt.room_id = m.room_id) as room_member_count,
                    u.display_name, u.username, u.avatar_thumb_url, u.avatar_url 
             FROM messages m 
             LEFT JOIN users u ON m.user_id = u.id 
@@ -491,8 +500,22 @@ router.get('/:id/messages', async (req, res) => {
             JOIN room_members rm_curr ON rm_curr.room_id = m.room_id AND rm_curr.user_id = $2
             WHERE m.room_id = $1 
             AND m.created_at > COALESCE(rm_curr.cleared_at, '1970-01-01')
-            ORDER BY m.created_at ASC
-        `, [roomId, req.user.id]);
+        `;
+        
+        const params = [roomId, req.user.id];
+        
+        // Pagination logic
+        if (before) {
+            query += ` AND m.created_at < $3`;
+            params.push(before);
+        }
+
+        // We want the LATEST messages, so we order by created_at DESC and take the limit.
+        // Then we reverse them in JS to return chronological order.
+        query += ` ORDER BY m.created_at DESC LIMIT $${params.length + 1}`;
+        params.push(limit);
+
+        const messagesRes = await db.query(query, params);
 
         const messages = await Promise.all(messagesRes.rows.map(async (msg) => {
             let parsedWaveform = [];
@@ -503,9 +526,6 @@ router.get('/:id/messages', async (req, res) => {
                     // ignore
                 }
             }
-
-            // [REVERTED] No dynamic signing/proxying. AWS Bucket should be Public.
-            // if (msg.type === 'image' && msg.image_url) { ... }
 
             let parsedAttachments = [];
             if (msg.attachments) {
@@ -525,8 +545,9 @@ router.get('/:id/messages', async (req, res) => {
                 created_at: msg.created_at
             };
         }));
-
-        res.json(messages);
+        
+        // Reverse to return in chronological order (oldest first)
+        res.json(messages.reverse());
     } catch (error) {
         console.error(error);
         res.status(500).json({ error: 'Server error' });
@@ -551,6 +572,7 @@ router.get('/:id/media', async (req, res) => {
             AND m.created_at > COALESCE(rm.cleared_at, '1970-01-01')
             AND (m.is_deleted_for_everyone IS FALSE OR m.is_deleted_for_everyone IS NULL)
             AND (m.deleted_for_user_ids IS NULL OR NOT ($2::text = ANY(m.deleted_for_user_ids)))
+            AND (m.is_view_once IS FALSE OR m.is_view_once IS NULL)
         `;
         
         const params = [roomId, req.user.id];

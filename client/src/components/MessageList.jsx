@@ -80,11 +80,12 @@ const CodeBlock = ({ inline, className, children, ...props }) => {
 };
 
 
-const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone, onRetry, onMarkHeard, onEdit, onImageLoad, onRegenerate, searchTerm, scrollToMessage, onImageClick }) => { // [MODIFIED] Added onImageClick
+export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone, onRetry, onMarkHeard, onEdit, onImageLoad, onRegenerate, searchTerm, scrollToMessage, onImageClick, token }) => { // [MODIFIED] Added token
+ // [MODIFIED] Added onImageClick
     const [showMenu, setShowMenu] = useState(false);
     const [showFeedback, setShowFeedback] = useState(false); // [NEW] Feedback state
     const menuRef = useRef(null);
-    const { token, user } = useAuth(); 
+    const { user } = useAuth(); 
     const isAudio = msg.type === 'audio';
     const [imgLoaded, setImgLoaded] = useState(false);
     const [isDownloaded, setIsDownloaded] = useState(() => {
@@ -164,6 +165,11 @@ const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone, onRetr
     
     if (isDeletedForMe) return null;
 
+    // [NEW] View Once Open Status Logic
+    const isViewOnceOpened = isMe 
+        ? ((msg.viewed_by?.length || 0) >= ((msg.room_member_count || 2) - 1))
+        : (msg.viewed_by?.includes(user?.id));
+
     if (msg.is_deleted_for_everyone) {
         return (
             <div 
@@ -235,10 +241,10 @@ const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone, onRetr
                         ${(msg.type === 'image' || msg.type === 'gif') ? 'p-1' : 'px-4 py-3'}
                         shadow-md text-sm leading-relaxed break-all relative overflow-hidden
                         ${isMe 
-                            ? 'bg-violet-600 text-white rounded-2xl rounded-tr-sm whitespace-pre-wrap' 
+                            ? `bg-violet-600 text-white ${(msg.type === 'gif') ? 'rounded-[10px]' : 'rounded-2xl rounded-tr-sm'} whitespace-pre-wrap` 
                             : isAi 
-                                ? 'bg-white dark:bg-slate-800/80 text-slate-800 dark:text-slate-100 rounded-2xl rounded-tl-sm border border-purple-200/50 dark:border-purple-500/30 shadow-purple-500/5 min-w-[200px]' 
-                                : 'bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-200 rounded-2xl rounded-tl-sm border border-slate-100 dark:border-slate-700 whitespace-pre-wrap'
+                                ? `bg-white dark:bg-slate-800/80 text-slate-800 dark:text-slate-100 ${(msg.type === 'gif') ? 'rounded-[10px]' : 'rounded-2xl rounded-tl-sm'} border border-purple-200/50 dark:border-purple-500/30 shadow-purple-500/5 min-w-[200px]` 
+                                : `bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-200 ${(msg.type === 'gif') ? 'rounded-[10px]' : 'rounded-2xl rounded-tl-sm'} border border-slate-100 dark:border-slate-700 whitespace-pre-wrap`
                         }
                     `}>
                         {msg.isSkeleton ? (
@@ -273,6 +279,14 @@ const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone, onRetr
                                     <div className="flex items-center gap-1 text-xs opacity-90">
                                         <span className="material-symbols-outlined text-[14px]">gif</span>
                                         <span>GIF</span>
+                                    </div>
+                                ) : msg.replyTo.is_view_once ? (
+                                    <div className="flex items-center gap-1 text-xs opacity-90">
+                                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" className="shrink-0 -ml-[1px]">
+                                            <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2" strokeDasharray="5 3" strokeLinecap="round" />
+                                            <path d="M10.5 9L12 7.5V16.5" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
+                                        </svg>
+                                        <span>Photo</span>
                                     </div>
                                 ) : (
                                     <div className="text-xs opacity-80 line-clamp-2 flex items-center gap-1">
@@ -354,6 +368,108 @@ const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone, onRetr
                             )}
                             </>
                         ) : msg.type === 'image' ? (
+                            msg.is_view_once ? (
+                                <div className="flex flex-col mt-1 mb-1 max-w-[280px] sm:max-w-[320px] min-w-[120px]">
+                                    <div 
+                                        className={`
+                                            relative bg-slate-200 dark:bg-slate-700 rounded-lg overflow-hidden w-full transition-all duration-200
+                                            border border-slate-300 dark:border-slate-600
+                                            flex items-center gap-3 p-3 cursor-pointer select-none
+                                            ${(msg.viewed_by && msg.viewed_by.includes(user.id)) || (msg.user_id === user.id) ? 'opacity-60 grayscale' : 'hover:bg-slate-300 dark:hover:bg-slate-600'}
+                                        `}
+                                        onClick={(e) => { 
+                                            e.stopPropagation(); 
+                                            // Handling Download/Open logic
+                                            if (msg.user_id === user.id) return; // Sender can't open
+                                            
+                                            if (!isDownloaded) {
+                                                markAsDownloaded(); // Start download
+                                                return;
+                                            }
+                                            
+                                            if (!imgLoaded) return; // Still downloading
+                                            
+                                            if ((!msg.viewed_by || !msg.viewed_by.includes(user.id))) {
+                                                onImageClick(msg); 
+                                            }
+                                        }}
+                                    >
+                                        {/* Hidden Preloader to track download state */}
+                                        {isDownloaded && !imgLoaded && (
+                                            <img 
+                                                src={msg.image_url} 
+                                                className="hidden" 
+                                                onLoad={() => setImgLoaded(true)} 
+                                                onError={() => setImgLoaded(true)} // Fallback
+                                                loading="eager" 
+                                                alt=""
+                                            />
+                                        )}
+
+                                        <div className={`
+                                            w-10 h-10 rounded-full flex items-center justify-center shrink-0
+                                            ${(isViewOnceOpened) || (isMe && msg.viewed_by && msg.viewed_by.length > 0 && !isViewOnceOpened) // Keep "partial viewed" style? No, user wants distinct state.
+                                              // Let's stick to: If Opened -> Grey. If Not Opened -> Blue/Indigo.
+                                              // Wait, checking prompt: "sender device show opened [WHEN ALL SHOW]".
+                                              // Implication: Before all show, it should look "Sent/Delivered" (Blue).
+                                              // So strict check on isViewOnceOpened is correct for styling too.
+                                                ? (isViewOnceOpened ? 'bg-slate-300 dark:bg-slate-600 text-slate-500 dark:text-slate-400' : 'bg-indigo-100 dark:bg-indigo-900/30 text-indigo-600 dark:text-indigo-400')
+                                                : 'bg-indigo-100 dark:bg-indigo-900/30 text-indigo-600 dark:text-indigo-400'
+                                            }
+                                        `}>
+                                            {/* 1. UPLOADING (Sender) */}
+                                            {msg.status === 'sending' ? (
+                                                <div className="w-5 h-5 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin"></div>
+                                            ) 
+                                            /* 2. DOWNLOADING (Receiver: Signed as downloaded but not loaded) */
+                                            : (!isMe && isDownloaded && !imgLoaded) ? (
+                                                <div className="w-5 h-5 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin"></div>
+                                            )
+                                            /* 3. NOT DOWNLOADED (Receiver) */
+                                            : (!isMe && !isDownloaded) ? (
+                                                <span className="material-symbols-outlined text-[20px]">download</span>
+                                            )
+                                            /* 4. OPENED (Sender/Receiver) */
+                                            : (isViewOnceOpened) ? (
+                                                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" className="text-slate-500 dark:text-slate-300">
+                                                    <path d="M12 22A10 10 0 0 1 12 2" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                                                    <path d="M12 2A10 10 0 0 1 12 22" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeDasharray="2 4" />
+                                                </svg>
+                                            ) 
+                                            /* 5. UNOPENED / READY (1 Icon) */
+                                            : (
+                                                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" className="text-indigo-600 dark:text-indigo-400">
+                                                     <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2" strokeDasharray="5 3" strokeLinecap="round" />
+                                                     <path d="M10.5 9L12 7.5V16.5" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
+                                                </svg>
+                                            )}
+                                        </div>
+                                        
+                                        <div className="flex flex-col">
+                                            <span className={`text-sm font-bold ${(isViewOnceOpened) ? 'text-slate-500 dark:text-slate-400' : 'text-slate-700 dark:text-slate-200'}`}>
+                                                {/* Text Logic */}
+                                                {(isViewOnceOpened) ? 'Opened' 
+                                                 : (msg.status === 'sending') ? 'Sending...' 
+                                                 : (!isMe && isDownloaded && !imgLoaded) ? 'Downloading...' 
+                                                 : (!isMe && !isDownloaded) ? 'Photo' // Or 'Tap to dwnld'
+                                                 : 'Photo'
+                                                }
+                                            </span>
+                                            {msg.is_view_once && (
+                                                <span className="text-[10px] text-slate-500 dark:text-slate-400">
+                                                    {(!isMe && !isDownloaded) ? ((msg.image_size ? formatBytes(msg.image_size) + ' • ' : '') + 'View once') : 'View once'}
+                                                </span>
+                                            )}
+                                        </div>
+                                    </div>
+                                    
+                                     {msg.caption && !msg.is_view_once && (
+                                        <p className="text-sm mt-1 mb-1 whitespace-pre-wrap break-words px-1 italic text-slate-500">
+                                            {linkifyText(msg.caption, searchTerm)}
+                                        </p>
+                                    )}
+                                </div>
+                            ) : (
                             // [NEW] Grid Layout Logic
                             (msg.attachments && msg.attachments.length > 1) ? (
                                 <div className="flex flex-col mt-1 mb-1 w-[280px] sm:w-[320px]">
@@ -440,31 +556,53 @@ const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone, onRetr
                             ) : (
                             <div className="flex flex-col mt-1 mb-1 max-w-[280px] sm:max-w-[320px] min-w-[120px]">
                                 <div 
-                                    className="relative group/image bg-slate-200 dark:bg-slate-700 rounded-xl overflow-hidden w-full transition-all duration-200"
-                                    style={{
-                                        aspectRatio: (msg.image_width && msg.image_height) ? `${msg.image_width} / ${msg.image_height}` : '1 / 1',
-                                        width: '100%',
-                                        maxWidth: msg.image_width ? `${Math.min(msg.image_width, 320)}px` : '100%',
-                                        maxHeight: '600px'
-                                    }}
+                                    className="relative group/image bg-slate-200 dark:bg-slate-700 rounded-[6px] overflow-hidden transition-all duration-200"
+                                    style={(() => {
+                                        const originalW = msg.image_width || msg.attachments?.[0]?.width;
+                                        const originalH = msg.image_height || msg.attachments?.[0]?.height;
+                                        
+                                        if (!originalW || !originalH) {
+                                            return { width: '100%', aspectRatio: '1/1', maxWidth: '320px' };
+                                        }
+
+                                        const maxW = 320;
+                                        const maxH = 450; // WhatsApp style max height
+                                        let renderW = originalW;
+                                        let renderH = originalH;
+
+                                        // Scale down to fit Width first
+                                        if (renderW > maxW) {
+                                            const scale = maxW / renderW;
+                                            renderW = maxW;
+                                            renderH = renderH * scale;
+                                        }
+
+                                        // Then check Height constraint
+                                        if (renderH > maxH) {
+                                            const scale = maxH / renderH;
+                                            renderH = maxH;
+                                            renderW = renderW * scale;
+                                        }
+
+                                        return {
+                                            width: `${renderW}px`,
+                                            height: `${renderH}px`,
+                                        };
+                                    })()}
                                 >
-                                    <img 
-                                        src={isDownloaded ? msg.image_url : ''} 
-                                        alt={msg.caption || "Image"} 
-                                        className={`w-full h-full object-cover cursor-pointer transition-opacity duration-300 display-block ${imgLoaded ? 'opacity-100' : 'opacity-0'}`}
-                                        loading="eager" 
-                                        decoding="async"
-                                        onLoad={() => {
-                                            setImgLoaded(true);
-                                            onImageLoad && onImageLoad();
-                                        }}
-                                        onClick={(e) => { e.stopPropagation(); onImageClick(msg); }}
-                                    />
-                                    {/* Small fuzzy blurred thumbnail or icon could go here if we had one, for now background color serves as placeholder */}
-                                    {!imgLoaded && (msg.image_width && msg.image_height) && (
-                                         <div className="absolute inset-0 flex items-center justify-center text-slate-400">
-                                             <span className="material-symbols-outlined text-[32px] opacity-20">image</span>
-                                         </div>
+                                    {(isDownloaded || isMe || msg.preview_url || msg.image_url) && (
+                                        <img 
+                                            src={isDownloaded ? msg.image_url : (msg.preview_url || msg.gif_url || '')} 
+                                            alt={msg.caption || "Image"} 
+                                            className={`w-full h-full object-cover cursor-pointer transition-opacity duration-300 display-block ${imgLoaded ? 'opacity-100' : 'opacity-0'}`}
+                                            loading="eager" 
+                                            decoding="async"
+                                            onLoad={() => {
+                                                setImgLoaded(true);
+                                                onImageLoad && onImageLoad();
+                                            }}
+                                            onClick={(e) => { e.stopPropagation(); onImageClick(msg); }}
+                                        />
                                     )}
                                     {/* Download Icon Overlay (Receiver only) */}
                                     {!isMe && (!isDownloaded || !imgLoaded) && (
@@ -540,16 +678,16 @@ const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone, onRetr
                                         </div>
                                     )}
                                 </div>
-                                {msg.caption && (
-                                    <p className="text-sm mt-1 mb-1 whitespace-pre-wrap break-words px-1">
-                                        {linkifyText(msg.caption, searchTerm)}
-                                        {msg.edited_at && (
-                                            <span className="text-[10px] opacity-60 ml-1">(edited)</span>
-                                        )}
-                                    </p>
-                                )}
+                                    {msg.caption && !msg.is_view_once && (
+                                        <p className="text-sm mt-1 mb-1 whitespace-pre-wrap break-words px-1">
+                                            {linkifyText(msg.caption, searchTerm)}
+                                            {msg.edited_at && (
+                                                <span className="text-[10px] opacity-60 ml-1">(edited)</span>
+                                            )}
+                                        </p>
+                                    )}
                             </div>
-                        )) : (
+                        ))) : (
                             <div className={`pr-2 ${!isMe && isAi ? 'markdown-content' : 'pr-6'}`}>
                                 {isAi && !isMe ? (
                                     <ReactMarkdown
@@ -607,7 +745,14 @@ const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone, onRetr
                     ${isMe ? 'right-full mr-2' : 'left-full ml-2'}
                     z-10
                 `}>
-                    {(!msg.isStreaming && !msg.isSkeleton) && (
+                    {(!msg.isStreaming && !msg.isSkeleton) && 
+                      // Conditionally hide menu for Images/ViewOnce if:
+                      // 1. Sender: Still sending
+                      // 2. Receiver: Not downloaded yet
+                      !((msg.type === 'image' || msg.is_view_once) && (
+                          (isMe && msg.status === 'sending') || 
+                          (!isMe && (!isDownloaded || !imgLoaded))
+                      )) && (
                         <button
                             type="button"
                             className={`
@@ -706,7 +851,8 @@ const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone, onRetr
                                             sender: msg.display_name || msg.username,
                                             text: snippet,
                                             type: msg.type,
-                                            audio_duration_ms: msg.audio_duration_ms
+                                            audio_duration_ms: msg.audio_duration_ms,
+                                            is_view_once: msg.is_view_once
                                         });
                                         setShowMenu(false);
                                     }}
@@ -756,17 +902,42 @@ const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone, onRetr
                                 </button>
                             )}
 
-                            {msg.type !== 'audio' && msg.type !== 'gif' && !isAi && (
+                            {msg.type !== 'audio' && msg.type !== 'gif' && !isAi && !msg.is_view_once && (
                                 <button 
                                     className="w-full flex items-center gap-2 px-3 py-2.5 text-left text-sm text-slate-700 dark:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors first:rounded-t-2xl last:rounded-b-2xl"
-                                    onClick={(e) => {
+                                    onClick={async (e) => {
                                         e.stopPropagation();
-                                        navigator.clipboard.writeText(msg.content);
+                                        if (msg.type === 'image') {
+                                            try {
+                                                const response = await fetch(msg.image_url);
+                                                const originalBlob = await response.blob();
+                                                
+                                                const imageBitmap = await createImageBitmap(originalBlob);
+                                                
+                                                const canvas = document.createElement('canvas');
+                                                canvas.width = imageBitmap.width;
+                                                canvas.height = imageBitmap.height;
+                                                const ctx = canvas.getContext('2d');
+                                                ctx.drawImage(imageBitmap, 0, 0);
+                                                
+                                                const pngBlob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
+                                                
+                                                await navigator.clipboard.write([
+                                                    new ClipboardItem({
+                                                        'image/png': pngBlob
+                                                    })
+                                                ]);
+                                            } catch (err) {
+                                                console.error('Failed to copy image:', err);
+                                            }
+                                        } else {
+                                            navigator.clipboard.writeText(msg.content);
+                                        }
                                         setShowMenu(false);
                                     }}
                                 >
                                     <span className="material-symbols-outlined text-base">content_copy</span>
-                                    <span>Copy Text</span>
+                                    <span>{msg.type === 'image' ? 'Copy' : 'Copy Text'}</span>
                                 </button>
                             )}
                             
@@ -822,7 +993,7 @@ const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone, onRetr
     );
 };
 
-export default function MessageList({ messages, setMessages, currentUser, roomId, socket, onReply, onDelete, onRetry, onEdit, onRegenerate, searchTerm }) { // [MODIFIED] Added searchTerm
+export default function MessageList({ messages, setMessages, currentUser, roomId, socket, onReply, onDelete, onRetry, onEdit, onRegenerate, searchTerm, onLoadMore, loadingMore, hasMore }) { // [MODIFIED] Added props
     const { token } = useAuth();
     const [confirmDeleteMessage, setConfirmDeleteMessage] = useState(null);
 
@@ -833,6 +1004,41 @@ export default function MessageList({ messages, setMessages, currentUser, roomId
     const scrollRef = useRef(null);
     const bottomRef = useRef(null);
     const shouldScrollToBottom = useRef(true);
+    
+    // [NEW] Pagination Refs
+    const prevScrollHeightRef = useRef(0);
+    const prevFirstMsgIdRef = useRef(null); 
+    
+    // We need to capture scrollHeight BEFORE render updates.
+    // React doesn't give us "componentWillUpdate".
+    // But we can use a ref to store current values, and check changes.
+    React.useLayoutEffect(() => {
+        const div = scrollRef.current;
+        if (!div) return;
+
+        const currentFirstMsgId = messages.length > 0 ? messages[0].id : null;
+        const prevFirstMsgId = prevFirstMsgIdRef.current;
+        
+        if (currentFirstMsgId && prevFirstMsgId && currentFirstMsgId !== prevFirstMsgId) {
+            // Check if we prepended (new id key is NOT the same)
+            // Ideally we check timestamps.
+            // But if id changed and we have more messages, likely prepend.
+            if (messages.length > (div._prevMsgCount || 0)) {
+               // Restore scroll
+               const newHeight = div.scrollHeight;
+               const diff = newHeight - prevScrollHeightRef.current;
+               if (diff > 0) {
+                   div.scrollTop = diff; // Jump to same visual position
+               }
+            }
+        }
+        
+        // Save for next time
+        prevScrollHeightRef.current = div.scrollHeight;
+        prevFirstMsgIdRef.current = currentFirstMsgId;
+        div._prevMsgCount = messages.length;
+        
+    }, [messages]);
 
     const handleMarkHeard = async (messageId) => {
         // Optimistic update
@@ -878,7 +1084,42 @@ export default function MessageList({ messages, setMessages, currentUser, roomId
         }
     }
 
-    const handleImageClick = (msg, index = 0) => {
+    const handleImageClick = async (msg, index = 0) => {
+        // [NEW] View Once Logic
+        if (msg.is_view_once) {
+            // Check if already viewed (and we are not the sender? typically sender can't view either if it's strictly "view once" for receiver, but WhatsApp allows sender to see "Opened". Sender cannot view their own view-once photo usually to prevent them keeping a copy? Actually sender can't open it.)
+            // Logic: If I am sender, I see "View Once" icon/status. I cannot open it.
+            // If I am receiver:
+            //   If viewed_by includes me: Show "Opened". (Handled in render)
+            //   If NOT viewed_by includes me: Fetch and Show.
+            
+            if (msg.user_id === currentUser.id) return; // Sender cannot view
+            if (msg.viewed_by && msg.viewed_by.includes(currentUser.id)) return; // Already viewed
+            
+            // [OPTIMIZED] Instant Open using cached URL
+            // We use the same URL that was used for the hidden preloader (msg.image_url)
+            // This ensures instant opening from browser cache.
+            
+            setViewingImage({
+                 images: [{ src: msg.image_url, caption: msg.caption, isViewOnce: true }],
+                 startIndex: 0
+            });
+
+            // Optimistically update local state to "Opened"
+            setMessages(prev => prev.map(m => m.id === msg.id ? { 
+                ...m, 
+                viewed_by: [...(m.viewed_by || []), currentUser.id] 
+            } : m));
+
+            // Call API in background to mark as viewed (burn it)
+            // We don't wait for this to show the image.
+            fetch(`${import.meta.env.VITE_API_URL}/api/messages/${msg.id}/view-once`, {
+                headers: { Authorization: `Bearer ${token}` }
+            }).catch(err => console.error("Failed to mark view once:", err));
+
+            return;
+        }
+
         // Collect all images from message
         let images = [];
         if (msg.attachments && msg.attachments.length > 0) {
@@ -1008,8 +1249,11 @@ export default function MessageList({ messages, setMessages, currentUser, roomId
         
         if (distanceToBottom < 100) {
             setUnreadMentionId(null);
-            // Also update ref to latest if we are at bottom? 
-            // Actually useEffect handles ref update.
+        }
+
+        // [NEW] Infinite Scroll Trigger
+        if (div.scrollTop < 100 && hasMore && !loadingMore) {
+            if (onLoadMore) onLoadMore();
         }
     };
 
@@ -1037,6 +1281,11 @@ export default function MessageList({ messages, setMessages, currentUser, roomId
                 className="absolute inset-0 overflow-y-auto p-6 space-y-6 custom-scrollbar z-0"
                 onScroll={handleScroll}
             >
+                {loadingMore && (
+                    <div className="flex justify-center py-4 animate-in fade-in zoom-in duration-300">
+                         <div className="w-8 h-8 rounded-full border-2 border-violet-500 border-t-transparent animate-spin shadow-lg bg-white dark:bg-slate-800 p-1"></div>
+                    </div>
+                )}
                 {viewingImage && (
                     <ImageViewerModal 
                         images={viewingImage.images}
@@ -1119,6 +1368,7 @@ export default function MessageList({ messages, setMessages, currentUser, roomId
                             searchTerm={searchTerm} // [MODIFIED] Pass search term
                             scrollToMessage={scrollToMessage} // [NEW] Pass scrollToMessage
                             onImageClick={handleImageClick} // [NEW] Pass handler
+                            token={token} // [NEW] Pass token for authorized fetches
                         />
                     );
                 })}

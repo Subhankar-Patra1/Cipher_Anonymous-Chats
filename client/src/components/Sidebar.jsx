@@ -400,8 +400,30 @@ export default function Sidebar({ rooms, activeRoom, onSelectRoom, loadingRoomId
                                         <span className="truncate flex-1">
                                             {room.last_message_type === 'image' ? (
                                                 <span className="flex items-center gap-1">
-                                                    <span className="material-symbols-outlined text-[18px] translate-y-[0.5px]">image</span>
-                                                    <span className="truncate">{room.last_message_caption ? renderTextWithEmojis(room.last_message_caption) : 'Photo'}</span>
+                                                    {room.last_message_is_view_once ? (
+                                                        (room.last_message_viewed_by && room.last_message_viewed_by.length > 0) ? (
+                                                             <>
+                                                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" className="text-slate-500 dark:text-slate-400 shrink-0">
+                                                                    <path d="M12 22 A10 10 0 0 1 12 2" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                                                                    <path d="M12 2 A10 10 0 0 1 12 22" stroke="currentColor" strokeWidth="2" strokeDasharray="5 3" strokeLinecap="round" />
+                                                                </svg>
+                                                                <span className="truncate text-slate-500 dark:text-slate-400">Opened</span>
+                                                             </>
+                                                        ) : (
+                                                            <>
+                                                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" className="text-slate-500 dark:text-slate-400 shrink-0">
+                                                                    <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2" strokeDasharray="5 3" strokeLinecap="round" />
+                                                                    <path d="M10.5 9L12 7.5V16.5" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
+                                                                </svg>
+                                                                <span className="truncate">Photo</span>
+                                                            </>
+                                                        )
+                                                    ) : (
+                                                        <>
+                                                            <span className="material-symbols-outlined text-[18px] translate-y-[0.5px]">image</span>
+                                                            <span className="truncate">{room.last_message_caption ? renderTextWithEmojis(room.last_message_caption) : 'Photo'}</span>
+                                                        </>
+                                                    )}
                                                 </span>
                                             ) :
                                              room.last_message_type === 'audio' ? 'Sent an audio' :

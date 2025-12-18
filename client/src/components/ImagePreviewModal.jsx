@@ -22,6 +22,7 @@ export default function ImagePreviewModal({ files, onClose, onSend, recipientNam
     // Meta/Global State
     const [html, setHtml] = useState('');
     const [showEmojiPicker, setShowEmojiPicker] = useState(false);
+    const [isViewOnce, setIsViewOnce] = useState(false);
     const [isProcessing, setIsProcessing] = useState(false);
 
     const imgRef = useRef(null);
@@ -252,7 +253,7 @@ export default function ImagePreviewModal({ files, onClose, onSend, recipientNam
             }
             const plainText = (tempDiv.textContent || "").trim();
 
-            onSend(filesToSend, plainText, configs);
+            onSend(filesToSend, plainText, configs, isViewOnce);
             
         } catch (e) {
             console.error(e);
@@ -387,13 +388,15 @@ export default function ImagePreviewModal({ files, onClose, onSend, recipientNam
                     {/* Add more button could go here */}
 
                     {/* Add More Button */}
-                    <button
-                        onClick={() => fileInputRef.current?.click()}
-                        className="relative w-14 h-14 rounded-lg border-2 border-dashed border-slate-300 dark:border-slate-600 flex items-center justify-center text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:border-slate-400 dark:hover:border-slate-500 transition-all shrink-0 bg-white/5 dark:bg-slate-800/50"
-                        title="Add more images"
-                    >
-                         <span className="material-symbols-outlined">add</span>
-                    </button>
+                    {!isViewOnce && (
+                        <button
+                            onClick={() => fileInputRef.current?.click()}
+                            className="relative w-14 h-14 rounded-lg border-2 border-dashed border-slate-300 dark:border-slate-600 flex items-center justify-center text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:border-slate-400 dark:hover:border-slate-500 transition-all shrink-0 bg-white/5 dark:bg-slate-800/50"
+                            title="Add more images"
+                        >
+                             <span className="material-symbols-outlined">add</span>
+                        </button>
+                    )}
                     <input 
                         type="file" 
                         ref={fileInputRef} 
@@ -474,6 +477,37 @@ export default function ImagePreviewModal({ files, onClose, onSend, recipientNam
                         </div>
                     </div>
                     
+                    {/* View Once Toggle */}
+                    {fileStates.length === 1 && (
+                        <button
+                            onClick={() => setIsViewOnce(!isViewOnce)}
+                            className={`
+                                w-10 h-10 flex items-center justify-center rounded-full mr-2 transition-all relative
+                                ${isViewOnce 
+                                    ? 'bg-green-100 text-green-600 dark:bg-green-900/30 dark:text-green-400' 
+                                    : 'text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'
+                                }
+                            `}
+                            title="View Once"
+                        >
+                             <div className={`w-6 h-6 flex items-center justify-center ${isViewOnce ? 'scale-110' : 'scale-100'}`}>
+                                 {isViewOnce ? (
+                                     /* Filled - Active */
+                                     <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" className="text-green-600 dark:text-green-400">
+                                         <circle cx="12" cy="12" r="11" fill="currentColor" />
+                                         <path d="M10.5 9L12 7.5V16.5" className="stroke-white dark:stroke-slate-900" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
+                                     </svg>
+                                 ) : (
+                                     /* Dotted - Inactive */
+                                     <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" className="text-slate-400 group-hover:text-slate-500">
+                                          <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2" strokeDasharray="5 3" strokeLinecap="round" />
+                                          <path d="M10.5 9L12 7.5V16.5" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
+                                     </svg>
+                                 )}
+                             </div>
+                        </button>
+                    )}
+
                     <button
                         onClick={handleSendClick}
                         disabled={isProcessing}

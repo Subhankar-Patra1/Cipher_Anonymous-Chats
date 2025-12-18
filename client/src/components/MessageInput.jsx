@@ -416,9 +416,26 @@ export default function MessageInput({
 
     const handlePaste = (e) => {
         e.preventDefault();
+
+        // Handle Files/Images
+        const items = e.clipboardData.items;
+        const files = [];
+        for (let i = 0; i < items.length; i++) {
+            if (items[i].type.indexOf("image") !== -1) {
+                files.push(items[i].getAsFile());
+            }
+        }
+
+        if (files.length > 0 && onImageSelected) {
+            onImageSelected(files);
+            return;
+        }
+
         const text = e.clipboardData.getData("text");
-        document.execCommand('insertText', false, text);
-        saveSelection();
+        if (text) {
+            document.execCommand('insertText', false, text);
+            saveSelection();
+        }
     };
 
     const handleKeyDown = (e) => {
@@ -589,8 +606,19 @@ export default function MessageInput({
                             rounded-t-2xl rounded-b-md
                             px-4 py-2 transition-colors
                         ">
-                             <div className="flex items-center gap-2 max-w-[90%]">
-                                {replyTo.type === 'audio' ? (
+                            <div className="flex items-center gap-2 max-w-[90%]">
+                                {replyTo.is_view_once ? (
+                                    <div className="flex flex-col">
+                                        <span className="text-sm font-semibold text-violet-600 dark:text-violet-300 flex items-center gap-1">{renderTextWithEmojis(replyTo.sender)}</span>
+                                        <span className="text-sm text-slate-600 dark:text-slate-300 flex items-center gap-1">
+                                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" className="text-slate-500 dark:text-slate-400 shrink-0">
+                                                <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2" strokeDasharray="5 3" strokeLinecap="round" />
+                                                <path d="M10.5 9L12 7.5V16.5" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
+                                            </svg>
+                                            Photo
+                                        </span>
+                                    </div>
+                                ) : replyTo.type === 'audio' ? (
                                     <>
                                          <span className="material-symbols-outlined text-violet-500 dark:text-violet-300 text-sm">mic</span>
                                          <div className="flex flex-col">

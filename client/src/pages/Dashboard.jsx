@@ -196,6 +196,8 @@ export default function Dashboard() {
                      room.last_message_status = msg.status || 'sent';
                      room.last_message_id = msg.id;
                      room.last_message_caption = msg.caption;
+                     room.last_message_is_view_once = msg.is_view_once; // [FIX] Update view once status
+                     room.last_message_viewed_by = msg.viewed_by || []; // [FIX] Reset viewed by
                      room.last_message_at = new Date().toISOString(); // Update timestamp for sorting
 
                      updatedRooms[roomIndex] = room;
@@ -204,6 +206,19 @@ export default function Dashboard() {
                 }
                 return updatedRooms;
             });
+        });
+
+        // [NEW] Message Viewed (for View Once updates)
+        newSocket.on('message_viewed', ({ id, room_id, userId }) => {
+             setRooms(prev => prev.map(r => {
+                 if (String(r.id) === String(room_id) && String(r.last_message_id) === String(id)) {
+                     const currentViewed = r.last_message_viewed_by || [];
+                     if (!currentViewed.includes(userId)) {
+                         return { ...r, last_message_viewed_by: [...currentViewed, userId] };
+                     }
+                 }
+                 return r;
+             }));
         });
 
         // [NEW] Avatar Updates
@@ -474,22 +489,38 @@ export default function Dashboard() {
                     id: original.id,
                     sender: original.display_name || original.username,
                     text: snippet,
+                    type: original.type,
+                    is_view_once: original.is_view_once
                 },
             };
         });
     };
 
-    // [NEW] Handle Room Selection with Pre-fetching
+    // [NEW] Handle Room Selection with Pre-fetching & Caching
     const handleSelectRoom = async (room) => {
         if (activeRoom?.id === room.id) return; // Already valid
         
         setLoadingRoomId(room.id);
         
-        // [FIX] Switch immediately for UX, show loading in ChatWindow
-        setActiveRoom(room);
+        // 1. Try to load from Cache first for instant open
+        const cached = localStorage.getItem(`chat_messages_${room.id}`);
+        let roomWithCache = { ...room };
+        
+        if (cached) {
+            try {
+                const parsedMessages = JSON.parse(cached);
+                roomWithCache.initialMessages = hydrateMessages(parsedMessages);
+            } catch (e) {
+                console.error("Cache parse error", e);
+            }
+        }
+        
+        // Switch immediately
+        setActiveRoom(roomWithCache);
 
         try {
-            const res = await fetch(`${import.meta.env.VITE_API_URL}/api/rooms/${room.id}/messages`, {
+            // 2. Fetch fresh messages (limit 50)
+            const res = await fetch(`${import.meta.env.VITE_API_URL}/api/rooms/${room.id}/messages?limit=50`, {
                 headers: { 
                     Authorization: `Bearer ${token}`,
                     'Cache-Control': 'no-cache'
@@ -500,9 +531,10 @@ export default function Dashboard() {
                 const data = await res.json();
                 const hydrated = hydrateMessages(data);
                 
-                // Only update if user hasn't switched away
-                // relying on activeRoomRef or checking current activeRoom state if we were inside a setter
-                // But setActiveRoom(prev => ...) is safer
+                // Update Cache
+                localStorage.setItem(`chat_messages_${room.id}`, JSON.stringify(hydrated));
+                
+                // Update State
                 setActiveRoom(prev => {
                     if (prev && String(prev.id) === String(room.id)) {
                         return { ...prev, initialMessages: hydrated };
@@ -511,8 +543,6 @@ export default function Dashboard() {
                 });
             } else {
                 console.error("Failed to fetch messages");
-                // activeRoom is already set, so it stays valid but empty.
-                // Could handle error state inside ChatWindow if needed.
             }
         } catch (err) {
             console.error(err);
@@ -631,7 +661,7 @@ export default function Dashboard() {
                             socket={socket}
                             room={activeRoom}
                             user={user}
-                            isLoading={loadingRoomId === activeRoom.id}
+                            isLoading={loadingRoomId === activeRoom.id && !activeRoom.initialMessages}
                             onBack={() => setActiveRoom(null)}
                         />
                     ) : (
@@ -640,7 +670,7 @@ export default function Dashboard() {
                             socket={socket} 
                             room={activeRoom} // contains initialMessages now
                             user={user} 
-                            isLoading={loadingRoomId === activeRoom.id}
+                            isLoading={loadingRoomId === activeRoom.id && !activeRoom.initialMessages}
                             onBack={() => setActiveRoom(null)}
                             showGroupInfo={showGroupInfo}
                             setShowGroupInfo={setShowGroupInfo}
