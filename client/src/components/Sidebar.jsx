@@ -353,6 +353,7 @@ export default function Sidebar({ rooms, activeRoom, onSelectRoom, loadingRoomId
                         } ${loadingRoomId === room.id ? 'opacity-50 pointer-events-none' : ''}`}
                         onContextMenu={(e) => {
                             e.preventDefault();
+                            if (room.type === 'ai') return;
                             setContextMenu({
                                 visible: true,
                                 x: e.clientX,
@@ -426,6 +427,15 @@ export default function Sidebar({ rooms, activeRoom, onSelectRoom, loadingRoomId
                                                     )}
                                                 </span>
                                             ) :
+                                             room.last_message_type === 'file' ? (
+                                                <span className="flex items-center gap-1">
+                                                    <span className="material-symbols-outlined text-[18px] translate-y-[0.5px]">description</span>
+                                                        <span className="truncate">
+                                                            {room.last_message_file_name || 'File'}
+                                                            {room.last_message_caption ? ` • ${renderTextWithEmojis(room.last_message_caption)}` : ''}
+                                                        </span>
+                                                </span>
+                                             ) :
                                              room.last_message_type === 'audio' ? 'Sent an audio' :
                                              room.last_message_type === 'gif' ? 'Sent a GIF' :
                                              renderPreview(room.last_message_content)}

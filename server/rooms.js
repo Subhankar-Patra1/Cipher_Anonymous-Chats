@@ -421,6 +421,7 @@ router.get('/', async (req, res) => {
             last_msg.id as last_message_id,
             last_msg.status as last_message_status,
             last_msg.caption as last_message_caption,
+            last_msg.file_name as last_message_file_name, -- [NEW]
             last_msg.is_view_once as last_message_is_view_once,
             last_msg.viewed_by as last_message_viewed_by,
             gp.send_mode, gp.allow_name_change, gp.allow_description_change, gp.allow_add_members, gp.allow_remove_members
@@ -428,7 +429,7 @@ router.get('/', async (req, res) => {
             JOIN room_members rm ON r.id = rm.room_id 
             LEFT JOIN group_permissions gp ON r.id = gp.group_id
             LEFT JOIN LATERAL (
-                SELECT content, type, user_id, id, status, caption, is_view_once, viewed_by
+                SELECT content, type, user_id, id, status, caption, file_name, is_view_once, viewed_by -- [NEW] Added file_name
                 FROM messages m
                 WHERE m.room_id = r.id
                 AND m.created_at > COALESCE(rm.cleared_at, '1970-01-01')
@@ -492,6 +493,7 @@ router.get('/:id/messages', async (req, res) => {
                    m.created_at,
                    m.image_url, m.caption, m.image_width, m.image_height, m.image_size, m.attachments,
                    m.is_view_once, m.viewed_by,
+                   m.file_url, m.file_name, m.file_size, m.file_type, m.file_extension, -- [NEW]
                    (SELECT COUNT(*) FROM room_members rm_cnt WHERE rm_cnt.room_id = m.room_id) as room_member_count,
                    u.display_name, u.username, u.avatar_thumb_url, u.avatar_url 
             FROM messages m 

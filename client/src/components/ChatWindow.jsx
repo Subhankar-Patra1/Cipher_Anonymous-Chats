@@ -4,7 +4,8 @@ import { usePresence } from '../context/PresenceContext';
 import MessageList from './MessageList';
 import MessageInput from './MessageInput';
 import ProfilePanel from './ProfilePanel';
-import ImagePreviewModal from './ImagePreviewModal'; // [NEW] Import here
+import ImagePreviewModal from './ImagePreviewModal';
+import FilePreviewModal from './FilePreviewModal'; // [NEW]
 import { linkifyText } from '../utils/linkify';
 
 const timeAgo = (dateString) => {
@@ -96,17 +97,18 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
     const [replyTo, setReplyTo] = useState(null); 
     const [editingMessage, setEditingMessage] = useState(null);
     const [typingUsers, setTypingUsers] = useState([]);
-    const [selectedImages, setSelectedImages] = useState(null); // [NEW] Scoped Image Preview State (Array)
+    const [selectedImages, setSelectedImages] = useState(null);
+    const [selectedFiles, setSelectedFiles] = useState(null); // [NEW] Scoped File Preview State
     const [loadingMore, setLoadingMore] = useState(false);
     const [hasMore, setHasMore] = useState(true);
 
     const hydrateMessages = (newMsgs, existingMsgs = []) => {
         const all = [...newMsgs, ...existingMsgs];
-        const byId = new Map(all.map(m => [m.id, m]));
+        const byId = new Map(all.map(m => [String(m.id), m]));
         
         return newMsgs.map(m => {
              if (!m.reply_to_message_id) return m;
-             const original = byId.get(m.reply_to_message_id);
+             const original = byId.get(String(m.reply_to_message_id));
              if (!original) return m;
 
              const raw = original.content || "";
@@ -122,7 +124,9 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
                      text: snippet,
                      type: original.type,
                      is_view_once: original.is_view_once,
-                     audio_duration_ms: original.audio_duration_ms
+                     audio_duration_ms: original.audio_duration_ms,
+                     file_name: original.file_name,
+                     caption: original.caption
                  }
              };
         });
@@ -284,13 +288,13 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
                 }
 
                 setMessages(prev => {
-                    if (prev.some(m => m.id === msg.id)) {
+                    if (prev.some(m => String(m.id) === String(msg.id))) {
                         return prev;
                     }
 
                     let processedMsg = { ...msg };
                     if (!processedMsg.replyTo && processedMsg.reply_to_message_id) {
-                        const original = prev.find(m => m.id === processedMsg.reply_to_message_id);
+                        const original = prev.find(m => String(m.id) === String(processedMsg.reply_to_message_id));
                         if (original) {
                             const raw = original.content || "";
                             const normalized = raw.replace(/\s+/g, " ").trim();
@@ -301,7 +305,10 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
                                 sender: original.display_name || original.username,
                                 text: snippet,
                                 type: original.type,
-                                audio_duration_ms: original.audio_duration_ms
+                                audio_duration_ms: original.audio_duration_ms,
+                                is_view_once: original.is_view_once,
+                                file_name: original.file_name,
+                                caption: original.caption
                             };
                         }
                     }
@@ -471,13 +478,16 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
 
     const handleSend = async (content, replyToMsg) => {
         if (!isExpired) {
+            // [FIX] Use state replyTo if not passed as arg
+            const finalReplyTo = replyToMsg || replyTo;
+
             const tempId = `temp-${Date.now()}`;
             const tempMsg = {
                 id: tempId,
                 room_id: room.id,
                 user_id: user.id,
                 content,
-                replyTo: replyToMsg || null,
+                replyTo: finalReplyTo || null,
                 created_at: new Date().toISOString(),
                 username: user.username,
                 display_name: user ? user.display_name : 'Me',
@@ -489,7 +499,7 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
             socket.emit('send_message', { 
                 roomId: room.id, 
                 content,
-                replyToMessageId: replyToMsg ? replyToMsg.id : null,
+                replyToMessageId: finalReplyTo ? finalReplyTo.id : null,
                 tempId 
             });
         }
@@ -527,6 +537,9 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
     };
 
     const handleSendAudio = async (blob, durationMs, waveform, replyToMsg) => {
+        // [FIX] Use state fallback
+        const finalReplyTo = replyToMsg || replyTo;
+
         const tempId = `temp-${Date.now()}`;
         const tempMsg = {
             id: tempId,
@@ -537,7 +550,7 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
             audio_url: URL.createObjectURL(blob),
             audio_duration_ms: durationMs,
             audio_waveform: waveform,
-            replyTo: replyToMsg || null,
+            replyTo: finalReplyTo || null,
             created_at: new Date().toISOString(),
             username: user.username,
             display_name: user ? user.display_name : 'Me',
@@ -554,7 +567,7 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
         formData.append('roomId', room.id);
         formData.append('durationMs', durationMs);
         formData.append('waveform', JSON.stringify(waveform));
-        if (replyToMsg) formData.append('replyToMessageId', replyToMsg.id);
+        if (finalReplyTo) formData.append('replyToMessageId', finalReplyTo.id);
         formData.append('tempId', tempId);
 
         try {
@@ -663,21 +676,63 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
         return `${typingUsers[0].name}, ${typingUsers[1].name}, and ${typingUsers.length - 2} others are typing...`;
     };
 
-    const handleSendImages = async (files, caption, configs, isViewOnce) => {
-        // configs is array of { width, height, ... } corresponding to files
-        console.log('[DEBUG] ChatWindow handleSendImages:', files.length, 'files');
-        const tempId = `temp-${Date.now()}`;
-        
-        // Create attachments for optimistic UI
-        const attachments = files.map((file, i) => ({
-            url: URL.createObjectURL(file),
-            width: configs?.[i]?.width || 0,
-            height: configs?.[i]?.height || 0,
-            size: file.size,
-            type: 'image'
+    const extractTextFromHtml = (html) => {
+        if (!html) return "";
+        const tempDiv = document.createElement('div');
+        tempDiv.innerHTML = html;
+        // Replace img alt with text
+        const images = tempDiv.getElementsByTagName('img');
+        while (images.length > 0) {
+            const img = images[0];
+            const alt = img.getAttribute('alt') || '';
+            const textNode = document.createTextNode(alt);
+            img.parentNode.replaceChild(textNode, img);
+        }
+        return (tempDiv.textContent || "").trim();
+    };
+
+    const handleSendImages = async (items, isViewOnce) => {
+        // items: [{ file, width, height, caption (html) }]
+        console.log('[DEBUG] ChatWindow handleSendImages:', items.length, 'items');
+
+        // Pre-process captions to plain text
+        const processedItems = items.map(item => ({
+            ...item,
+            plainCaption: extractTextFromHtml(item.caption)
         }));
 
-        // Optimistic UI
+        // Determine Splitting Logic
+        // distinctCaptions: filter out empty, then get unique
+        const captions = processedItems.map(i => i.plainCaption).filter(c => c.length > 0);
+        // If we have distinct captions for different images, we probably want to split.
+        // Requirement: "if they give separte caption of each image then upload pictures not in one grid then uload one by one"
+        // "and if user give only one caption in any image and blak others and upload in grid and show the caption"
+        
+        // Logic:
+        // 1. If > 1 non-empty caption: SPLIT ALL.
+        // 2. If <= 1 non-empty caption: GROUP ALL (use that one caption).
+        
+        const nonEmptyCount = processedItems.filter(i => i.plainCaption.length > 0).length;
+        const shouldSplit = nonEmptyCount > 1;
+
+        if (shouldSplit) {
+            // SEND INDIVIDUALLY
+            for (const item of processedItems) {
+                await sendSingleImage(item.file, item.plainCaption, item.width, item.height, isViewOnce);
+            }
+        } else {
+            // SEND AS GROUP
+            // Find the single caption if it exists
+            const groupCaption = processedItems.find(i => i.plainCaption.length > 0)?.plainCaption || "";
+            await sendImageGroup(processedItems, groupCaption, isViewOnce);
+        }
+    };
+
+    // Helper for Single Image Send (Splitted)
+    const sendSingleImage = async (file, caption, width, height, isViewOnce) => {
+        const tempId = `temp-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+        
+        // Optimistic
         const tempMsg = {
             id: tempId,
             room_id: room.id,
@@ -685,12 +740,17 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
             type: 'image',
             content: 'Image',
             caption: caption || '',
-            // Legacy top-level props (use first image)
-            image_url: attachments[0].url,
-            image_width: attachments[0].width,
-            image_height: attachments[0].height,
-            image_size: attachments[0].size,
-            attachments: attachments, // [NEW] Store all
+            image_url: URL.createObjectURL(file),
+            image_width: width,
+            image_height: height,
+            image_size: file.size,
+            attachments: [{ 
+                url: URL.createObjectURL(file), 
+                width, 
+                height, 
+                size: file.size, 
+                type: 'image' 
+            }], 
             replyTo: replyTo || null,
             created_at: new Date().toISOString(),
             username: user.username,
@@ -698,39 +758,97 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
             status: 'sending',
             uploadStatus: 'uploading',
             uploadProgress: 0,
-            localBlobs: files, // Store all blobs for retry
+            localBlobs: [file],
             is_view_once: isViewOnce,
             viewed_by: []
         };
+        
         setMessages(prev => [...prev, tempMsg]);
-        setReplyTo(null); // Clear reply context
-
+        // Note: We don't clear replyTo here immediately if we are in a loop? 
+        // Actually, normally reply applies to the "batch". 
+        // If we split, presumably the first one (or all?) get the reply?
+        // Standard behavior: Reply applies to the context. If I send 5 images, do they all reply?
+        // Let's assume yes for now, or just the first.
+        // If I maintain `replyTo` in state, it might persist?
+        // `setReplyTo(null)` is called. If I call it after the first, subsequent won't have it.
+        // Let's clear it ONLY after the loop in `handleSendImages`? 
+        // Refactor: Pass replyTo snapshot to this function.
+        
         const formData = new FormData();
-        // Append text fields first (Multer best practice)
         formData.append('roomId', room.id);
         formData.append('caption', caption || '');
         formData.append('isViewOnce', isViewOnce);
         if (replyTo) formData.append('replyToMessageId', replyTo.id);
         formData.append('tempId', tempId);
-
-        // Append dims
-        if (configs) {
-            configs.forEach(c => {
-                 formData.append('widths', c.width);
-                 formData.append('heights', c.height);
-            });
-        }
-
-        // Append files last
-        files.forEach(f => formData.append('images', f));
+        formData.append('widths', width);
+        formData.append('heights', height);
+        formData.append('images', file);
 
         try {
             await uploadImageWithProgress(formData, tempId);
         } catch (err) {
             console.error(err);
-             setMessages(prev => prev.map(m =>
-                m.id === tempId ? { ...m, status: 'error' } : m
-            ));
+            setMessages(prev => prev.map(m => m.id === tempId ? { ...m, status: 'error' } : m));
+        }
+    };
+
+    // Helper for Group Send
+    const sendImageGroup = async (items, groupCaption, isViewOnce) => {
+        const tempId = `temp-${Date.now()}`;
+        
+        const attachments = items.map(item => ({
+            url: URL.createObjectURL(item.file),
+            width: item.width,
+            height: item.height,
+            size: item.file.size,
+            type: 'image'
+        }));
+
+        const tempMsg = {
+            id: tempId,
+            room_id: room.id,
+            user_id: user.id,
+            type: 'image',
+            content: 'Image',
+            caption: groupCaption || '',
+            // Legacy props (first image)
+            image_url: attachments[0].url,
+            image_width: attachments[0].width,
+            image_height: attachments[0].height,
+            image_size: attachments[0].size,
+            attachments: attachments, 
+            replyTo: replyTo || null,
+            created_at: new Date().toISOString(),
+            username: user.username,
+            display_name: user ? user.display_name : 'Me',
+            status: 'sending',
+            uploadStatus: 'uploading',
+            uploadProgress: 0,
+            localBlobs: items.map(i => i.file),
+            is_view_once: isViewOnce,
+            viewed_by: []
+        };
+        
+        setMessages(prev => [...prev, tempMsg]);
+        
+        const formData = new FormData();
+        formData.append('roomId', room.id);
+        formData.append('caption', groupCaption || '');
+        formData.append('isViewOnce', isViewOnce);
+        if (replyTo) formData.append('replyToMessageId', replyTo.id);
+        formData.append('tempId', tempId);
+
+        items.forEach(item => {
+            formData.append('widths', item.width);
+            formData.append('heights', item.height);
+            formData.append('images', item.file);
+        });
+
+        try {
+            await uploadImageWithProgress(formData, tempId);
+        } catch (err) {
+            console.error(err);
+            setMessages(prev => prev.map(m => m.id === tempId ? { ...m, status: 'error' } : m));
         }
     };
 
@@ -770,9 +888,95 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
     };
 
     // [NEW] Handler for sending from Preview Modal
-    const handleSendImageConfirm = (files, caption, configs, isViewOnce) => {
-         handleSendImages(files, caption, configs, isViewOnce);
+    const handleSendImageConfirm = async (payload, isViewOnce) => {
+         await handleSendImages(payload, isViewOnce);
+         setReplyTo(null); // Clear reply context after everything
          setSelectedImages(null);
+    };
+
+    // [NEW] File Handlers
+    const handleFileSelected = (files) => {
+        const fileList = Array.isArray(files) ? files : [files];
+        setSelectedFiles(fileList);
+    };
+
+    const handleSendFileConfirm = (filesWithCaptions) => {
+        filesWithCaptions.forEach(({ file, caption }) => {
+            handleSendFile(file, caption);
+        });
+        setSelectedFiles(null);
+    };
+
+    const uploadFileWithProgress = async (formData, tempId) => {
+        return new Promise((resolve, reject) => {
+            const xhr = new XMLHttpRequest();
+            xhr.open('POST', `${import.meta.env.VITE_API_URL}/api/messages/file`);
+            xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+            
+            xhr.upload.onprogress = (event) => {
+                if (event.lengthComputable) {
+                    const percent = event.loaded / event.total;
+                    setMessages(prev => prev.map(m => 
+                        m.id === tempId ? { ...m, uploadProgress: percent } : m
+                    ));
+                }
+            };
+
+            xhr.onload = () => {
+                if (xhr.status >= 200 && xhr.status < 300) {
+                    resolve(JSON.parse(xhr.responseText));
+                } else {
+                    reject(new Error('Upload failed'));
+                }
+            };
+
+            xhr.onerror = () => reject(new Error('Network error'));
+            
+            xhr.send(formData);
+        });
+    };
+
+    const handleSendFile = async (file, caption) => {
+        // [FIX] Use random suffix to prevent ID collision in fast loops
+        const tempId = `temp-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+        const tempMsg = {
+            id: tempId,
+            room_id: room.id,
+            user_id: user.id,
+            type: 'file',
+            content: 'File',
+            file_name: file.name,
+            file_size: file.size,
+            file_type: file.type,
+            file_extension: file.name.split('.').pop(),
+            caption: caption || '', // [NEW]
+            replyTo: replyTo || null,
+            created_at: new Date().toISOString(),
+            username: user.username,
+            display_name: user ? user.display_name : 'Me',
+            status: 'sending',
+            uploadStatus: 'uploading',
+            uploadProgress: 0,
+            localBlob: file
+        };
+        setMessages(prev => [...prev, tempMsg]);
+        setReplyTo(null);
+
+        const formData = new FormData();
+        formData.append('file', file);
+        formData.append('roomId', room.id);
+        formData.append('tempId', tempId);
+        formData.append('caption', caption || ''); // [NEW]
+        if (replyTo) formData.append('replyToMessageId', replyTo.id);
+
+        try {
+            await uploadFileWithProgress(formData, tempId);
+        } catch (err) {
+            console.error(err);
+            setMessages(prev => prev.map(m =>
+                m.id === tempId ? { ...m, status: 'error', uploadStatus: 'failed' } : m
+            ));
+        }
     };
 
     const handleSendGif = async (gif, caption) => {
@@ -1101,6 +1305,7 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
                     onLoadMore={handleLoadOlderMessages}
                     hasMore={hasMore}
                     loadingMore={loadingMore}
+                    isAiChat={room.other_user_id === 'ai-assistant' || room.id === 'ai-chat' || room.type === 'ai'}
                 />
             )}
 
@@ -1117,11 +1322,12 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
 
             {canSend ? (
                 <MessageInput 
-                    onSend={(content) => handleSend(content, replyTo)} 
-                    onSendAudio={(blob, duration, waveform) => handleSendAudio(blob, duration, waveform, replyTo)}
-                    onImageSelected={handleImageSelected} // [NEW] Pass handler
-                    onSendGif={handleSendGif} 
-                    disabled={isExpired} 
+                    onSend={handleSend}         
+                    onSendAudio={handleSendAudio}
+                    onImageSelected={handleImageSelected}
+                    onFileSelected={handleFileSelected}
+                    onSendGif={handleSendGif}
+                    disabled={!canSend || isExpired}
                     replyTo={replyTo}          
                     setReplyTo={setReplyTo}
                     
@@ -1175,6 +1381,18 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
                         files={selectedImages} 
                         onClose={() => setSelectedImages(null)}
                         onSend={handleSendImageConfirm}
+                        recipientName={room.type === 'direct' ? room.name : room.name}
+                        recipientAvatar={room.type === 'direct' ? (room.avatar_url || room.avatar_thumb_url) : (room.avatar_url || room.avatar_thumb_url)}
+                    />
+                </div>
+            )}
+            {/* [NEW] Scoped File Preview Modal */}
+            {selectedFiles && (
+                <div className="absolute inset-0 z-20 flex flex-col bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
+                    <FilePreviewModal 
+                        files={selectedFiles} 
+                        onClose={() => setSelectedFiles(null)}
+                        onSend={handleSendFileConfirm}
                         recipientName={room.type === 'direct' ? room.name : room.name}
                         recipientAvatar={room.type === 'direct' ? (room.avatar_url || room.avatar_thumb_url) : (room.avatar_url || room.avatar_thumb_url)}
                     />

@@ -10,12 +10,27 @@ const upload = multer({
     },
     fileFilter: (req, file, cb) => {
         console.log("Checking file type:", file.mimetype, "Original name:", file.originalname);
-        if (file.mimetype.startsWith('audio/') || file.mimetype.startsWith('image/')) {
-            cb(null, true);
-        } else {
-            console.error("File rejected. Mime:", file.mimetype);
-            cb(new Error('Only audio and image files are allowed!'), false);
+        const mime = file.mimetype;
+        const name = file.originalname.toLowerCase();
+        
+        // Block executables
+        if (
+            mime === 'application/x-msdownload' || 
+            mime === 'application/x-sh' || 
+            mime === 'application/x-bat' ||
+            name.endsWith('.exe') ||
+            name.endsWith('.bat') ||
+            name.endsWith('.sh') ||
+            name.endsWith('.cmd') ||
+            name.endsWith('.msi')
+        ) {
+            console.error("File rejected (executable). Mime:", mime);
+            cb(new Error('Executable files are not allowed!'), false);
+            return;
         }
+        
+        // Allow everything else
+        cb(null, true);
     }
 });
 

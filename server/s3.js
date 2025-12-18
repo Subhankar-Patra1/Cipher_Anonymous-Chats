@@ -49,13 +49,14 @@ const configureBucketCors = async () => {
     }
 };
 
-const uploadFile = async (fileBuffer, fileName, mimeType) => {
+const uploadFile = async (fileBuffer, fileName, mimeType, contentDisposition) => {
     const uploadParams = {
         Bucket: bucketName,
         Body: fileBuffer,
         Key: fileName,
         ContentType: mimeType,
-        CacheControl: 'max-age=31536000' // cache for 1 year
+        CacheControl: 'max-age=31536000', // cache for 1 year
+        ...(contentDisposition && { ContentDisposition: contentDisposition })
     };
 
     try {

@@ -160,14 +160,10 @@ export default function SharedMedia({ roomId, onGoToMessage }) {
             return (
                 <div className="space-y-2">
                     {media.map(msg => (
-                        <div key={msg.id} className="flex gap-3 p-2 hover:bg-slate-50 dark:hover:bg-slate-800/50 rounded-lg cursor-pointer transition-colors"
+                        <div key={msg.id} className="relative group flex gap-3 p-2 hover:bg-slate-50 dark:hover:bg-slate-800/50 rounded-lg cursor-pointer transition-colors"
                              onClick={() => {
-                                 // Download logic?
-                                 // If it's a file, it implies attachments or specific content link
-                                 // Our current 'file' support is minimal, mostly handled in 'files' tab if we had it.
-                                 // Assuming attachments.
-                                 if (msg.attachments) {
-                                     // ...
+                                 if (msg.file_url) {
+                                     window.open(msg.file_url, '_blank');
                                  }
                              }}
                         >
@@ -178,11 +174,23 @@ export default function SharedMedia({ roomId, onGoToMessage }) {
                                   <p className="text-xs text-slate-400 dark:text-slate-500">
                                       {new Date(msg.created_at).toLocaleDateString()} • {msg.display_name}
                                   </p>
-                                  <p className="text-sm font-medium text-slate-700 dark:text-slate-200 truncate">
+                                  <p className="text-sm font-medium text-slate-700 dark:text-slate-200 truncate pr-8">
                                       {/* Extract filename or show "File" */}
-                                      {msg.content || 'Untitled File'}
+                                      {msg.file_name || msg.content || 'Untitled File'}
                                   </p>
                              </div>
+                             
+                             {/* Hover Action: Go to Message */}
+                             <button
+                                onClick={(e) => {
+                                    e.stopPropagation();
+                                    onGoToMessage(msg.id);
+                                }}
+                                className="absolute right-2 top-1/2 -translate-y-1/2 w-8 h-8 flex items-center justify-center bg-white dark:bg-slate-700 rounded-full shadow-sm border border-slate-200 dark:border-slate-600 text-slate-500 dark:text-slate-300 opacity-0 group-hover:opacity-100 transition-opacity hover:text-violet-600 dark:hover:text-violet-400 z-10"
+                                title="Go to message"
+                             >
+                                <span className="material-symbols-outlined text-[18px]">arrow_outward</span>
+                             </button>
                         </div>
                     ))}
                 </div>

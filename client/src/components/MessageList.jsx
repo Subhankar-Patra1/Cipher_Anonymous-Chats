@@ -255,8 +255,7 @@ export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone,
                             </div>
                         ) : (
                             <>
-                                {msg.replyTo && (
-                             // ... (reply rendering same)
+                        {msg.replyTo && (
                              <div 
                                 onClick={() => scrollToMessage(msg.replyTo.id)} 
                                 className={`
@@ -287,6 +286,19 @@ export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone,
                                             <path d="M10.5 9L12 7.5V16.5" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
                                         </svg>
                                         <span>Photo</span>
+                                    </div>
+                                ) : msg.replyTo.type === 'image' ? (
+                                    <div className="flex items-center gap-1 text-xs opacity-90">
+                                        <span className="material-symbols-outlined text-[14px]">image</span>
+                                        <span className="truncate">{msg.replyTo.caption || "Photo"}</span>
+                                    </div>
+                                ) : msg.replyTo.type === 'file' ? (
+                                    <div className="flex items-center gap-1 text-xs opacity-90">
+                                        <span className="material-symbols-outlined text-[14px]">description</span>
+                                        <span className="truncate">
+                                            {msg.replyTo.file_name || "File"}
+                                            {msg.replyTo.caption ? ` • ${msg.replyTo.caption}` : ''}
+                                        </span>
                                     </div>
                                 ) : (
                                     <div className="text-xs opacity-80 line-clamp-2 flex items-center gap-1">
@@ -686,8 +698,66 @@ export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone,
                                             )}
                                         </p>
                                     )}
-                            </div>
-                        ))) : (
+                                </div>
+                            ))) : msg.type === 'file' ? (
+                                <div className="flex flex-col mt-1 mb-1 min-w-[200px] max-w-[300px]">
+                                    <div 
+                                        className="flex items-center gap-3"
+                                    >
+                                        <div className={`
+                                            w-10 h-10 rounded-lg flex items-center justify-center shrink-0
+                                            ${isMe ? 'bg-white/20 text-white' : 'bg-slate-200 dark:bg-slate-600 text-slate-500 dark:text-slate-300'}
+                                        `}>
+                                            <span className="material-symbols-outlined text-[24px]">
+                                                {msg.file_extension === 'pdf' ? 'picture_as_pdf' :
+                                                 ['doc', 'docx'].includes(msg.file_extension) ? 'description' :
+                                                 ['xls', 'xlsx', 'csv'].includes(msg.file_extension) ? 'table_view' :
+                                                 ['ppt', 'pptx'].includes(msg.file_extension) ? 'slideshow' :
+                                                 ['zip', 'rar'].includes(msg.file_extension) ? 'folder_zip' :
+                                                 'draft'
+                                                }
+                                            </span>
+                                        </div>
+                                        
+                                        <div className="flex flex-col min-w-0 flex-1">
+                                            <span className={`text-sm font-medium truncate ${isMe ? 'text-white' : 'text-slate-700 dark:text-slate-200'}`}>
+                                                {msg.file_name}
+                                            </span>
+                                            <div className="flex items-center justify-between mt-0.5">
+                                                <span className={`text-[10px] ${isMe ? 'text-violet-200' : 'text-slate-400'}`}>
+                                                    {formatBytes(msg.file_size)} • {msg.file_extension?.toUpperCase()}
+                                                </span>
+                                                {msg.status === 'sending' ? (
+                                                    <span className="w-3 h-3 border-2 border-current border-t-transparent rounded-full animate-spin opacity-70" />
+                                                ) : (
+                                                    <a 
+                                                        href={msg.file_url} 
+                                                        download={msg.file_name} 
+                                                        target="_blank"
+                                                        rel="noopener noreferrer"
+                                                        className={`
+                                                            w-8 h-8 flex items-center justify-center rounded-full transition-colors shrink-0
+                                                            ${isMe 
+                                                                ? 'hover:bg-white/20 text-violet-100' 
+                                                                : 'hover:bg-slate-200 dark:hover:bg-slate-600 text-slate-500 dark:text-slate-400'
+                                                            }
+                                                        `}
+                                                        title="Download"
+                                                        onClick={(e) => e.stopPropagation()} 
+                                                    >
+                                                        <span className="material-symbols-outlined text-[20px]">download</span>
+                                                    </a>
+                                                )}
+                                            </div>
+                                        </div>
+                                    </div>
+                                    {msg.caption && (
+                                        <p className="text-sm mt-2 whitespace-pre-wrap break-words">
+                                            {linkifyText(msg.caption, searchTerm)}
+                                        </p>
+                                    )}
+                                </div>
+                            ) : (
                             <div className={`pr-2 ${!isMe && isAi ? 'markdown-content' : 'pr-6'}`}>
                                 {isAi && !isMe ? (
                                     <ReactMarkdown
@@ -851,6 +921,8 @@ export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone,
                                             sender: msg.display_name || msg.username,
                                             text: snippet,
                                             type: msg.type,
+                                            file_name: msg.file_name,
+                                            caption: msg.caption,
                                             audio_duration_ms: msg.audio_duration_ms,
                                             is_view_once: msg.is_view_once
                                         });
@@ -864,7 +936,7 @@ export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone,
                             )}
 
                             {/* [NEW] Edit Option */}
-                            {isMe && !isAudio && msg.type !== 'gif' && !msg.is_deleted_for_everyone && (msg.type !== 'image' || msg.caption) && (
+                            {isMe && !isAudio && msg.type !== 'gif' && msg.type !== 'file' && !msg.is_deleted_for_everyone && (msg.type !== 'image' || msg.caption) && (
                                 <button 
                                     className="w-full flex items-center gap-2 px-3 py-2.5 text-left text-sm text-slate-700 dark:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors first:rounded-t-2xl last:rounded-b-2xl"
                                     onClick={(e) => {
@@ -902,14 +974,18 @@ export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone,
                                 </button>
                             )}
 
-                            {msg.type !== 'audio' && msg.type !== 'gif' && !isAi && !msg.is_view_once && (
+                            {msg.type !== 'audio' && msg.type !== 'gif' && msg.type !== 'file' && !isAi && !msg.is_view_once && (
                                 <button 
                                     className="w-full flex items-center gap-2 px-3 py-2.5 text-left text-sm text-slate-700 dark:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors first:rounded-t-2xl last:rounded-b-2xl"
                                     onClick={async (e) => {
                                         e.stopPropagation();
                                         if (msg.type === 'image') {
                                             try {
-                                                const response = await fetch(msg.image_url);
+                                                const response = await fetch(msg.image_url, {
+                                                    mode: 'cors',
+                                                    credentials: 'omit',
+                                                    cache: 'no-cache'
+                                                });
                                                 const originalBlob = await response.blob();
                                                 
                                                 const imageBitmap = await createImageBitmap(originalBlob);
@@ -929,6 +1005,7 @@ export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone,
                                                 ]);
                                             } catch (err) {
                                                 console.error('Failed to copy image:', err);
+                                                alert('Failed to copy image. ' + err.message);
                                             }
                                         } else {
                                             navigator.clipboard.writeText(msg.content);
@@ -993,7 +1070,7 @@ export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone,
     );
 };
 
-export default function MessageList({ messages, setMessages, currentUser, roomId, socket, onReply, onDelete, onRetry, onEdit, onRegenerate, searchTerm, onLoadMore, loadingMore, hasMore }) { // [MODIFIED] Added props
+export default function MessageList({ messages, setMessages, currentUser, roomId, socket, onReply, onDelete, onRetry, onEdit, onRegenerate, searchTerm, onLoadMore, loadingMore, hasMore, isAiChat }) { // [MODIFIED] Added props
     const { token } = useAuth();
     const [confirmDeleteMessage, setConfirmDeleteMessage] = useState(null);
 
@@ -1024,12 +1101,12 @@ export default function MessageList({ messages, setMessages, currentUser, roomId
             // Ideally we check timestamps.
             // But if id changed and we have more messages, likely prepend.
             if (messages.length > (div._prevMsgCount || 0)) {
-               // Restore scroll
-               const newHeight = div.scrollHeight;
-               const diff = newHeight - prevScrollHeightRef.current;
-               if (diff > 0) {
-                   div.scrollTop = diff; // Jump to same visual position
-               }
+                // Restore scroll
+                const newHeight = div.scrollHeight;
+                const diff = newHeight - prevScrollHeightRef.current;
+                if (diff > 0) {
+                    div.scrollTop = diff; // Jump to same visual position
+                }
             }
         }
         
@@ -1275,7 +1352,14 @@ export default function MessageList({ messages, setMessages, currentUser, roomId
     };
 
     return (
-        <div className="flex-1 relative min-h-0 group/list">
+        <div 
+            className="flex-1 relative min-h-0 group/list"
+            onContextMenu={(e) => {
+                if (isAiChat) {
+                    e.preventDefault();
+                }
+            }}
+        >
             <div 
                 ref={scrollRef}
                 className="absolute inset-0 overflow-y-auto p-6 space-y-6 custom-scrollbar z-0"

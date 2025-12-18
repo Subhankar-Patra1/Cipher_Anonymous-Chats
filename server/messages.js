@@ -235,6 +235,99 @@ router.post('/image', upload.array('images', 10), async (req, res) => {
     }
 });
 
+// Send Generic File
+router.post('/file', upload.single('file'), async (req, res) => {
+    try {
+        const { roomId, tempId, replyToMessageId, caption } = req.body; // [MODIFIED] Added caption
+        const file = req.file;
+
+        if (!file) {
+            return res.status(400).json({ error: 'No file provided' });
+        }
+
+        console.log('[DEBUG] Upload File Body:', JSON.stringify(req.body, null, 2));
+
+        // Verify room membership
+        const memberRes = await db.query('SELECT * FROM room_members WHERE room_id = $1 AND user_id = $2', [roomId, req.user.id]);
+        if (!memberRes.rows[0]) {
+            return res.status(403).json({ error: 'Not a member of this room' });
+        }
+        const member = memberRes.rows[0];
+
+        // Check Permissions
+        const permRes = await db.query('SELECT send_mode FROM group_permissions WHERE group_id = $1', [roomId]);
+        const sendMode = permRes.rows[0]?.send_mode || 'everyone';
+        if (sendMode === 'admins_only' && !['admin', 'owner'].includes(member.role)) {
+             return res.status(403).json({ error: 'Only admins can send messages' });
+        }
+        if (sendMode === 'owner_only' && member.role !== 'owner') {
+             return res.status(403).json({ error: 'Only owner can send messages' });
+        }
+
+        // Generate Filename & Upload
+        // Preserve original extension or infer from mimetype? 
+        // User wants "Extract extension".
+        const originalName = file.originalname;
+        const ext = originalName.split('.').pop();
+        const finalFileName = `${roomId}/files/${Date.now()}-${req.user.id}-${originalName}`;
+        
+        const fileUrl = await uploadFile(file.buffer, finalFileName, file.mimetype, `attachment; filename="${originalName}"`);
+        
+        const fileSize = file.size;
+        const mimeType = file.mimetype;
+
+        // Insert into DB
+        // We use the new columns: file_url, file_name, file_size, file_type, file_extension
+        const result = await db.query(
+            `INSERT INTO messages (room_id, user_id, type, file_url, file_name, file_size, file_type, file_extension, content, caption, reply_to_message_id) 
+             VALUES ($1, $2, 'file', $3, $4, $5, $6, $7, $8, $9, $10) 
+             RETURNING id, status, created_at`,
+            [roomId, req.user.id, fileUrl, originalName, fileSize, mimeType, ext, 'File', caption || null, replyToMessageId || null]
+        );
+        
+        // Update Room Last Message At
+        await db.query('UPDATE rooms SET last_message_at = NOW() WHERE id = $1', [roomId]);
+        
+        const info = result.rows[0];
+        const createdAtISO = info.created_at;
+
+        // Fetch user display name
+        const userRes = await db.query('SELECT display_name, avatar_thumb_url, avatar_url FROM users WHERE id = $1', [req.user.id]);
+        const user = userRes.rows[0];
+
+        const message = {
+            id: info.id,
+            room_id: roomId,
+            user_id: req.user.id,
+            type: 'file',
+            content: 'File',
+            file_url: fileUrl,
+            file_name: originalName,
+            file_size: fileSize,
+            file_type: mimeType,
+            file_extension: ext,
+            status: info.status,
+            reply_to_message_id: replyToMessageId,
+            created_at: createdAtISO,
+            username: req.user.username,
+            display_name: user ? user.display_name : req.user.display_name,
+            avatar_thumb_url: user ? user.avatar_thumb_url : null,
+            avatar_url: user ? user.avatar_url : null,
+            caption: caption || null, // [FIX] Include caption in emission
+            tempId: tempId
+        };
+        
+        const io = req.app.get('io');
+        io.to(`room:${roomId}`).emit('new_message', message);
+
+        res.json(message);
+
+    } catch (err) {
+        console.error('Error sending file:', err);
+        res.status(500).json({ error: 'Server error' });
+    }
+});
+
 // Create new message (Text or GIF)
 router.post('/', async (req, res) => {
     try {

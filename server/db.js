@@ -128,6 +128,13 @@ const createTables = async () => {
             ALTER TABLE messages ADD COLUMN IF NOT EXISTS caption TEXT;
             ALTER TABLE messages ADD COLUMN IF NOT EXISTS attachments JSONB DEFAULT '[]'::jsonb;
 
+            -- Migration for messages (Files)
+            ALTER TABLE messages ADD COLUMN IF NOT EXISTS file_url TEXT;
+            ALTER TABLE messages ADD COLUMN IF NOT EXISTS file_name TEXT;
+            ALTER TABLE messages ADD COLUMN IF NOT EXISTS file_size INTEGER;
+            ALTER TABLE messages ADD COLUMN IF NOT EXISTS file_type TEXT;
+            ALTER TABLE messages ADD COLUMN IF NOT EXISTS file_extension TEXT;
+
             CREATE TABLE IF NOT EXISTS group_permissions (
                 group_id INTEGER PRIMARY KEY REFERENCES rooms(id) ON DELETE CASCADE,
                 allow_name_change BOOLEAN DEFAULT TRUE,

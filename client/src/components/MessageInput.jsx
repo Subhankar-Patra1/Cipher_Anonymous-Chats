@@ -21,6 +21,7 @@ export default function MessageInput({
     onSend, 
     onSendAudio, 
     onImageSelected, // [NEW] Scoped Handler
+    onFileSelected, // [NEW] File Handler
     onSendImage, // Keep for backward compatibility or remove if unused 
     disabled, 
     replyTo, 
@@ -46,6 +47,7 @@ export default function MessageInput({
     const [mentionIndex, setMentionIndex] = useState(0);
 
     const fileInputRef = useRef(null);
+    const attachmentInputRef = useRef(null);
 
     const filteredMembers = showMentionPopup ? members.filter(m => {
         // 1. Filter out self
@@ -352,6 +354,17 @@ export default function MessageInput({
         }
     };
 
+    const handleFileChange = (e) => {
+        const files = Array.from(e.target.files || []);
+        if (files.length > 0) {
+            if (onFileSelected) {
+                // Pass array
+                onFileSelected(files);
+            }
+            if (attachmentInputRef.current) attachmentInputRef.current.value = '';
+        }
+    };
+
     const handleChange = (evt) => {
         const newHtml = evt.target.value ?? evt.target.innerHTML;
         setHtml(newHtml);
@@ -419,22 +432,36 @@ export default function MessageInput({
 
         // Handle Files/Images
         const items = e.clipboardData.items;
-        const files = [];
+        const mediaFiles = [];
+        const otherFiles = [];
+
         for (let i = 0; i < items.length; i++) {
-            if (items[i].type.indexOf("image") !== -1) {
-                files.push(items[i].getAsFile());
+            if (items[i].kind === 'file') {
+                const file = items[i].getAsFile();
+                if (file) {
+                    if (file.type.startsWith('image/')) {
+                        mediaFiles.push(file);
+                    } else {
+                        otherFiles.push(file);
+                    }
+                }
             }
         }
 
-        if (files.length > 0 && onImageSelected) {
-            onImageSelected(files);
-            return;
+        if (mediaFiles.length > 0 && onImageSelected) {
+            onImageSelected(mediaFiles);
+        }
+        
+        if (otherFiles.length > 0 && onFileSelected) {
+            onFileSelected(otherFiles);
         }
 
-        const text = e.clipboardData.getData("text");
-        if (text) {
-            document.execCommand('insertText', false, text);
-            saveSelection();
+        if (mediaFiles.length === 0 && otherFiles.length === 0) {
+            const text = e.clipboardData.getData("text");
+            if (text) {
+                document.execCommand('insertText', false, text);
+                saveSelection();
+            }
         }
     };
 
@@ -626,6 +653,14 @@ export default function MessageInput({
                                             <span className="text-xs text-slate-600 dark:text-slate-300">Voice message</span>
                                         </div>
                                     </>
+                                ) : replyTo.type === 'file' ? (
+                                    <div className="flex flex-col">
+                                        <span className="text-sm font-semibold text-violet-600 dark:text-violet-300 flex items-center gap-1">{renderTextWithEmojis(replyTo.sender)}</span>
+                                        <span className="text-sm text-slate-600 dark:text-slate-300 flex items-center gap-1">
+                                            <span className="material-symbols-outlined text-sm">description</span>
+                                            {replyTo.caption || replyTo.file_name || "File"}
+                                        </span>
+                                    </div>
                                 ) : (
                                     <div className="flex flex-col">
                                         <span className="text-sm font-semibold text-violet-600 dark:text-violet-300 flex items-center gap-1">{renderTextWithEmojis(replyTo.sender)}</span>
@@ -776,8 +811,27 @@ export default function MessageInput({
                                             ref={fileInputRef} 
                                             accept="image/*" 
                                             className="hidden" 
-                                            multiple // [NEW] Allow multiple
+                                            multiple 
                                             onChange={handleImageChange} 
+                                        />
+
+                                        {/* Attachment Button */}
+                                        <button
+                                            type="button"
+                                            onClick={() => attachmentInputRef.current?.click()}
+                                            className="p-2 text-slate-400 hover:text-slate-600 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors flex items-center justify-center rounded-lg"
+                                            title="Attach File"
+                                            disabled={disabled}
+                                        >
+                                            <span className="material-symbols-outlined text-[20px] rotate-45">attach_file</span>
+                                        </button>
+                                        <input 
+                                            type="file" 
+                                            ref={attachmentInputRef} 
+                                            accept="*" 
+                                            className="hidden" 
+                                            multiple 
+                                            onChange={handleFileChange} 
                                         />
                                     </>
                                 )}

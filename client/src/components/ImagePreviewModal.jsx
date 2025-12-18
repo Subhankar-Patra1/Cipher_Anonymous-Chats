@@ -38,15 +38,25 @@ export default function ImagePreviewModal({ files, onClose, onSend, recipientNam
             id: `img-${i}-${Date.now()}`,
             original: f,
             current: f, // Starts same as original
-            modified: false
+            modified: false,
+            caption: '' // [NEW] Per-image caption
         }));
         setFileStates(initStates);
         setCurrentIndex(0);
+        // Set initial caption
+        setHtml('');
     }, [files]);
 
     // Current Active File
     const currentFileState = fileStates[currentIndex];
     const [previewUrl, setPreviewUrl] = useState(null);
+
+    // [NEW] Save caption when switching or sending
+    const saveCurrentCaption = (index, content) => {
+        setFileStates(prev => prev.map((s, i) => 
+            i === index ? { ...s, caption: content } : s
+        ));
+    };
 
     // Update preview URL when index or file state changes
     useEffect(() => {
@@ -54,6 +64,9 @@ export default function ImagePreviewModal({ files, onClose, onSend, recipientNam
         const url = URL.createObjectURL(currentFileState.current);
         setPreviewUrl(url);
         
+        // [NEW] Load caption for this image
+        setHtml(currentFileState.caption || '');
+
         // Reset local edit states when switching or updating blob
         setIsCropping(false);
         setCrop(null);
@@ -63,7 +76,7 @@ export default function ImagePreviewModal({ files, onClose, onSend, recipientNam
         // Actually, 'modified' flag handles undo availability.
         
         return () => URL.revokeObjectURL(url);
-    }, [currentFileState]);
+    }, [currentIndex, currentFileState?.current]); // Only trigger on index chg or blob chg
 
     const handleClose = () => {
         onClose();
@@ -175,10 +188,14 @@ export default function ImagePreviewModal({ files, onClose, onSend, recipientNam
             // If removing one before current, shift current down
             setCurrentIndex(prev => prev - 1);
         }
+        // Note: New current index useEffect will pick up the correct caption
     };
 
+    const processingRef = useRef(false); // [NEW] Immediate guard
+
     const handleSendClick = async () => {
-        if (isProcessing) return;
+        if (processingRef.current) return;
+        processingRef.current = true;
         setIsProcessing(true);
         
         try {
@@ -192,6 +209,9 @@ export default function ImagePreviewModal({ files, onClose, onSend, recipientNam
             // So if `isCropping` or `isFlipped` is true, we need to process the *current* view first.
             
             let finalFiles = [...fileStates];
+
+            // [NEW] Ensure current caption is saved before sending
+            finalFiles[currentIndex].caption = html; 
             
             if (isCropping || isFlipped) {
                 // Apply pending edits to current index
@@ -221,9 +241,8 @@ export default function ImagePreviewModal({ files, onClose, onSend, recipientNam
                  }
             }
 
-            // Extract blobs and dimensions
-            const filesToSend = [];
-            const configs = [];
+            // Extract blobs, dimensions AND captions
+            const payload = [];
             
             for (const state of finalFiles) {
                 // We need dimensions. 
@@ -236,29 +255,24 @@ export default function ImagePreviewModal({ files, onClose, onSend, recipientNam
                 const img = new Image();
                 await new Promise(r => { img.onload = r; img.src = url; });
                 
-                filesToSend.push(blob);
-                configs.push({ width: img.naturalWidth, height: img.naturalHeight });
+                payload.push({
+                    file: blob,
+                    width: img.naturalWidth,
+                    height: img.naturalHeight,
+                    caption: state.caption || ''
+                });
+
                 URL.revokeObjectURL(url);
             }
 
-            // Text processing
-            const tempDiv = document.createElement('div');
-            tempDiv.innerHTML = html;
-            const images = tempDiv.getElementsByTagName('img');
-            while (images.length > 0) {
-                const img = images[0];
-                const alt = img.getAttribute('alt') || '';
-                const textNode = document.createTextNode(alt);
-                img.parentNode.replaceChild(textNode, img);
-            }
-            const plainText = (tempDiv.textContent || "").trim();
-
-            onSend(filesToSend, plainText, configs, isViewOnce);
+            // [MODIFIED] Pass structured payload instead of separate args
+            await onSend(payload, isViewOnce); // Await to keep processing true until done
             
         } catch (e) {
             console.error(e);
         } finally {
             setIsProcessing(false);
+            processingRef.current = false;
         }
     };
 
@@ -410,7 +424,8 @@ export default function ImagePreviewModal({ files, onClose, onSend, recipientNam
                                     id: `img-added-${Date.now()}-${i}`,
                                     original: f,
                                     current: f,
-                                    modified: false
+                                    modified: false,
+                                    caption: '' // [NEW] Init caption
                                 }));
                                 setFileStates(prev => [...prev, ...newStates]);
                                 // Optional: switch to new file?
@@ -443,12 +458,9 @@ export default function ImagePreviewModal({ files, onClose, onSend, recipientNam
                                         const imageUrl = `https://cdn.jsdelivr.net/npm/emoji-datasource-apple/img/apple/64/${hex}.png`;
                                         const imageTag = `<img src="${imageUrl}" alt="${emojiData.emoji}" class="w-6 h-6 inline-block align-bottom" style="margin: 0 1px;" draggable="false" />`;
                                         
-                                        if (document.activeElement === inputRef.current) {
-                                            document.execCommand('insertHTML', false, imageTag);
-                                            setHtml(inputRef.current.innerHTML); 
-                                        } else {
-                                            setHtml(prev => prev + imageTag);
-                                        }
+                                        const newHtml = (html || '') + imageTag; // Simplified append for now
+                                        setHtml(newHtml);
+                                        saveCurrentCaption(currentIndex, newHtml); // [NEW] Auto-save
                                     }}
                                     lazyLoadEmojis={true}
                                 />
@@ -459,7 +471,10 @@ export default function ImagePreviewModal({ files, onClose, onSend, recipientNam
                             <ContentEditable
                                 innerRef={inputRef}
                                 html={html}
-                                onChange={(e) => setHtml(e.target.value)}
+                                onChange={(e) => {
+                                    setHtml(e.target.value);
+                                    saveCurrentCaption(currentIndex, e.target.value); // [NEW] Auto-save
+                                }}
                                 onKeyDown={(e) => {
                                     if (e.key === 'Enter' && !e.shiftKey) {
                                         e.preventDefault();
