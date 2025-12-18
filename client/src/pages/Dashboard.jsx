@@ -198,6 +198,7 @@ export default function Dashboard() {
                      room.last_message_caption = msg.caption;
                      room.last_message_is_view_once = msg.is_view_once; // [FIX] Update view once status
                      room.last_message_viewed_by = msg.viewed_by || []; // [FIX] Reset viewed by
+                     room.last_message_file_name = msg.file_name; // [FIX] Update file name for preview
                      room.last_message_at = new Date().toISOString(); // Update timestamp for sorting
 
                      updatedRooms[roomIndex] = room;
