@@ -219,7 +219,24 @@ router.post('/', async (req, res) => {
             send_mode: 'everyone'
         };
 
-        res.json({ id: roomId, code, name, type, expires_at: expiresAt, ...permissions });
+        // [FIX] Return full room details including creator info
+        const creatorRes = await db.query('SELECT display_name, username, avatar_thumb_url FROM users WHERE id = $1', [req.user.id]);
+        const creator = creatorRes.rows[0];
+
+        res.json({ 
+            id: roomId, 
+            code, 
+            name, 
+            type, 
+            expires_at: expiresAt, 
+            ...permissions,
+            created_at: new Date().toISOString(), // Newly created
+            created_by: req.user.id,
+            creator_name: creator.display_name,
+            creator_username: creator.username,
+            avatar_thumb_url: null, // No avatar yet
+            avatar_url: null
+        });
     } catch (error) {
         console.error(error);
         res.status(500).json({ error: 'Server error' });
@@ -288,12 +305,18 @@ router.post('/join', async (req, res) => {
             send_mode: 'everyone'
         };
 
+        // [FIX] Fetch creator info
+        const creatorRes = await db.query('SELECT display_name, username FROM users WHERE id = $1', [room.created_by]);
+        const creator = creatorRes.rows[0] || {};
+
         const fullRoom = {
             ...room,
             role: 'member',
             last_read_at: null,
             unread_count: 0,
-            ...perms
+            ...perms,
+            creator_name: creator.display_name,    // [NEW]
+            creator_username: creator.username     // [NEW]
         };
 
         res.json(fullRoom);

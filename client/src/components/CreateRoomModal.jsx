@@ -12,6 +12,7 @@ export default function CreateRoomModal({ onClose, onCreate }) {
     const [searchResults, setSearchResults] = useState([]);
     const [selectedUser, setSelectedUser] = useState(null);
     const [isSearching, setIsSearching] = useState(false);
+    const [loading, setLoading] = useState(false);
 
     useEffect(() => {
         if (type !== 'direct' || !searchQuery) {
@@ -37,14 +38,19 @@ export default function CreateRoomModal({ onClose, onCreate }) {
         return () => clearTimeout(timer);
     }, [searchQuery, type, token]);
 
-    const handleSubmit = (e) => {
+    const handleSubmit = async (e) => {
         e.preventDefault();
+        setLoading(true);
         if (type === 'direct') {
-            if (!selectedUser) return;
-            onCreate({ type, targetUserId: selectedUser.id });
+            if (!selectedUser) {
+                setLoading(false);
+                return;
+            }
+            await onCreate({ type, targetUserId: selectedUser.id });
         } else {
-            onCreate({ name, type });
+            await onCreate({ name, type });
         }
+        setLoading(false);
     };
 
     return (
@@ -206,13 +212,14 @@ export default function CreateRoomModal({ onClose, onCreate }) {
                         </button>
                         <button 
                             type="submit" 
-                            disabled={type === 'direct' && !selectedUser}
-                            className={`flex-1 px-4 py-2.5 rounded-xl font-bold shadow-lg transition-all ${
+                            disabled={(type === 'direct' && !selectedUser) || loading}
+                            className={`flex-1 px-4 py-2.5 rounded-xl font-bold shadow-lg transition-all flex items-center justify-center gap-2 ${
                                 type === 'direct' && !selectedUser
                                 ? 'bg-slate-100 dark:bg-slate-800 text-slate-400 dark:text-slate-500 cursor-not-allowed shadow-none'
                                 : 'bg-violet-600 hover:bg-violet-500 text-white shadow-violet-500/20'
                             }`}
                         >
+                            {loading && <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"/>}
                             {type === 'direct' ? 'Start Chat' : 'Create'}
                         </button>
                     </div>
