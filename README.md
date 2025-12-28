@@ -21,7 +21,8 @@
 - **🟢 Online Presence**: See who's online and when they were last active.
 - **💬 Typing Indicators**: See when others are typing in real-time.
 - **🔐 App Lock**: Secure your access with a robust passcode entry system.
-- **🖼️ Advanced Media Viewer**: Full touch support with pinch-to-zoom, pan, and swipe navigation for images.
+- **� Secret Chats**: Lock individual chats with separate 4-digit PINs. Each chat can have its own passcode, and if you forget it, you can remove the lock using your account password.
+- **�🖼️ Advanced Media Viewer**: Full touch support with pinch-to-zoom, pan, and swipe navigation for images.
 - **🖼️ Smart Image Grouping**: Upload multiple images with individual captions, or group them into a beautiful grid with a shared caption.
 - **📂 Advanced File Sharing**: Share any file type with instant previews and dedicated download controls.
 - **📱 Native-Like Mobile Experience**: Highly polished responsive design with smooth transitions and touch-friendly controls.
