@@ -46,15 +46,37 @@ export default function LocationPicker({ isOpen, onClose, onSend }) {
                 setLoading(false);
             },
             (err) => {
-                setError(
-                    err.code === 1 
-                        ? 'Location permission denied. Please enable location access.' 
-                        : 'Could not get your location. Please try again.'
-                );
-                setLoading(false);
+                console.warn('Geolocation error:', err.message);
+                // Fallback to IP-based location
+                getIpLocation(err);
             },
-            { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+            { enableHighAccuracy: false, timeout: 15000, maximumAge: 10000 }
         );
+    };
+
+    const getIpLocation = async (originalError) => {
+        try {
+            const res = await fetch('https://ipapi.co/json/');
+            if (!res.ok) throw new Error('IP API failed');
+            const data = await res.json();
+            
+            if (data.latitude && data.longitude) {
+                setLocation({ latitude: data.latitude, longitude: data.longitude });
+                setAddress(`${data.city}, ${data.region}, ${data.country_name} (Approx. based on IP)`);
+                setLoading(false);
+            } else {
+                throw new Error('Invalid IP data');
+            }
+        } catch (ipErr) {
+            console.error('IP Fallback failed:', ipErr);
+            // Show original error if fallback fails
+            let msg = 'Could not get your location. Please try again.';
+            if (originalError.code === 1) msg = 'Location permission denied. Please enable location access.';
+            else if (originalError.code === 2) msg = 'Location unavailable. Check your GPS/network.';
+            else if (originalError.code === 3) msg = 'Location request timed out.';
+            setError(msg);
+            setLoading(false);
+        }
     };
 
     const handleSend = () => {
@@ -87,7 +109,7 @@ export default function LocationPicker({ isOpen, onClose, onSend }) {
                     </h2>
                     <button
                         onClick={onClose}
-                        className="p-2 rounded-full hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+                        className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
                     >
                         <span className="material-symbols-outlined text-slate-500">close</span>
                     </button>

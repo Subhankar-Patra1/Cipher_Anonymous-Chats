@@ -241,7 +241,7 @@ export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone,
                 <div className="relative group">
                     <div className={`
                         message-bubble
-                        ${(msg.type === 'image' || msg.type === 'gif') ? 'p-1' : 'px-4 py-3'}
+                        ${(msg.type === 'image' || msg.type === 'gif' || msg.type === 'location') ? 'p-1' : 'px-4 py-3'}
                         shadow-md text-sm leading-relaxed break-all relative overflow-hidden
                         ${isMe 
                             ? `bg-violet-600 text-white ${(msg.type === 'gif') ? 'rounded-[10px]' : 'rounded-2xl rounded-tr-sm'} whitespace-pre-wrap` 
@@ -303,13 +303,29 @@ export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone,
                                             {msg.replyTo.caption ? ` • ${msg.replyTo.caption}` : ''}
                                         </span>
                                     </div>
+                                ) : msg.replyTo.type === 'location' ? (
+                                    <div className="flex justify-between items-start gap-2">
+                                        <div className="flex items-center gap-1 text-xs opacity-90">
+                                            <span className="material-symbols-outlined text-[14px]">location_on</span>
+                                            <span>Location</span>
+                                        </div>
+                                        {msg.replyTo.latitude && msg.replyTo.longitude && (
+                                            <div className="w-10 h-10 rounded overflow-hidden shrink-0 border border-black/10 dark:border-white/10">
+                                                <img 
+                                                    src={`https://static-maps.yandex.ru/1.x/?lang=en-US&ll=${msg.replyTo.longitude},${msg.replyTo.latitude}&z=10&l=map&size=80,80&pt=${msg.replyTo.longitude},${msg.replyTo.latitude},pm2rdm`}
+                                                    alt="Map"
+                                                    className="w-full h-full object-cover"
+                                                />
+                                            </div>
+                                        )}
+                                    </div>
                                 ) : msg.replyTo.type === 'poll' ? (
                                     <div className="flex items-center gap-1 text-xs opacity-90">
                                         <PollIcon className="w-[14px] h-[14px] shrink-0" />
-                                        <span className="truncate">{msg.replyTo.poll_question || 'Poll'}</span>
+                                        <span className="truncate">{renderTextWithEmojis(msg.replyTo.poll_question) || 'Poll'}</span>
                                     </div>
                                 ) : (
-                                    <div className="text-xs opacity-80 line-clamp-2 flex items-center gap-1">
+                                    <div className="text-xs opacity-80 line-clamp-2">
                                         {renderTextWithEmojis(msg.replyTo.text)}
                                     </div>
                                 )}
@@ -970,7 +986,10 @@ export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone,
                                             caption: msg.caption,
                                             audio_duration_ms: msg.audio_duration_ms,
                                             is_view_once: msg.is_view_once,
-                                            poll_question: msg.poll?.question
+                                            poll_question: msg.poll?.question,
+                                            latitude: msg.latitude,
+                                            longitude: msg.longitude,
+                                            address: msg.address
                                         });
                                         setShowMenu(false);
                                     }}
@@ -982,7 +1001,7 @@ export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone,
                             )}
 
                             {/* [NEW] Edit Option */}
-                            {isMe && !isAudio && msg.type !== 'gif' && msg.type !== 'file' && msg.type !== 'poll' && !msg.is_deleted_for_everyone && (msg.type !== 'image' || msg.caption) && (
+                            {isMe && !isAudio && msg.type !== 'gif' && msg.type !== 'file' && msg.type !== 'location' && msg.type !== 'poll' && !msg.is_deleted_for_everyone && (msg.type !== 'image' || msg.caption) && (
                                 <button 
                                     className="w-full flex items-center gap-2 px-3 py-2.5 text-left text-sm text-slate-700 dark:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors first:rounded-t-2xl last:rounded-b-2xl"
                                     onClick={(e) => {
@@ -1020,7 +1039,7 @@ export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone,
                                 </button>
                             )}
 
-                            {msg.type !== 'audio' && msg.type !== 'gif' && msg.type !== 'file' && msg.type !== 'poll' && !isAi && !msg.is_view_once && (
+                            {msg.type !== 'audio' && msg.type !== 'gif' && msg.type !== 'file' && msg.type !== 'location' && msg.type !== 'poll' && !isAi && !msg.is_view_once && (
                                 <button 
                                     className="w-full flex items-center gap-2 px-3 py-2.5 text-left text-sm text-slate-700 dark:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors first:rounded-t-2xl last:rounded-b-2xl"
                                     onClick={async (e) => {

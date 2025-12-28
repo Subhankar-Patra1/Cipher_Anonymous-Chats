@@ -737,13 +737,32 @@ export default function MessageInput({
                                         <span className="text-sm font-semibold text-violet-600 dark:text-violet-300 flex items-center gap-1">{renderTextWithEmojis(replyTo.sender)}</span>
                                         <span className="text-sm text-slate-600 dark:text-slate-300 flex items-center gap-1">
                                             <PollIcon className="w-4 h-4 shrink-0" />
-                                            {replyTo.poll_question || 'Poll'}
+                                            {renderTextWithEmojis(replyTo.poll_question) || 'Poll'}
                                         </span>
+                                    </div>
+                                ) : replyTo.type === 'location' ? (
+                                    <div className="flex justify-between items-center w-full gap-2">
+                                        <div className="flex flex-col">
+                                            <span className="text-sm font-semibold text-violet-600 dark:text-violet-300 flex items-center gap-1">{renderTextWithEmojis(replyTo.sender)}</span>
+                                            <span className="text-sm text-slate-600 dark:text-slate-300 flex items-center gap-1">
+                                                <span className="material-symbols-outlined text-sm">location_on</span>
+                                                Location
+                                            </span>
+                                        </div>
+                                        {replyTo.latitude && replyTo.longitude && (
+                                            <div className="w-12 h-12 rounded-md overflow-hidden shrink-0 border border-slate-200 dark:border-slate-700">
+                                                <img 
+                                                    src={`https://static-maps.yandex.ru/1.x/?lang=en-US&ll=${replyTo.longitude},${replyTo.latitude}&z=10&l=map&size=100,100&pt=${replyTo.longitude},${replyTo.latitude},pm2rdm`}
+                                                    alt="Map"
+                                                    className="w-full h-full object-cover"
+                                                />
+                                            </div>
+                                        )}
                                     </div>
                                 ) : (
                                     <div className="flex flex-col">
-                                        <span className="text-sm font-semibold text-violet-600 dark:text-violet-300 flex items-center gap-1">{renderTextWithEmojis(replyTo.sender)}</span>
-                                        <span className="text-sm text-slate-600 dark:text-slate-300 break-words line-clamp-2 max-h-[3em] flex items-center gap-1">{renderTextWithEmojis(replyTo.text)}</span>
+                                        <span className="text-sm font-semibold text-violet-600 dark:text-violet-300">{renderTextWithEmojis(replyTo.sender)}</span>
+                                        <span className="text-sm text-slate-600 dark:text-slate-300 break-words line-clamp-2 max-h-[3em]">{renderTextWithEmojis(replyTo.text)}</span>
                                     </div>
                                 )}
                             </div>

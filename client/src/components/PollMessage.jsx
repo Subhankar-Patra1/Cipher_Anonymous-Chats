@@ -136,7 +136,7 @@ export default function PollMessage({ poll, onVote, onClose, isMe }) {
             {/* Question */}
             <div className="mb-3">
                 <p className={`font-medium ${isMe ? 'text-white' : 'text-slate-800 dark:text-white'}`}>
-                    📊 {poll.question}
+                    📊 {renderTextWithEmojis(poll.question)}
                 </p>
                 <div className={`flex items-center gap-1.5 mt-1 text-xs ${isMe ? 'text-violet-200' : 'text-slate-500 dark:text-slate-400'}`}>
                     <span className="material-symbols-outlined text-[16px]">
@@ -207,7 +207,7 @@ export default function PollMessage({ poll, onVote, onClose, isMe }) {
                                     <span className={`text-sm truncate ${
                                         isMe ? 'text-white' : 'text-slate-700 dark:text-slate-200'
                                     }`}>
-                                        {option.text}
+                                        {renderTextWithEmojis(option.text)}
                                     </span>
                                 </div>
 
@@ -299,7 +299,7 @@ export default function PollMessage({ poll, onVote, onClose, isMe }) {
 
                         {/* Modal Content */}
                         <div className="p-4 overflow-y-auto max-h-[60vh] custom-scrollbar">
-                            <p className="text-sm font-medium text-slate-700 dark:text-slate-300 mb-4">{modalPollData.question}</p>
+                            <p className="text-sm font-medium text-slate-700 dark:text-slate-300 mb-4">{renderTextWithEmojis(modalPollData.question)}</p>
                             
                             {loadingVotes ? (
                                 <div className="flex justify-center py-8">
@@ -312,7 +312,7 @@ export default function PollMessage({ poll, onVote, onClose, isMe }) {
                                             {/* Option Header */}
                                             <div className="flex items-center justify-between">
                                                 <span className="text-sm font-medium text-slate-800 dark:text-slate-200">
-                                                    {option.text}
+                                                    {renderTextWithEmojis(option.text)}
                                                 </span>
                                                 <span className="text-xs text-slate-500 dark:text-slate-400">
                                                     {option.vote_count} vote{option.vote_count !== 1 ? 's' : ''}

@@ -19,7 +19,7 @@ export default function LocationMessage({ latitude, longitude, address, isMe }) 
             title="Open in Google Maps"
         >
             {/* Map Preview */}
-            <div className="relative w-[250px] h-[150px] rounded-xl overflow-hidden border border-white/20 shadow-lg">
+            <div className="relative w-[250px] h-[150px] rounded-lg overflow-hidden border border-white/20 shadow-lg">
                 <img 
                     src={`https://static-maps.yandex.ru/1.x/?lang=en-US&ll=${longitude},${latitude}&z=15&l=map&size=250,150&pt=${longitude},${latitude},pm2rdm`}
                     alt="Location"
@@ -42,7 +42,7 @@ export default function LocationMessage({ latitude, longitude, address, isMe }) 
 
                 {/* Open button on hover */}
                 <div className="absolute top-2 right-2 opacity-0 group-hover/map:opacity-100 transition-opacity">
-                    <div className="bg-white dark:bg-slate-800 rounded-full p-1.5 shadow-lg">
+                    <div className="bg-white dark:bg-slate-800 rounded-full w-8 h-8 flex items-center justify-center shadow-lg">
                         <span className="material-symbols-outlined text-[16px] text-slate-700 dark:text-slate-200">open_in_new</span>
                     </div>
                 </div>
@@ -50,7 +50,7 @@ export default function LocationMessage({ latitude, longitude, address, isMe }) 
 
             {/* Address if available */}
             {address && (
-                <p className={`text-xs mt-2 max-w-[250px] line-clamp-2 ${
+                <p className={`text-xs mt-2 mb-1 px-1 max-w-[250px] line-clamp-2 ${
                     isMe ? 'text-violet-200' : 'text-slate-500 dark:text-slate-400'
                 }`}>
                     {address}

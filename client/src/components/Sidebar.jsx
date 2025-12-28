@@ -484,6 +484,12 @@ export default function Sidebar({ rooms, activeRoom, onSelectRoom, loadingRoomId
                                                         </span>
                                                 </span>
                                              ) :
+                                             room.last_message_type === 'location' ? (
+                                                <span className="flex items-center gap-1">
+                                                    <span className="material-symbols-outlined text-[18px] translate-y-[0.5px]">location_on</span>
+                                                    <span>Location</span>
+                                                </span>
+                                             ) :
                                              room.last_message_type === 'audio' ? 'Sent an audio' :
                                              room.last_message_type === 'gif' ? 'Sent a GIF' :
                                              room.last_message_type === 'poll_vote' ? (
@@ -493,7 +499,7 @@ export default function Sidebar({ rooms, activeRoom, onSelectRoom, loadingRoomId
                                                      </span>
                                                      <span>voted in:</span>
                                                      <PollIcon className="w-4 h-4 shrink-0" />
-                                                     <span className="truncate">{room.last_message_poll_question || 'Poll'}</span>
+                                                     <span className="truncate">{renderTextWithEmojis(room.last_message_poll_question, '1.1em') || 'Poll'}</span>
                                                  </span>
                                              ) :
                                              room.last_message_type === 'poll' ? (
@@ -502,7 +508,7 @@ export default function Sidebar({ rooms, activeRoom, onSelectRoom, loadingRoomId
                                                         <span className="shrink-0">{room.last_message_sender_id === user.id ? 'You' : renderTextWithEmojis(room.last_message_sender_name, '1.65em')}:</span>
                                                     )}
                                                      <PollIcon className="w-4 h-4 shrink-0" />
-                                                     <span className="truncate">{room.last_message_poll_question || 'Poll'}</span>
+                                                     <span className="truncate">{renderTextWithEmojis(room.last_message_poll_question, '1.1em') || 'Poll'}</span>
                                                  </span>
                                              ) :
                                              (room.last_message_content && room.last_message_content.includes('pinned a message')) ? (
