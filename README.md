@@ -6,25 +6,41 @@
 
 ## 🚀 Features
 
+### Core Messaging
 - **🔒 Truly Anonymous**: No emails, no phone numbers, no passwords. Identity is session-based.
-- **🤖 Sparkle AI**: Integrated context-aware AI assistant (powered by Gemini) for coding help, general knowledge, and conversational support. Includes persistent history and code block formatting.
 - **⚡ Real-Time Messaging**: Instant delivery using Socket.IO.
 - **⏲️ Ephemeral Groups**: Group chat rooms automatically expire and delete after 48 hours.
 - **👥 Direct Messaging**: Private one-on-one chats with other users.
 - **🔗 Smart Invites**: Share rooms via unique codes or direct links (QR codes included!).
-- **� Enhanced Chat Actions**: Reply to messages (with preview), copy text, and delete messages (for yourself or everyone).
+
+### AI Integration
+- **🤖 Sparkle AI**: Integrated context-aware AI assistant (powered by Gemini) for coding help, general knowledge, and conversational support. Includes persistent history and code block formatting.
+
+### Rich Media & Content
 - **📝 Rich Text & Code**: Markdown support with syntax highlighting for code blocks and copy-to-clipboard functionality.
-- **�📱 Fully Responsive**: a beautiful, mobile-first interface built with TailwindCSS.
-- **🛡️ Secure**: JWT-based authentication and PostgreSQL persistence.
+- **� Advanced Emoji Support**: Full emoji picker with smart emoji rendering using Twemoji for consistent cross-platform display.
 - **🎤 Voice Notes**: Record and send audio messages with waveform previews.
-- **✏️ Edit Messages**: Fix typos or update sent messages instantly.
-- **🟢 Online Presence**: See who's online and when they were last active.
-- **💬 Typing Indicators**: See when others are typing in real-time.
-- **🔐 App Lock**: Secure your access with a robust passcode entry system.
-- **� Secret Chats**: Lock individual chats with separate 4-digit PINs. Each chat can have its own passcode, and if you forget it, you can remove the lock using your account password.
-- **�🖼️ Advanced Media Viewer**: Full touch support with pinch-to-zoom, pan, and swipe navigation for images.
+- **🖼️ Advanced Media Viewer**: Full touch support with pinch-to-zoom, pan, and swipe navigation for images.
 - **🖼️ Smart Image Grouping**: Upload multiple images with individual captions, or group them into a beautiful grid with a shared caption.
 - **📂 Advanced File Sharing**: Share any file type with instant previews and dedicated download controls.
+- **🎥 GIF Support**: Send animated GIFs powered by Tenor.
+
+### Interactive Features
+- **📊 Polls**: Create polls with multiple options and emoji support. See real-time voting results and participation.
+- **📍 Location Sharing**: Share your current location with an interactive map preview powered by OpenStreetMap.
+- **↩️ Enhanced Chat Actions**: Reply to messages (with preview), copy text, and delete messages (for yourself or everyone).
+- **✏️ Edit Messages**: Fix typos or update sent messages instantly.
+
+### Security & Privacy
+- **🛡️ Secure**: JWT-based authentication and PostgreSQL persistence.
+- **🔐 App Lock**: Secure your access with a robust passcode entry system.
+- **🔒 Secret Chats**: Lock individual chats with separate 4-digit PINs. Each chat can have its own passcode, and if you forget it, you can remove the lock using your account password.
+
+### User Experience
+- **� Online Presence**: See who's online and when they were last active.
+- **� Typing Indicators**: See when others are typing in real-time.
+- **📌 Pin Chats**: Pin important conversations to the top of your chat list.
+- **� Archive Chats**: Archive less important chats to keep your inbox clean.
 - **📱 Native-Like Mobile Experience**: Highly polished responsive design with smooth transitions and touch-friendly controls.
 
 ## 🛠️ Tech Stack
