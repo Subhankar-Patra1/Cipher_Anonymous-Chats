@@ -144,6 +144,16 @@ const createTables = async () => {
                 send_mode VARCHAR(16) DEFAULT 'everyone',
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
+
+            -- Secret Chats: Individual chat lock per user
+            CREATE TABLE IF NOT EXISTS chat_locks (
+                id SERIAL PRIMARY KEY,
+                room_id INTEGER REFERENCES rooms(id) ON DELETE CASCADE,
+                user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+                passcode_hash TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(room_id, user_id)
+            );
         `);
         console.log("Tables created successfully");
     } catch (err) {

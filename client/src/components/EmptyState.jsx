@@ -1,4 +1,5 @@
 import React from 'react';
+import { DotLottieReact } from '@lottiefiles/dotlottie-react';
 
 /**
  * Reusable empty state component with illustration and message
@@ -93,12 +94,35 @@ export function NoChatSelected() {
 
 export function NoMessages() {
     return (
-        <EmptyState
-            icon="forum"
-            title="No messages yet"
-            description="Start the conversation by sending a message"
-            variant="chat"
-        />
+        <div className="flex flex-col items-center justify-center py-6 sm:py-12 px-4 sm:px-6 text-center h-full overflow-hidden">
+            {/* Lottie Animation Container - smaller on mobile */}
+            <div className="relative mb-2 sm:mb-4 w-32 h-32 sm:w-48 sm:h-48">
+                {/* DotLottie Animation - supports .lottie files */}
+                <DotLottieReact
+                    src="/animations/Share.lottie"
+                    loop
+                    autoplay
+                    className="w-full h-full"
+                />
+            </div>
+            
+            {/* Title - responsive text size */}
+            <h3 className="text-base sm:text-lg font-semibold text-slate-700 dark:text-slate-200 mb-1 sm:mb-2">
+                No messages yet
+            </h3>
+            
+            {/* Description - responsive text and width */}
+            <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400 max-w-[220px] sm:max-w-[280px] leading-relaxed">
+                Start the conversation by sending a message
+            </p>
+            
+            {/* Decorative elements */}
+            <div className="flex items-center gap-2 mt-3 sm:mt-4 opacity-50">
+                <div className="w-1 h-1 sm:w-1.5 sm:h-1.5 rounded-full bg-violet-400 animate-pulse" />
+                <div className="w-1 h-1 sm:w-1.5 sm:h-1.5 rounded-full bg-indigo-400 animate-pulse animation-delay-200" />
+                <div className="w-1 h-1 sm:w-1.5 sm:h-1.5 rounded-full bg-cyan-400 animate-pulse animation-delay-400" />
+            </div>
+        </div>
     );
 }
 

@@ -1393,4 +1393,188 @@ router.post('/:id/unpin', async (req, res) => {
     }
 });
 
+// =====================
+// SECRET CHATS (Chat Lock)
+// =====================
+
+const bcrypt = require('bcrypt');
+const SALT_ROUNDS = 10;
+
+// Get Lock Status for a room
+router.get('/:id/lock/status', async (req, res) => {
+    const roomId = req.params.id;
+    try {
+        const lockRes = await db.query(
+            'SELECT id, created_at FROM chat_locks WHERE room_id = $1 AND user_id = $2',
+            [roomId, req.user.id]
+        );
+        
+        res.json({ 
+            isLocked: lockRes.rows.length > 0,
+            lockedAt: lockRes.rows[0]?.created_at || null
+        });
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ error: 'Server error' });
+    }
+});
+
+// Set Lock on a chat
+router.post('/:id/lock', async (req, res) => {
+    const roomId = req.params.id;
+    const { passcode } = req.body;
+    
+    if (!passcode || passcode.length < 4 || passcode.length > 6) {
+        return res.status(400).json({ error: 'Passcode must be 4-6 digits' });
+    }
+    
+    if (!/^\d+$/.test(passcode)) {
+        return res.status(400).json({ error: 'Passcode must contain only digits' });
+    }
+
+    try {
+        // Verify user is a member of the room
+        const memberCheck = await db.query(
+            'SELECT 1 FROM room_members WHERE room_id = $1 AND user_id = $2',
+            [roomId, req.user.id]
+        );
+        if (!memberCheck.rows.length) {
+            return res.status(403).json({ error: 'Not a member of this chat' });
+        }
+
+        // Check if already locked
+        const existingLock = await db.query(
+            'SELECT id FROM chat_locks WHERE room_id = $1 AND user_id = $2',
+            [roomId, req.user.id]
+        );
+        
+        const hash = await bcrypt.hash(passcode, SALT_ROUNDS);
+        
+        if (existingLock.rows.length > 0) {
+            // Update existing lock
+            await db.query(
+                'UPDATE chat_locks SET passcode_hash = $1, created_at = NOW() WHERE room_id = $2 AND user_id = $3',
+                [hash, roomId, req.user.id]
+            );
+        } else {
+            // Create new lock
+            await db.query(
+                'INSERT INTO chat_locks (room_id, user_id, passcode_hash) VALUES ($1, $2, $3)',
+                [roomId, req.user.id, hash]
+            );
+        }
+        
+        res.json({ success: true, message: 'Chat locked successfully' });
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ error: 'Server error' });
+    }
+});
+
+// Verify passcode to unlock chat (session-based unlock)
+router.post('/:id/lock/verify', async (req, res) => {
+    const roomId = req.params.id;
+    const { passcode } = req.body;
+    
+    if (!passcode) {
+        return res.status(400).json({ error: 'Passcode required' });
+    }
+
+    try {
+        const lockRes = await db.query(
+            'SELECT passcode_hash FROM chat_locks WHERE room_id = $1 AND user_id = $2',
+            [roomId, req.user.id]
+        );
+        
+        if (!lockRes.rows.length) {
+            return res.status(404).json({ error: 'Chat is not locked' });
+        }
+        
+        const isValid = await bcrypt.compare(passcode, lockRes.rows[0].passcode_hash);
+        
+        if (isValid) {
+            // Generate a session token (simple approach: JWT or just a flag)
+            // For simplicity, we just return success and let client manage session state
+            res.json({ success: true, message: 'Unlocked' });
+        } else {
+            res.status(401).json({ error: 'Incorrect passcode' });
+        }
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ error: 'Server error' });
+    }
+});
+
+// Remove lock from chat
+router.delete('/:id/lock', async (req, res) => {
+    const roomId = req.params.id;
+    const { passcode, appPasscode } = req.body;
+    
+    try {
+        const lockRes = await db.query(
+            'SELECT passcode_hash FROM chat_locks WHERE room_id = $1 AND user_id = $2',
+            [roomId, req.user.id]
+        );
+        
+        if (!lockRes.rows.length) {
+            return res.status(404).json({ error: 'Chat is not locked' });
+        }
+        
+        // Verify with chat passcode OR app passcode (forgot PIN flow)
+        let verified = false;
+        
+        if (passcode) {
+            verified = await bcrypt.compare(passcode, lockRes.rows[0].passcode_hash);
+        }
+        
+        // If passcode verification failed and appPasscode provided, 
+        // we could verify against user's account (for "forgot PIN" flow)
+        // For now, we only support direct passcode verification
+        // App passcode verification would require account password check from auth module
+        
+        if (!verified && !appPasscode) {
+            return res.status(401).json({ error: 'Incorrect passcode' });
+        }
+        
+        if (!verified && appPasscode) {
+            // Forgot PIN flow - user provides their account password
+            const userRes = await db.query('SELECT password_hash FROM users WHERE id = $1', [req.user.id]);
+            if (userRes.rows.length) {
+                verified = await bcrypt.compare(appPasscode, userRes.rows[0].password_hash);
+            }
+        }
+        
+        if (!verified) {
+            return res.status(401).json({ error: 'Verification failed' });
+        }
+        
+        await db.query(
+            'DELETE FROM chat_locks WHERE room_id = $1 AND user_id = $2',
+            [roomId, req.user.id]
+        );
+        
+        res.json({ success: true, message: 'Lock removed' });
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ error: 'Server error' });
+    }
+});
+
+// Get all locked rooms for current user (for initial load)
+router.get('/locks/all', async (req, res) => {
+    try {
+        const locksRes = await db.query(
+            'SELECT room_id, created_at FROM chat_locks WHERE user_id = $1',
+            [req.user.id]
+        );
+        
+        const lockedRoomIds = locksRes.rows.map(r => r.room_id);
+        res.json({ lockedRoomIds });
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ error: 'Server error' });
+    }
+});
+
 module.exports = router;
+

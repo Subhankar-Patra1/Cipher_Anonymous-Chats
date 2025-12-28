@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useNotification } from '../context/NotificationContext';
+import { ChatLockProvider } from '../context/ChatLockContext';
 import Sidebar from '../components/Sidebar';
 import ChatWindow from '../components/ChatWindow';
 import AIChatWindow from '../components/AIChatWindow';
@@ -9,6 +10,8 @@ import JoinRoomModal from '../components/JoinRoomModal';
 import GroupInfoModal from '../components/GroupInfoModal';
 import LogoutModal from '../components/LogoutModal';
 import NotificationPermissionBanner from '../components/NotificationPermissionBanner';
+import ChatAreaLockGuard from '../components/ChatAreaLockGuard';
+import { renderTextWithEmojis } from '../utils/emojiRenderer';
 import io from 'socket.io-client';
 import { PresenceProvider } from '../context/PresenceContext';
 
@@ -758,6 +761,7 @@ export default function Dashboard() {
     };
 
     return (
+        <ChatLockProvider>
         <PresenceProvider socket={socket}>
             <AiChatProvider socket={socket}>
         {/* Notification Permission Banner */}
@@ -784,6 +788,12 @@ export default function Dashboard() {
                     user={user}
                     onRefresh={fetchRooms}           // [NEW] Pass refresh handler
                     onLogout={() => setShowLogoutModal(true)}
+                    onRoomLocked={(roomId) => {
+                        // Close the chat if the locked room is currently active
+                        if (activeRoom && String(activeRoom.id) === String(roomId)) {
+                            setActiveRoom(null);
+                        }
+                    }}
                 />
             </div>
 
@@ -796,6 +806,7 @@ export default function Dashboard() {
             )}
             
             {/* Mobile: Chat visible if activeRoom exists. Desktop: Always visible (flex-1) */}
+            <ChatAreaLockGuard onUnlockComplete={handleSelectRoom}>
             <div className={`
                 ${activeRoom ? 'flex' : 'hidden md:flex'} 
                 flex-1 flex-col h-full bg-gray-50 dark:bg-slate-950 relative z-0 min-w-0 overflow-hidden transition-colors duration-300
@@ -860,7 +871,7 @@ export default function Dashboard() {
                             </div>
 
                             <h2 className="text-3xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-slate-900 via-violet-800 to-slate-900 dark:from-white dark:via-violet-200 dark:to-white mb-3">
-                                Welcome, {user?.display_name || 'Guest'}
+                                Welcome, {renderTextWithEmojis(user?.display_name || 'Guest')}
                             </h2>
                             <p className="text-slate-500 dark:text-slate-400 text-lg mb-8 leading-relaxed">
                                 Select a conversation from the sidebar or start a new room to begin secure messaging.
@@ -893,6 +904,7 @@ export default function Dashboard() {
                     </div>
                 )}
             </div>
+            </ChatAreaLockGuard>
 
             {showCreateModal && (
                 <CreateRoomModal 
@@ -941,5 +953,6 @@ export default function Dashboard() {
         </div>
         </AiChatProvider>
         </PresenceProvider>
+        </ChatLockProvider>
     );
 }

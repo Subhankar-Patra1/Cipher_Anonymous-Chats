@@ -1,10 +1,12 @@
 import { useState, useEffect, useRef } from 'react';
 import { usePresence } from '../context/PresenceContext';
 import { useAppLock } from '../context/AppLockContext';
+import { useChatLock } from '../context/ChatLockContext';
 import { useTheme } from '../context/ThemeContext';
 import StatusDot from './StatusDot';
 import ProfileShareModal from './ProfileShareModal';
 import ProfilePanel from './ProfilePanel';
+import ChatLockModal from './ChatLockModal';
 import { linkifyText } from '../utils/linkify';
 import SparkleLogo from './icons/SparkleLogo';
 import { renderTextWithEmojis } from '../utils/emojiRenderer';
@@ -13,15 +15,17 @@ import { ChatListSkeleton } from './SkeletonLoaders';
 import PollIcon from './icons/PollIcon';
 
 
-export default function Sidebar({ rooms, activeRoom, onSelectRoom, loadingRoomId, isLoading, onCreateRoom, onJoinRoom, user, onLogout, onRefresh }) {
+export default function Sidebar({ rooms, activeRoom, onSelectRoom, loadingRoomId, isLoading, onCreateRoom, onJoinRoom, user, onLogout, onRefresh, onRoomLocked }) {
     const { presenceMap, fetchStatuses } = usePresence();
     const { hasPasscode, lockApp } = useAppLock();
+    const { isRoomLocked, requestUnlock } = useChatLock();
     const { theme, toggleTheme } = useTheme();
     const [tab, setTab] = useState('group'); // 'group' or 'direct'
     const [searchQuery, setSearchQuery] = useState('');
     const [archivedSearchQuery, setArchivedSearchQuery] = useState('');
     const [showShareProfile, setShowShareProfile] = useState(false);
     const [showMyProfile, setShowMyProfile] = useState(false);
+    const [showChatLockModal, setShowChatLockModal] = useState(null); // room to lock/unlock
 
     const myProfileRef = useRef(null);
     
@@ -385,7 +389,14 @@ export default function Sidebar({ rooms, activeRoom, onSelectRoom, loadingRoomId
                     filteredRooms.map(room => (
                     <div
                         key={room.id}
-                        onClick={() => onSelectRoom(room)}
+                        onClick={() => {
+                            // Check if room is locked - always ask for passcode
+                            if (isRoomLocked(room.id)) {
+                                requestUnlock(room);
+                                return;
+                            }
+                            onSelectRoom(room);
+                        }}
                         // disabled={loadingRoomId === room.id} // Div doesn't support disabled, handle via class or logic
                         className={`w-full text-left p-3 rounded-lg flex items-center gap-3 transition-all duration-200 group hover:translate-x-1 cursor-pointer select-none ${
                             activeRoom?.id === room.id 
@@ -420,6 +431,14 @@ export default function Sidebar({ rooms, activeRoom, onSelectRoom, loadingRoomId
                             {room.type === 'direct' && room.other_user_id && (
                                 <StatusDot online={presenceMap[room.other_user_id]?.online} />
                             )}
+                            {/* Lock Badge */}
+                            {isRoomLocked(room.id) && (
+                                <div className="absolute -bottom-0.5 -right-0.5 w-4 h-4 bg-amber-500 rounded-full flex items-center justify-center border-2 border-white dark:border-slate-900">
+                                    <svg className="w-2 h-2 text-white" fill="currentColor" viewBox="0 0 20 20">
+                                        <path fillRule="evenodd" d="M5 9V7a5 5 0 0110 0v2a2 2 0 012 2v5a2 2 0 01-2 2H5a2 2 0 01-2-2v-5a2 2 0 012-2zm8-2v2H7V7a3 3 0 016 0z" clipRule="evenodd" />
+                                    </svg>
+                                </div>
+                            )}
                         </div>
                         <div className="flex-1 min-w-0 flex justify-between items-center">
                             <div className="min-w-0">
@@ -434,6 +453,13 @@ export default function Sidebar({ rooms, activeRoom, onSelectRoom, loadingRoomId
                                         <span className="text-slate-500 dark:text-slate-400 truncate">
                                             {drafts[room.id].replace(/<[^>]*>/g, '').slice(0, 30)}
                                         </span>
+                                    </div>
+                                ) : isRoomLocked(room.id) ? (
+                                    <div className="text-xs truncate flex items-center gap-1 text-amber-600 dark:text-amber-400">
+                                        <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
+                                            <path fillRule="evenodd" d="M5 9V7a5 5 0 0110 0v2a2 2 0 012 2v5a2 2 0 01-2 2H5a2 2 0 01-2-2v-5a2 2 0 012-2zm8-2v2H7V7a3 3 0 016 0z" clipRule="evenodd" />
+                                        </svg>
+                                        <span>Locked Chat</span>
                                     </div>
                                 ) : (
                                     <div className="text-xs text-slate-500 dark:text-slate-400 truncate flex items-center gap-1">
@@ -636,6 +662,13 @@ export default function Sidebar({ rooms, activeRoom, onSelectRoom, loadingRoomId
                                     console.error(e);
                                 }
                             }
+                        },
+                        {
+                            label: isRoomLocked(contextMenu.room.id) ? 'Manage Lock' : 'Lock Chat',
+                            icon: isRoomLocked(contextMenu.room.id) ? 'lock' : 'lock_open',
+                            onClick: () => {
+                                setShowChatLockModal(contextMenu.room);
+                            }
                         }
                     ].filter(Boolean)}
                 />
@@ -680,6 +713,17 @@ export default function Sidebar({ rooms, activeRoom, onSelectRoom, loadingRoomId
                     userId={user.id}
                     onClose={() => setShowMyProfile(false)}
                     // No actions for self in sidebar
+                />
+            )}
+
+            {/* Chat Lock Modal */}
+            {showChatLockModal && (
+                <ChatLockModal
+                    room={showChatLockModal}
+                    onClose={() => setShowChatLockModal(null)}
+                    onLockSet={(roomId) => {
+                        if (onRoomLocked) onRoomLocked(roomId);
+                    }}
                 />
             )}
         </div>

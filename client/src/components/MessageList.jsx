@@ -16,6 +16,7 @@ import ImageViewerModal from './ImageViewerModal';
 import LocationMessage from './LocationMessage';
 import PollMessage from './PollMessage';
 import PollIcon from './icons/PollIcon';
+import { NoMessages } from './EmptyState';
 
 const formatDuration = (ms) => {
     if (!ms) return '0:00';
@@ -1447,6 +1448,8 @@ export default function MessageList({ messages, setMessages, currentUser, roomId
         }, 2000);
     };
 
+    const hasMessages = messages.filter(m => m.type !== 'poll_vote').length > 0;
+
     return (
         <div 
             className="flex-1 relative min-h-0 group/list"
@@ -1456,9 +1459,19 @@ export default function MessageList({ messages, setMessages, currentUser, roomId
                 }
             }}
         >
+            {/* Empty State - outside scroll container */}
+            {!hasMessages && (
+                <div className="absolute inset-0 flex items-center justify-center z-10">
+                    <NoMessages />
+                </div>
+            )}
+
+            {/* Scrollable Messages Container - only show when there are messages */}
             <div 
                 ref={scrollRef}
-                className="absolute inset-0 overflow-y-auto overflow-x-hidden p-6 space-y-6 custom-scrollbar z-0"
+                className={`absolute inset-0 p-4 sm:p-6 space-y-4 sm:space-y-6 custom-scrollbar z-0 ${
+                    hasMessages ? 'overflow-y-auto overflow-x-hidden' : 'overflow-hidden'
+                }`}
                 onScroll={handleScroll}
             >
                 {loadingMore && (
@@ -1473,7 +1486,8 @@ export default function MessageList({ messages, setMessages, currentUser, roomId
                         onClose={() => setViewingImage(null)} 
                     />
                 )}
-                {messages.filter(m => m.type !== 'poll_vote').map((msg, index) => {
+                {hasMessages && (
+                messages.filter(m => m.type !== 'poll_vote').map((msg, index) => {
                     // [FIX] AI messages might have same user_id but are NOT 'me' for display purposes
                     const isAi = msg.user_id === 'ai-assistant' || msg.author_name === 'Assistant' || (msg.meta && msg.meta.ai) || msg.isStreaming;
                     const isMe = msg.user_id == currentUser.id && !isAi;
@@ -1559,7 +1573,8 @@ export default function MessageList({ messages, setMessages, currentUser, roomId
                             token={token}
                         />
                     );
-                })}
+                })
+                )}
 
                 <div ref={bottomRef} />
             </div>
