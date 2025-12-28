@@ -35,9 +35,24 @@ router.post('/', async (req, res) => {
             return res.status(403).json({ error: 'Not a member of this room' });
         }
 
+        // Validate question length (max 250 characters including emojis)
+        if (!question || question.trim().length === 0) {
+            return res.status(400).json({ error: 'Question is required' });
+        }
+        if ([...question].length > 250) {
+            return res.status(400).json({ error: 'Question must be 250 characters or less' });
+        }
+
         // Validate options
         if (!options || !Array.isArray(options) || options.length < 2) {
             return res.status(400).json({ error: 'At least 2 options required' });
+        }
+
+        // Validate each option length (max 50 characters including emojis)
+        for (let i = 0; i < options.length; i++) {
+            if ([...options[i]].length > 50) {
+                return res.status(400).json({ error: `Option ${i + 1} must be 50 characters or less` });
+            }
         }
 
         // Start transaction

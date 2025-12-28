@@ -1,5 +1,4 @@
-import React, { useRef, useEffect, useState } from 'react';
-import ContentEditable from 'react-contenteditable';
+import React, { useRef, useEffect, useState, useCallback } from 'react';
 import { renderTextWithEmojisToHtml } from '../utils/emojiRenderer';
 
 const EmojiSmartInput = ({ 
@@ -12,81 +11,147 @@ const EmojiSmartInput = ({
     readOnly,
     onFocus,
     onBlur,
-    onEmojiToggle // Optional extra button or handler
+    onEmojiToggle
 }) => {
-    const contentEditableRef = useRef(null);
-    const [html, setHtml] = useState('');
+    const editorRef = useRef(null);
+    const lastValueRef = useRef(value || '');
+    const [isEmpty, setIsEmpty] = useState(!value || value.length === 0);
 
-    // Sync value prop to internal HTML
-    // We only update if the plain text content differs to avoid cursor jumps
+    // Extract plain text from element (handles both text nodes and emoji images)
+    const extractTextFromElement = useCallback((element) => {
+        if (!element) return '';
+        
+        let text = '';
+        const walk = (node) => {
+            if (node.nodeType === Node.TEXT_NODE) {
+                text += node.textContent;
+            } else if (node.nodeName === 'IMG') {
+                text += node.getAttribute('alt') || '';
+            } else if (node.nodeType === Node.ELEMENT_NODE && node.nodeName !== 'BR') {
+                for (const child of node.childNodes) {
+                    walk(child);
+                }
+            }
+        };
+        walk(element);
+        return text;
+    }, []);
+
+    // Sync external value changes to DOM (only when value changes externally)
     useEffect(() => {
-        const currentText = contentEditableRef.current 
-            ? contentEditableRef.current.innerText.replace(/\n/g, '') // ContentEditable adds \n sometimes
-            : '';
-            
-        if (value !== currentText && value !== undefined) {
-             setHtml(renderTextWithEmojisToHtml(value));
-        } else if (value === '' && html !== '') {
-             setHtml('');
-        }
-    }, [value]);
-
-    const handleChange = (evt) => {
-        const rawHtml = evt.target.value;
-        // Parse HTML to preserve emoji characters from alt tags
-        const tempDiv = document.createElement('div');
-        tempDiv.innerHTML = rawHtml;
+        const el = editorRef.current;
+        if (!el) return;
         
-        // Replace all emoji images with their alt text
-        const images = tempDiv.getElementsByTagName('img');
-        while(images.length > 0) {
-            const img = images[0];
-            const alt = img.getAttribute('alt') || '';
-            const textNode = document.createTextNode(alt);
-            img.parentNode.replaceChild(textNode, img);
-        }
-
-        let text = tempDiv.innerText || tempDiv.textContent || '';
+        const currentDomText = extractTextFromElement(el);
         
-        // Removing zero-width spaces or other artifacts if needed
-        // text = text.replace(/[\u200B]/g, '');
-
-        if (maxLength && text.length > maxLength) {
-            text = text.slice(0, maxLength);
+        // Only update DOM if value changed externally (not from user input)
+        if (value !== currentDomText && value !== lastValueRef.current) {
+            el.innerHTML = renderTextWithEmojisToHtml(value || '');
+            lastValueRef.current = value || '';
         }
         
-        // Only trigger change if text is distinct (avoid loops, though useEffect guards this)
+        setIsEmpty(!value || value.length === 0);
+    }, [value, extractTextFromElement]);
+
+    // Handle all input changes
+    const handleInput = useCallback(() => {
+        const el = editorRef.current;
+        if (!el) return;
+        
+        let text = extractTextFromElement(el);
+        
+        // Enforce max length
+        if (maxLength) {
+            const graphemes = [...text];
+            if (graphemes.length > maxLength) {
+                text = graphemes.slice(0, maxLength).join('');
+                // Update DOM to reflect truncation
+                const sel = window.getSelection();
+                el.innerHTML = renderTextWithEmojisToHtml(text);
+                // Move cursor to end
+                const range = document.createRange();
+                range.selectNodeContents(el);
+                range.collapse(false);
+                sel.removeAllRanges();
+                sel.addRange(range);
+            }
+        }
+        
+        setIsEmpty(text.length === 0);
+        lastValueRef.current = text;
         onChange(text);
-    };
+    }, [extractTextFromElement, maxLength, onChange]);
 
-    const handlePaste = (e) => {
+    // Handle paste
+    const handlePaste = useCallback((e) => {
         e.preventDefault();
-        const text = e.clipboardData.getData('text/plain');
-        document.execCommand('insertText', false, text);
-    };
+        const pastedText = e.clipboardData.getData('text/plain');
+        
+        if (maxLength) {
+            const currentLength = [...(lastValueRef.current || '')].length;
+            const remainingChars = maxLength - currentLength;
+            if (remainingChars <= 0) return;
+            
+            const truncatedPaste = [...pastedText].slice(0, remainingChars).join('');
+            document.execCommand('insertText', false, truncatedPaste);
+        } else {
+            document.execCommand('insertText', false, pastedText);
+        }
+        
+        // Trigger input handler after paste
+        setTimeout(handleInput, 0);
+    }, [maxLength, handleInput]);
 
-    // Keep focus logic - when value updates externally (emoji insert), we want to ensure we're at the end?
-    // Or at least not focused? 
-    // Actually, preserving selection is hard without robust cursor tracking. 
-    // Basic approach: If duplicate focus events occur, it's fine.
+    // Handle keydown - block input at limit
+    const handleKeyDown = useCallback((e) => {
+        // Always allow control keys
+        const allowedKeys = ['Backspace', 'Delete', 'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End', 'Tab', 'Escape'];
+        if (allowedKeys.includes(e.key)) return;
+        
+        // Allow modifier combos (Ctrl+A, Ctrl+C, etc.)
+        if (e.ctrlKey || e.metaKey) return;
+        
+        // Block character input if at limit
+        if (maxLength && e.key.length === 1) {
+            const currentLength = [...(lastValueRef.current || '')].length;
+            if (currentLength >= maxLength) {
+                e.preventDefault();
+            }
+        }
+    }, [maxLength]);
+
+    // Auto focus
+    useEffect(() => {
+        if (autoFocus && editorRef.current) {
+            editorRef.current.focus();
+        }
+    }, [autoFocus]);
+
+    // Initial render
+    useEffect(() => {
+        const el = editorRef.current;
+        if (el && value) {
+            el.innerHTML = renderTextWithEmojisToHtml(value);
+            lastValueRef.current = value;
+        }
+    }, []);
     
     return (
         <div className="relative w-full">
-            <ContentEditable
-                innerRef={contentEditableRef}
-                html={html}
-                disabled={readOnly}
-                onChange={handleChange}
+            <div
+                ref={editorRef}
+                contentEditable={!readOnly}
+                suppressContentEditableWarning
+                onInput={handleInput}
                 onPaste={handlePaste}
+                onKeyDown={handleKeyDown}
                 onFocus={onFocus}
                 onBlur={onBlur}
-                className={`outline-none whitespace-pre-wrap break-words ${className} ${!html && 'empty'}`}
-                tagName="div"
-                // Remove autoFocus from here if controlled externally to avoid fighting
-                // But we passed it as prop.
+                className={`outline-none whitespace-pre-wrap [word-break:break-word] overflow-x-hidden ${className} ${isEmpty ? 'empty' : ''}`}
+                style={{ minHeight: '1.5em' }}
             />
             {/* Placeholder Overlay */}
-            {!html && placeholder && (
+            {isEmpty && placeholder && (
                 <div className="absolute top-0 left-0 h-full w-full pointer-events-none text-slate-400 dark:text-slate-500 flex items-center px-4">
                     {placeholder}
                 </div>

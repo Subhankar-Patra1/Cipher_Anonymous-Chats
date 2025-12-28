@@ -90,10 +90,14 @@ export default function CreatePollModal({ isOpen, onClose, onSubmit }) {
         const emoji = emojiData.emoji;
         
         if (key === 'question') {
+            // Check limit before adding emoji (250 chars max)
+            if ([...question].length >= 250) return;
             setQuestion(prev => prev + emoji);
         } else {
             const idx = parseInt(key, 10);
             if (!isNaN(idx)) {
+                // Check limit before adding emoji (50 chars max)
+                if ([...options[idx]].length >= 50) return;
                 updateOption(idx, options[idx] + emoji);
             }
         }
@@ -211,23 +215,26 @@ export default function CreatePollModal({ isOpen, onClose, onSubmit }) {
                 <form onSubmit={handleSubmit} className="p-4 space-y-4 max-h-[70vh] overflow-y-auto custom-scrollbar">
                     {/* Question */}
                     <div>
-                        <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
-                            Question
+                        <label className="flex items-center justify-between text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
+                            <span>Question</span>
+                            <span className={`text-xs font-normal ${[...question].length >= 250 ? 'text-red-500' : 'text-slate-400'}`}>
+                                {[...question].length}/250
+                            </span>
                         </label>
                         <div className="relative picker-group" data-picker-id="question">
                             <EmojiSmartInput
                                 value={question}
                                 onChange={setQuestion}
                                 placeholder="Ask a question..."
-                                className="w-full pl-4 pr-10 py-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-800 dark:text-white focus:border-violet-500 focus:ring-1 focus:ring-violet-500 transition-all min-h-[48px]"
-                                maxLength={300}
+                                className="w-full pl-4 pr-10 py-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-800 dark:text-white focus:border-violet-500 focus:ring-1 focus:ring-violet-500 transition-all min-h-[48px] break-words"
+                                maxLength={250}
                                 autoFocus
                             />
                             <button
                                 type="button"
                                 onMouseDown={(e) => togglePicker('question', e)}
                                 data-picker-toggle="question"
-                                className={`absolute right-2 top-1/2 -translate-y-1/2 mt-0.5 p-1.5 transition-colors emoji-toggle-btn ${
+                                className={`absolute right-2 top-1/2 -translate-y-[40%] p-1.5 transition-colors emoji-toggle-btn ${
                                     activePickers['question'] 
                                     ? 'text-violet-500' 
                                     : 'text-slate-400 hover:text-violet-500'
@@ -254,21 +261,26 @@ export default function CreatePollModal({ isOpen, onClose, onSubmit }) {
                                             value={option}
                                             onChange={(val) => updateOption(index, val)}
                                             placeholder={`Option ${index + 1}`}
-                                            className="w-full pl-3 pr-10 py-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-800 dark:text-white focus:border-violet-500 focus:ring-1 focus:ring-violet-500 transition-all text-sm min-h-[38px]"
-                                            maxLength={100}
+                                            className="w-full pl-3 pr-20 py-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-800 dark:text-white focus:border-violet-500 focus:ring-1 focus:ring-violet-500 transition-all text-sm min-h-[38px] [word-break:break-all] overflow-hidden"
+                                            maxLength={50}
                                         />
-                                        <button
-                                            type="button"
-                                            onMouseDown={(e) => togglePicker(index, e)}
-                                            data-picker-toggle={index}
-                                            className={`absolute right-2 top-1.5 p-1 transition-colors emoji-toggle-btn ${
-                                                activePickers[index] 
-                                                ? 'text-violet-500' 
-                                                : 'text-slate-400 hover:text-violet-500'
-                                            }`}
-                                        >
-                                            <span className="material-symbols-outlined text-[18px]">sentiment_satisfied</span>
-                                        </button>
+                                        <div className="flex items-center gap-1 absolute right-2 top-1.5">
+                                            <span className={`text-[10px] ${[...option].length >= 50 ? 'text-red-500' : 'text-slate-400'}`}>
+                                                {[...option].length}/50
+                                            </span>
+                                            <button
+                                                type="button"
+                                                onMouseDown={(e) => togglePicker(index, e)}
+                                                data-picker-toggle={index}
+                                                className={`p-1 transition-colors emoji-toggle-btn ${
+                                                    activePickers[index] 
+                                                    ? 'text-violet-500' 
+                                                    : 'text-slate-400 hover:text-violet-500'
+                                                }`}
+                                            >
+                                                <span className="material-symbols-outlined text-[18px]">sentiment_satisfied</span>
+                                            </button>
+                                        </div>
                                     </div>
                                     {options.length > 2 && (
                                         <button
