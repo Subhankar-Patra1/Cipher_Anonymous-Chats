@@ -132,7 +132,7 @@ export default function PollMessage({ poll, onVote, onClose, isMe }) {
     };
 
     return (
-        <div className="w-[300px]">
+        <div className="w-full max-w-[300px]">
             {/* Question */}
             <div className="mb-3">
                 <p className={`font-medium ${isMe ? 'text-white' : 'text-slate-800 dark:text-white'}`}>
@@ -226,7 +226,7 @@ export default function PollMessage({ poll, onVote, onClose, isMe }) {
             </div>
 
             {/* Actions */}
-            <div className="mt-3 flex items-center justify-between">
+            <div className="mt-3 flex flex-wrap gap-3 items-center justify-between">
                 <span className={`text-xs ${isMe ? 'text-violet-200' : 'text-slate-500 dark:text-slate-400'}`}>
                     {optimisticTotalVoters} vote{optimisticTotalVoters !== 1 ? 's' : ''}
                     {poll.is_anonymous && ' • Anonymous'}

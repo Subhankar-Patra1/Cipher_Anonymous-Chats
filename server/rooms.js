@@ -524,6 +524,7 @@ router.get('/:id/messages', async (req, res) => {
                    m.image_url, m.caption, m.image_width, m.image_height, m.image_size, m.attachments,
                    m.is_view_once, m.viewed_by,
                    m.file_url, m.file_name, m.file_size, m.file_type, m.file_extension, 
+                   m.latitude, m.longitude, m.address, -- [FIX] Added location data
                    m.is_pinned, m.pinned_by, m.pinned_at, m.pin_expires_at, 
                    m.poll_id, -- [FIX] Added poll_id
                    (SELECT COUNT(*) FROM room_members rm_cnt WHERE rm_cnt.room_id = m.room_id) as room_member_count,

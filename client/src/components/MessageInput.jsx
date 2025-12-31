@@ -572,7 +572,7 @@ export default function MessageInput({
     // Render Recording UI if active
     if (isRecording || isReviewing) {
         return (
-            <div className="p-4 bg-white/50 dark:bg-slate-900/50 backdrop-blur-md border-t border-slate-200/50 dark:border-slate-800/50 z-10 relative transition-colors duration-300">
+            <div className="p-2 md:p-4 bg-white/50 dark:bg-slate-900/50 backdrop-blur-md border-t border-slate-200/50 dark:border-slate-800/50 z-10 relative transition-colors duration-300">
                 <div className="flex gap-3 max-w-4xl mx-auto items-center justify-between h-[56px] px-4 rounded-2xl bg-white dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700 shadow-sm dark:shadow-none transition-colors">
                     
                     {/* Left Side: Status / Delete */}
@@ -663,7 +663,7 @@ export default function MessageInput({
     };
 
     return (
-        <div className="p-4 bg-white/50 dark:bg-slate-900/50 backdrop-blur-md border-t border-slate-200/50 dark:border-slate-800/50 z-10 relative transition-colors duration-300">
+        <div className="p-2 md:p-4 bg-white/50 dark:bg-slate-900/50 backdrop-blur-md border-t border-slate-200/50 dark:border-slate-800/50 z-10 relative transition-colors duration-300">
             <form onSubmit={handleSubmit} className="flex gap-3 max-w-4xl mx-auto items-end">
                 <div className="flex-1 flex flex-col gap-1">
                     {/* Editing Bar */}

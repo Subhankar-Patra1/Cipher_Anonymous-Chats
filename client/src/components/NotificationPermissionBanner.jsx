@@ -41,8 +41,8 @@ export default function NotificationPermissionBanner() {
     if (!isSupported || !isVisible) return null;
 
     return (
-        <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 animate-slide-in-up">
-            <div className="flex items-center gap-4 px-5 py-3 bg-white dark:bg-slate-800 rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-700 max-w-md">
+        <div className="fixed top-4 left-0 right-0 z-50 flex justify-center px-4 pointer-events-none animate-slide-in-up">
+            <div className="relative pointer-events-auto flex items-center gap-4 px-5 py-3 bg-white dark:bg-slate-800 rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-700 w-full max-w-md">
                 {/* Icon */}
                 <div className="shrink-0 w-10 h-10 rounded-full bg-gradient-to-br from-violet-500 to-indigo-600 flex items-center justify-center">
                     <span className="material-symbols-outlined text-white text-xl">
