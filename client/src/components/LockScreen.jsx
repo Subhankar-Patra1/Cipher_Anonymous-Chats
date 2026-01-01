@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { useAppLock } from '../context/AppLockContext';
 import { useAuth } from '../context/AuthContext';
+import { renderTextWithEmojis } from '../utils/emojiRenderer';
 
 export default function LockScreen() {
     const { isLocked, unlockApp, removePasscode } = useAppLock();
@@ -93,7 +94,7 @@ export default function LockScreen() {
                         )}
                     </div>
                     <h2 className="text-xl font-bold text-white">
-                        {user?.display_name || 'Welcome Back'}
+                        {user?.display_name ? renderTextWithEmojis(user.display_name, '1.1em') : 'Welcome Back'}
                     </h2>
                     <p className="text-slate-400 text-sm">Enter passcode to unlock</p>
                 </div>
