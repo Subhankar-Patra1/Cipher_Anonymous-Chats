@@ -531,6 +531,49 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
 
         socket.on('user:profile:updated', handleProfileUpdate);
 
+        // [NEW] Handle member added - update members list for mentions
+        const handleMemberAdded = async ({ groupId, userId }) => {
+            console.log('[DEBUG] group:member:added event received:', { groupId, userId, currentRoomId: room.id });
+            if (String(groupId) === String(room.id)) {
+                try {
+                    // Fetch the new member's info
+                    console.log('[DEBUG] Fetching new member info for userId:', userId);
+                    const res = await fetch(`${import.meta.env.VITE_API_URL}/api/users/${userId}/profile`, {
+                        headers: { Authorization: `Bearer ${token}` }
+                    });
+                    if (res.ok) {
+                        const newMember = await res.json();
+                        console.log('[DEBUG] Fetched new member:', newMember);
+                        setMembers(prev => {
+                            console.log('[DEBUG] Current members:', prev.map(m => m.id));
+                            // Avoid duplicates
+                            if (prev.some(m => String(m.id) === String(userId))) {
+                                console.log('[DEBUG] Member already exists, skipping');
+                                return prev;
+                            }
+                            console.log('[DEBUG] Adding new member to list');
+                            return [...prev, { ...newMember, role: 'member' }];
+                        });
+                    } else {
+                        console.error('[DEBUG] Failed to fetch member, status:', res.status);
+                    }
+                } catch (err) {
+                    console.error('Failed to fetch new member info:', err);
+                }
+            }
+        };
+
+        // [NEW] Handle member removed - update members list
+        const handleMemberRemoved = ({ groupId, userId }) => {
+            console.log('[DEBUG] group:member:removed event received:', { groupId, userId, currentRoomId: room.id });
+            if (String(groupId) === String(room.id)) {
+                setMembers(prev => prev.filter(m => String(m.id) !== String(userId)));
+            }
+        };
+
+        socket.on('group:member:added', handleMemberAdded);
+        socket.on('group:member:removed', handleMemberRemoved);
+
         return () => {
             socket.off('new_message', handleNewMessage);
             socket.off('messages_status_update', handleStatusUpdate);
@@ -543,6 +586,8 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
             socket.off('poll_vote', handlePollVote);
             socket.off('poll_closed', handlePollClosed);
             socket.off('user:profile:updated', handleProfileUpdate);
+            socket.off('group:member:added', handleMemberAdded);
+            socket.off('group:member:removed', handleMemberRemoved);
             
             Object.values(typingTimeoutsRef.current).forEach(clearTimeout);
         };
