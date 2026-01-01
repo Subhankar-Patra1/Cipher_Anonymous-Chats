@@ -160,11 +160,11 @@ export default function Sidebar({ rooms, activeRoom, onSelectRoom, loadingRoomId
 
     const handleLockClick = () => {
         setIsLocking(true);
-        // Play animation (icon switch) then lock
+        // Play animation immediately while locking
         setTimeout(() => {
             lockApp();
             setIsLocking(false);
-        }, 600);
+        }, 50);
     };
 
     return (
@@ -486,8 +486,14 @@ export default function Sidebar({ rooms, activeRoom, onSelectRoom, loadingRoomId
                                                 {room.last_message_status === 'sent' ? 'check' : 'done_all'}
                                             </span>
                                         )}
-                                        <span className="truncate flex-1">
-                                            {room.last_message_type === 'image' ? (
+                                        <span className={`flex-1 ${room.last_message_is_deleted ? '' : 'truncate'}`}>
+                                            {room.last_message_is_deleted ? (
+                                                <span className="flex items-center gap-1 italic text-slate-500 dark:text-slate-400">
+                                                    <span className="material-symbols-outlined text-[16px]">block</span>
+                                                    <span>This message was deleted</span>
+                                                </span>
+                                            ) :
+                                            room.last_message_type === 'image' ? (
                                                 <span className="flex items-center gap-1">
                                                     {room.last_message_is_view_once ? (
                                                         (room.last_message_viewed_by && room.last_message_viewed_by.length > 0) ? (
@@ -510,7 +516,11 @@ export default function Sidebar({ rooms, activeRoom, onSelectRoom, loadingRoomId
                                                     ) : (
                                                         <>
                                                             <span className="material-symbols-outlined text-[18px] translate-y-[0.5px]">image</span>
-                                                            <span className="truncate">{room.last_message_caption ? renderTextWithEmojis(room.last_message_caption, '1.65em') : 'Photo'}</span>
+                                                            <span className="truncate">
+                                                                {room.last_message_attachments_count > 1 
+                                                                    ? `${room.last_message_attachments_count} Photos`
+                                                                    : (room.last_message_caption ? renderTextWithEmojis(room.last_message_caption, '1.65em') : 'Photo')}
+                                                            </span>
                                                         </>
                                                     )}
                                                 </span>

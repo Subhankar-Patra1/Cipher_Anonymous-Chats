@@ -597,7 +597,7 @@ export default function MessageInput({
                     <div className="flex items-center gap-3">
                         <button 
                             onClick={handleCancelRecording}
-                            className="p-2 text-slate-500 hover:text-red-500 hover:bg-red-50 dark:text-slate-400 dark:hover:text-red-400 dark:hover:bg-red-500/10 rounded-full transition-colors"
+                            className="w-10 h-10 flex items-center justify-center text-slate-500 hover:text-red-500 hover:bg-red-50 dark:text-slate-400 dark:hover:text-red-400 dark:hover:bg-red-500/10 rounded-full transition-colors"
                             title="Cancel"
                         >
                             <span className="material-symbols-outlined">delete</span>
@@ -614,10 +614,10 @@ export default function MessageInput({
                             <>
                                 <button 
                                     onClick={handleTogglePreview}
-                                    className="p-2 text-slate-500 hover:text-slate-900 dark:text-slate-300 dark:hover:text-white transition-colors"
+                                    className="w-10 h-10 flex items-center justify-center rounded-full bg-slate-100 hover:bg-slate-200 dark:bg-slate-700 dark:hover:bg-slate-600 text-slate-500 hover:text-slate-900 dark:text-slate-300 dark:hover:text-white transition-colors"
                                     title={isPlayingPreview ? "Pause" : "Play Preview"}
                                 >
-                                    <span className="material-symbols-outlined">{isPlayingPreview ? 'pause' : 'play_arrow'}</span>
+                                    <span className="material-symbols-outlined text-[24px]">{isPlayingPreview ? 'pause' : 'play_arrow'}</span>
                                 </button>
                                 <button 
                                     onClick={handleSendRecording}
@@ -1008,7 +1008,7 @@ export default function MessageInput({
                             p-3 rounded-xl flex items-center justify-center transition-all duration-200 shrink-0
                             ${disabled 
                                 ? 'bg-slate-100 dark:bg-slate-800 text-slate-400 dark:text-slate-500 cursor-not-allowed' 
-                                : 'text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800'
+                                : 'bg-violet-600 hover:bg-violet-500 text-white shadow-lg shadow-violet-500/20 hover:scale-105 active:scale-95'
                             }
                         `}
                         disabled={disabled}

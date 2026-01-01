@@ -298,7 +298,9 @@ export default function Dashboard() {
                      room.last_message_viewed_by = msg.viewed_by || []; // [FIX] Reset viewed by
                      room.last_message_file_name = msg.file_name; // [FIX] Update file name for preview
                      room.last_message_sender_name = msg.display_name || msg.username; // [NEW] Update sender name for preview logic
+                     room.last_message_is_deleted = msg.is_deleted_for_everyone || false; // [FIX] Reset deleted status for new message
                      room.last_message_poll_question = msg.poll?.question || null; // [NEW] Update poll question for preview
+                     room.last_message_attachments_count = msg.attachments?.length || 0; // [NEW] Track attachments count for multi-image preview
                      room.last_message_at = new Date().toISOString(); // Update timestamp for sorting
 
                      updatedRooms[roomIndex] = room;
@@ -306,6 +308,25 @@ export default function Dashboard() {
                      return sortRooms(updatedRooms);
                 }
                 return updatedRooms;
+            });
+        });
+
+        // [NEW] Handle message deletion update for sidebar
+        newSocket.on('message_deleted', ({ messageId, is_deleted_for_everyone }) => {
+            if (!is_deleted_for_everyone) return;
+            
+            setRooms(prev => {
+                const updatedRooms = [...prev];
+                // Find if any room has this message as the last message
+                const roomIndex = updatedRooms.findIndex(r => String(r.last_message_id) === String(messageId));
+                
+                if (roomIndex > -1) {
+                    const room = { ...updatedRooms[roomIndex] };
+                    room.last_message_is_deleted = true;
+                    updatedRooms[roomIndex] = room;
+                    return updatedRooms; // No need to re-sort usually
+                }
+                return prev;
             });
         });
 
@@ -639,7 +660,20 @@ export default function Dashboard() {
                     sender: original.display_name || original.username,
                     text: snippet,
                     type: original.type,
-                    is_view_once: original.is_view_once
+                    is_view_once: original.is_view_once,
+                    // Audio message fields
+                    audio_duration_ms: original.audio_duration_ms,
+                    // File message fields
+                    file_name: original.file_name,
+                    caption: original.caption,
+                    // Image message fields
+                    attachments: original.attachments,
+                    // Location message fields
+                    latitude: original.latitude,
+                    longitude: original.longitude,
+                    address: original.address,
+                    // Poll message fields
+                    poll_question: original.poll?.question
                 },
             };
         });

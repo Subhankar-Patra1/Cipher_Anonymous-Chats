@@ -91,6 +91,8 @@ export const AppLockProvider = ({ children }) => {
         setAutoLockDuration(null);
     };
 
+    const [isUnlocking, setIsUnlocking] = useState(false); // [NEW] Transition state
+
     const unlockApp = async (inputPasscode) => {
         const storedHash = localStorage.getItem('app_passcode');
         if (!storedHash) return true; // No passcode set
@@ -100,6 +102,13 @@ export const AppLockProvider = ({ children }) => {
         if (inputHash === storedHash) {
             setIsLocked(false);
             sessionStorage.removeItem('app_is_locked');
+            
+            // [NEW] Trigger loading transition
+            setIsUnlocking(true);
+            setTimeout(() => {
+                setIsUnlocking(false);
+            }, 2500); // Show loading screen for 2.5s for smooth entry
+            
             return true;
         }
         return false;
@@ -115,6 +124,7 @@ export const AppLockProvider = ({ children }) => {
     return (
         <AppLockContext.Provider value={{ 
             isLocked, 
+            isUnlocking, // [NEW]
             hasPasscode, 
             autoLockDuration,
             setPasscode, 

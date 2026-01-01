@@ -52,7 +52,15 @@ export const AuthProvider = ({ children }) => {
         setUser(null);
     };
 
+    // [FIX] Don't show loading screen if app lock is enabled - lock screen takes priority
+    // Check localStorage directly since AppLockContext is mounted after AuthContext
+    const hasAppLock = !!localStorage.getItem('app_passcode');
+    
     if (loading) {
+        // If app lock is enabled, render nothing here - the lock screen will handle UI
+        if (hasAppLock) {
+            return null;
+        }
         return <LoadingScreen />;
     }
 

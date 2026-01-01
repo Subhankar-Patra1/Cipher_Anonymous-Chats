@@ -66,25 +66,64 @@ export default function ImageViewerModal({ images = [], startIndex = 0, onClose,
         }
     };
 
-    const handleDownload = () => {
-         try {
-             const url = currentImage.src || currentImage.url;
-             // [OPTIMIZED] Direct download using browser navigation
-             // Pass token in query since we enabled it on server
-             const proxyUrl = `${import.meta.env.VITE_API_URL}/api/messages/proxy-download?url=${encodeURIComponent(url)}&token=${token}`;
-             
-             // Trigger download by creating a temporary link or window.location
-             const a = document.createElement('a');
-             a.href = proxyUrl;
-             a.download = `image-${currentIndex + 1}.png`; // Attribute might be ignored by browser for cross-origin but server header handles it
-             document.body.appendChild(a);
-             a.click();
-             document.body.removeChild(a);
-
-         } catch (error) {
-             console.error('Download trigger failed:', error);
-             window.open(currentImage.src || currentImage.url, '_blank');
-         }
+    const handleDownload = async () => {
+        const url = currentImage.src || currentImage.url;
+        
+        try {
+            // Fetch the image first
+            const response = await fetch(url, {
+                mode: 'cors',
+                credentials: 'omit',
+                cache: 'no-cache'
+            });
+            const blob = await response.blob();
+            
+            // Determine file extension
+            const extension = blob.type.includes('png') ? 'png' : 
+                             blob.type.includes('gif') ? 'gif' : 
+                             blob.type.includes('webp') ? 'webp' : 
+                             blob.type.includes('mp4') ? 'mp4' :
+                             blob.type.includes('webm') ? 'webm' : 'jpg';
+            
+            // Try File System Access API (shows "site wants to save" dialog)
+            if (typeof window.showSaveFilePicker === 'function') {
+                try {
+                    const fileHandle = await window.showSaveFilePicker({
+                        suggestedName: `image-${currentIndex + 1}.${extension}`,
+                        types: [{
+                            description: 'Image',
+                            accept: {
+                                'image/*': ['.png', '.jpg', '.jpeg', '.gif', '.webp'],
+                                'video/*': ['.mp4', '.webm']
+                            }
+                        }]
+                    });
+                    
+                    const writable = await fileHandle.createWritable();
+                    await writable.write(blob);
+                    await writable.close();
+                    return; // Success
+                } catch (apiErr) {
+                    if (apiErr.name === 'AbortError') return; // User cancelled
+                    console.log('File System API failed, using fallback:', apiErr.message);
+                }
+            }
+            
+            // Fallback: Regular download
+            const blobUrl = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = blobUrl;
+            a.download = `image-${currentIndex + 1}.${extension}`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(blobUrl);
+            
+        } catch (error) {
+            console.error('Download failed:', error);
+            // Last resort fallback
+            window.open(url, '_blank');
+        }
     };
 
     // Touch state ref to avoid frequent re-renders during gesture
@@ -308,17 +347,34 @@ export default function ImageViewerModal({ images = [], startIndex = 0, onClose,
                 onTouchMove={handleTouchMove}
                 onTouchEnd={handleTouchEnd}
             >
-                <img 
-                    src={imgSrc} 
-                    alt={imgAlt} 
-                    className="max-w-full max-h-full object-contain transition-transform duration-75 ease-linear origin-center touch-none" // touch-none is key
-                    style={{ 
-                        transform: `scale(${scale}) translate(${position.x / scale}px, ${position.y / scale}px)`,
-                        cursor: scale > 1 ? (isDragging ? 'grabbing' : 'grab') : 'default'
-                    }}
-                    onClick={(e) => e.stopPropagation()} 
-                    draggable={false} // Prevent native drag
-                />
+                {imgSrc.match(/\.(mp4|webm)$/i) ? (
+                    <video
+                        src={imgSrc}
+                        className="max-w-full max-h-full object-contain transition-transform duration-75 ease-linear origin-center touch-none"
+                        style={{ 
+                            transform: `scale(${scale}) translate(${position.x / scale}px, ${position.y / scale}px)`,
+                            cursor: scale > 1 ? (isDragging ? 'grabbing' : 'grab') : 'default'
+                        }}
+                        onClick={(e) => e.stopPropagation()}
+                        autoPlay
+                        loop
+                        muted
+                        playsInline
+                        controls
+                    />
+                ) : (
+                    <img 
+                        src={imgSrc} 
+                        alt={imgAlt} 
+                        className="max-w-full max-h-full object-contain transition-transform duration-75 ease-linear origin-center touch-none" // touch-none is key
+                        style={{ 
+                            transform: `scale(${scale}) translate(${position.x / scale}px, ${position.y / scale}px)`,
+                            cursor: scale > 1 ? (isDragging ? 'grabbing' : 'grab') : 'default'
+                        }}
+                        onClick={(e) => e.stopPropagation()} 
+                        draggable={false} // Prevent native drag
+                    />
+                )}
             </div>
 
             {/* Thumbnails Strip - Hide when zoomed */}

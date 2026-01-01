@@ -78,7 +78,7 @@ export default function LockScreen() {
     if (!isLocked) return null;
 
     return (
-        <div className="fixed inset-0 z-[100] bg-[radial-gradient(ellipse_at_center,_var(--tw-gradient-stops))] from-[#2a3e59] via-slate-950 to-black flex flex-col items-center justify-center p-4 h-[100dvh] touch-none">
+        <div className="fixed inset-0 z-[100] bg-[radial-gradient(ellipse_at_center,_var(--tw-gradient-stops))] from-[#2a3e59] via-slate-950 to-black flex flex-col items-center justify-center p-4 h-[100dvh] touch-none animate-fade-in backdrop-blur-xl">
             <div className={`w-full max-w-sm flex flex-col items-center gap-8 ${isShaking ? 'animate-shake' : ''}`}>
                 
                 {/* User Info */}
@@ -161,6 +161,13 @@ export default function LockScreen() {
                 }
                 .animate-shake {
                     animation: shake 0.3s cubic-bezier(.36,.07,.19,.97) both;
+                }
+                @keyframes fade-in {
+                    from { opacity: 0; backdrop-filter: blur(0px); }
+                    to { opacity: 1; backdrop-filter: blur(12px); }
+                }
+                .animate-fade-in {
+                    animation: fade-in 0.4s ease-out forwards;
                 }
             `}</style>
         </div>

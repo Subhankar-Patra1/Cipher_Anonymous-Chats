@@ -390,7 +390,7 @@ export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone,
                                         loop 
                                         playsInline
                                         onLoadedData={onImageLoad} 
-                                        onClick={() => window.open(msg.gif_url, '_blank')}
+                                        onClick={() => onImageClick(msg)}
                                     />
                                 ) : (
                                     <img 
@@ -399,7 +399,7 @@ export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone,
                                         className="w-full h-auto object-cover rounded-lg cursor-pointer hover:opacity-90 transition-opacity"
                                         loading="lazy"
                                         onLoad={onImageLoad} 
-                                        onClick={() => window.open(msg.gif_url, '_blank')}
+                                        onClick={() => onImageClick(msg)}
                                         title="Open full size"
                                     />
                                 )}
@@ -678,17 +678,40 @@ export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone,
 
                                     {/* Corner Download Icon (for already downloaded images) */}
                                     {!isMe && isDownloaded && (
-                                        <a 
-                                            href={msg.image_url} 
-                                            download={`image-${msg.id}`}
-                                            target="_blank"
-                                            rel="noopener noreferrer"
-                                            onClick={(e) => e.stopPropagation()} 
+                                        <button 
+                                            onClick={async (e) => {
+                                                e.stopPropagation();
+                                                try {
+                                                    // Fetch image as blob
+                                                    const response = await fetch(msg.image_url, {
+                                                        mode: 'cors',
+                                                        credentials: 'omit'
+                                                    });
+                                                    const blob = await response.blob();
+                                                    
+                                                    // Determine extension
+                                                    const extension = blob.type.includes('png') ? 'png' : 
+                                                                     blob.type.includes('gif') ? 'gif' : 
+                                                                     blob.type.includes('webp') ? 'webp' : 'jpg';
+                                                    
+                                                    // Create blob URL and download
+                                                    const blobUrl = URL.createObjectURL(blob);
+                                                    const a = document.createElement('a');
+                                                    a.href = blobUrl;
+                                                    a.download = `image-${msg.id}.${extension}`;
+                                                    document.body.appendChild(a);
+                                                    a.click();
+                                                    document.body.removeChild(a);
+                                                    URL.revokeObjectURL(blobUrl);
+                                                } catch (err) {
+                                                    console.error('Download failed:', err);
+                                                }
+                                            }}
                                             className="absolute top-2 right-2 w-8 h-8 rounded-full bg-black/50 hover:bg-black/70 flex items-center justify-center text-white transition-all duration-200 z-20 backdrop-blur-sm"
                                             title="Save to Device"
                                         >
                                             <span className="material-symbols-outlined text-[18px]">download</span>
-                                        </a>
+                                        </button>
                                     )}
                                     {msg.status === 'sending' && (
                                         <div className="absolute inset-0 bg-black/40 backdrop-blur-[2px] flex flex-col items-center justify-center transition-all duration-300 z-10">
@@ -891,10 +914,10 @@ export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone,
                     {(!msg.isStreaming && !msg.isSkeleton) && 
                       // Conditionally hide menu for Images/ViewOnce if:
                       // 1. Sender: Still sending
-                      // 2. Receiver: Not downloaded yet
+                      // 2. Receiver: Not downloaded yet (single image only, multi-image doesn't use imgLoaded)
                       !((msg.type === 'image' || msg.is_view_once) && (
                           (isMe && msg.status === 'sending') || 
-                          (!isMe && (!isDownloaded || !imgLoaded))
+                          (!isMe && !msg.is_view_once && !(msg.attachments && msg.attachments.length > 1) && (!isDownloaded || !imgLoaded))
                       )) && (
                         <button
                             type="button"
@@ -1053,47 +1076,142 @@ export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone,
                             )}
 
                             {msg.type !== 'audio' && msg.type !== 'gif' && msg.type !== 'file' && msg.type !== 'location' && msg.type !== 'poll' && !isAi && !msg.is_view_once && (
-                                <button 
-                                    className="w-full flex items-center gap-2 px-3 py-2.5 text-left text-sm text-slate-700 dark:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors first:rounded-t-2xl last:rounded-b-2xl"
-                                    onClick={async (e) => {
-                                        e.stopPropagation();
-                                        if (msg.type === 'image') {
-                                            try {
-                                                const response = await fetch(msg.image_url, {
-                                                    mode: 'cors',
-                                                    credentials: 'omit',
-                                                    cache: 'no-cache'
-                                                });
-                                                const originalBlob = await response.blob();
-                                                
-                                                const imageBitmap = await createImageBitmap(originalBlob);
-                                                
-                                                const canvas = document.createElement('canvas');
-                                                canvas.width = imageBitmap.width;
-                                                canvas.height = imageBitmap.height;
-                                                const ctx = canvas.getContext('2d');
-                                                ctx.drawImage(imageBitmap, 0, 0);
-                                                
-                                                const pngBlob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
-                                                
-                                                await navigator.clipboard.write([
-                                                    new ClipboardItem({
-                                                        'image/png': pngBlob
+                                // Check if this is a multi-image message
+                                (msg.attachments && msg.attachments.length > 1) ? (
+                                    // Download All button for multi-image messages
+                                    <button 
+                                        className="w-full flex items-center gap-2 px-3 py-2.5 text-left text-sm text-slate-700 dark:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors first:rounded-t-2xl last:rounded-b-2xl"
+                                        onClick={async (e) => {
+                                            e.stopPropagation();
+                                            
+                                            // Helper to trigger fallback download (all images to Downloads folder)
+                                            const fallbackDownload = async () => {
+                                                // Fetch all images as blobs first
+                                                const blobs = await Promise.all(
+                                                    msg.attachments.map(async (att) => {
+                                                        const response = await fetch(att.url, {
+                                                            mode: 'cors',
+                                                            credentials: 'omit',
+                                                            cache: 'no-cache'
+                                                        });
+                                                        return response.blob();
                                                     })
-                                                ]);
+                                                );
+                                                
+                                                // Download all at once
+                                                blobs.forEach((blob, i) => {
+                                                    const blobUrl = URL.createObjectURL(blob);
+                                                    const extension = blob.type.includes('png') ? 'png' : 
+                                                                     blob.type.includes('gif') ? 'gif' : 
+                                                                     blob.type.includes('webp') ? 'webp' : 'jpg';
+                                                    
+                                                    const link = document.createElement('a');
+                                                    link.href = blobUrl;
+                                                    link.download = `image_${i + 1}.${extension}`;
+                                                    link.click();
+                                                    
+                                                    // Cleanup after a short delay
+                                                    setTimeout(() => URL.revokeObjectURL(blobUrl), 1000);
+                                                });
+                                            };
+                                            
+                                            try {
+                                                // Try to use File System Access API (folder picker)
+                                                if (typeof window.showDirectoryPicker === 'function') {
+                                                    try {
+                                                        const dirHandle = await window.showDirectoryPicker({
+                                                            mode: 'readwrite',
+                                                            startIn: 'pictures'
+                                                        });
+                                                        
+                                                        // Download all images to the selected folder
+                                                        for (let i = 0; i < msg.attachments.length; i++) {
+                                                            const att = msg.attachments[i];
+                                                            
+                                                            const response = await fetch(att.url, {
+                                                                mode: 'cors',
+                                                                credentials: 'omit',
+                                                                cache: 'no-cache'
+                                                            });
+                                                            const blob = await response.blob();
+                                                            
+                                                            const extension = blob.type.includes('png') ? 'png' : 
+                                                                             blob.type.includes('gif') ? 'gif' : 
+                                                                             blob.type.includes('webp') ? 'webp' : 'jpg';
+                                                            const filename = `image_${i + 1}.${extension}`;
+                                                            
+                                                            const fileHandle = await dirHandle.getFileHandle(filename, { create: true });
+                                                            const writable = await fileHandle.createWritable();
+                                                            await writable.write(blob);
+                                                            await writable.close();
+                                                        }
+                                                        
+                                                        alert(`Successfully downloaded ${msg.attachments.length} images!`);
+                                                    } catch (apiErr) {
+                                                        // User cancelled or API failed - use fallback
+                                                        if (apiErr.name !== 'AbortError') {
+                                                            console.log('File System API failed, using fallback:', apiErr.message);
+                                                            await fallbackDownload();
+                                                        }
+                                                    }
+                                                } else {
+                                                    // API not available, use fallback
+                                                    await fallbackDownload();
+                                                }
                                             } catch (err) {
-                                                console.error('Failed to copy image:', err);
-                                                alert('Failed to copy image. ' + err.message);
+                                                console.error('Failed to download images:', err);
+                                                alert('Failed to download images. ' + err.message);
                                             }
-                                        } else {
-                                            navigator.clipboard.writeText(msg.content);
-                                        }
-                                        setShowMenu(false);
-                                    }}
-                                >
-                                    <span className="material-symbols-outlined text-base">content_copy</span>
-                                    <span>{msg.type === 'image' ? 'Copy' : 'Copy Text'}</span>
-                                </button>
+                                            setShowMenu(false);
+                                        }}
+                                    >
+                                        <span className="material-symbols-outlined text-base">download</span>
+                                        <span>Download All</span>
+                                    </button>
+                                ) : (
+                                    // Copy button for single image or text messages
+                                    <button 
+                                        className="w-full flex items-center gap-2 px-3 py-2.5 text-left text-sm text-slate-700 dark:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors first:rounded-t-2xl last:rounded-b-2xl"
+                                        onClick={async (e) => {
+                                            e.stopPropagation();
+                                            if (msg.type === 'image') {
+                                                try {
+                                                    const response = await fetch(msg.image_url, {
+                                                        mode: 'cors',
+                                                        credentials: 'omit',
+                                                        cache: 'no-cache'
+                                                    });
+                                                    const originalBlob = await response.blob();
+                                                    
+                                                    const imageBitmap = await createImageBitmap(originalBlob);
+                                                    
+                                                    const canvas = document.createElement('canvas');
+                                                    canvas.width = imageBitmap.width;
+                                                    canvas.height = imageBitmap.height;
+                                                    const ctx = canvas.getContext('2d');
+                                                    ctx.drawImage(imageBitmap, 0, 0);
+                                                    
+                                                    const pngBlob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
+                                                    
+                                                    await navigator.clipboard.write([
+                                                        new ClipboardItem({
+                                                            'image/png': pngBlob
+                                                        })
+                                                    ]);
+                                                } catch (err) {
+                                                    console.error('Failed to copy image:', err);
+                                                    alert('Failed to copy image. ' + err.message);
+                                                }
+                                            } else {
+                                                navigator.clipboard.writeText(msg.content);
+                                            }
+                                            setShowMenu(false);
+                                        }}
+                                    >
+                                        <span className="material-symbols-outlined text-base">content_copy</span>
+                                        <span>{msg.type === 'image' ? 'Copy' : 'Copy Text'}</span>
+                                    </button>
+                                )
                             )}
 
                             {/* [NEW] Pin/Unpin Option */}
@@ -1279,7 +1397,7 @@ export default function MessageList({ messages, setMessages, currentUser, roomId
             // This ensures instant opening from browser cache.
             
             setViewingImage({
-                 images: [{ src: msg.image_url, caption: msg.caption, isViewOnce: true }],
+                 images: [{ src: msg.image_url, caption: msg.caption, isViewOnce: true, messageId: msg.id }],
                  startIndex: 0
             });
 
@@ -1298,13 +1416,21 @@ export default function MessageList({ messages, setMessages, currentUser, roomId
             return;
         }
 
+        if (msg.type === 'gif') {
+            setViewingImage({
+                 images: [{ src: msg.gif_url, caption: msg.content !== 'GIF' ? msg.content : '', messageId: msg.id }],
+                 startIndex: 0
+            });
+            return;
+        }
+
         // Collect all images from message
         let images = [];
         if (msg.attachments && msg.attachments.length > 0) {
-            images = msg.attachments.map(a => ({ src: a.url, caption: msg.caption }));
+            images = msg.attachments.map(a => ({ src: a.url, caption: msg.caption, messageId: msg.id }));
         } else {
             // Fallback
-             images = [{ src: msg.image_url, caption: msg.caption }];
+             images = [{ src: msg.image_url, caption: msg.caption, messageId: msg.id }];
         }
 
         setViewingImage({
@@ -1495,7 +1621,8 @@ export default function MessageList({ messages, setMessages, currentUser, roomId
                     <ImageViewerModal 
                         images={viewingImage.images}
                         startIndex={viewingImage.startIndex}
-                        onClose={() => setViewingImage(null)} 
+                        onClose={() => setViewingImage(null)}
+                        onGoToMessage={scrollToMessage}
                     />
                 )}
                 {hasMessages && (

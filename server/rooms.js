@@ -449,19 +449,20 @@ router.get('/', async (req, res) => {
             last_msg.is_view_once as last_message_is_view_once,
             last_msg.viewed_by as last_message_viewed_by,
             last_msg.poll_question as last_message_poll_question,
+            last_msg.attachments as last_message_attachments,
+            last_msg.is_deleted_for_everyone as last_message_is_deleted,
             gp.send_mode, gp.allow_name_change, gp.allow_description_change, gp.allow_add_members, gp.allow_remove_members
             FROM rooms r 
             JOIN room_members rm ON r.id = rm.room_id 
             LEFT JOIN group_permissions gp ON r.id = gp.group_id
             LEFT JOIN LATERAL (
-                SELECT m.content, m.type, m.user_id, m.id, m.status, m.caption, m.file_name, m.is_view_once, m.viewed_by, u.display_name as sender_name,
+                SELECT m.content, m.type, m.user_id, m.id, m.status, m.caption, m.file_name, m.is_view_once, m.viewed_by, m.attachments, m.is_deleted_for_everyone, u.display_name as sender_name,
                        p.question as poll_question
                 FROM messages m
                 LEFT JOIN users u ON m.user_id = u.id
                 LEFT JOIN polls p ON m.poll_id = p.id
                 WHERE m.room_id = r.id
                 AND m.created_at > COALESCE(rm.cleared_at, '1970-01-01')
-                AND (m.is_deleted_for_everyone IS FALSE OR m.is_deleted_for_everyone IS NULL)
                 AND (m.deleted_for_user_ids IS NULL OR NOT ($1::text = ANY(m.deleted_for_user_ids)))
                 ORDER BY m.created_at DESC
                 LIMIT 1
@@ -491,7 +492,14 @@ router.get('/', async (req, res) => {
             last_message_id: r.last_message_id,
             last_message_is_view_once: r.last_message_is_view_once,
             last_message_viewed_by: r.last_message_viewed_by,
-            last_message_poll_question: r.last_message_poll_question
+            last_message_poll_question: r.last_message_poll_question,
+            last_message_is_deleted: r.last_message_is_deleted, // [NEW] For "This message was deleted"
+            // [NEW] Count attachments for multi-image preview
+            last_message_attachments_count: (() => {
+                if (!r.last_message_attachments) return 0;
+                if (Array.isArray(r.last_message_attachments)) return r.last_message_attachments.length;
+                try { return JSON.parse(r.last_message_attachments).length; } catch { return 0; }
+            })()
         }));
 
         res.json(mappedRooms);
