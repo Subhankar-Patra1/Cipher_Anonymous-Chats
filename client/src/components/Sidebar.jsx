@@ -476,9 +476,9 @@ export default function Sidebar({ rooms, activeRoom, onSelectRoom, loadingRoomId
                                         <span>Locked Chat</span>
                                     </div>
                                 ) : (
-                                    <div className="text-xs text-slate-500 dark:text-slate-400 truncate flex items-center gap-1">
+                                    <div className="text-xs text-slate-500 dark:text-slate-400 flex items-center gap-1 min-w-0">
                                         {room.last_message_sender_id === user.id && room.type !== 'ai' && (
-                                            <span className={`material-symbols-outlined text-[16px] ${
+                                            <span className={`material-symbols-outlined text-[16px] shrink-0 ${
                                                 room.last_message_status === 'seen' ? 'text-blue-500' :
                                                 room.last_message_status === 'delivered' ? 'text-slate-400' :
                                                 'text-slate-400'
@@ -486,11 +486,11 @@ export default function Sidebar({ rooms, activeRoom, onSelectRoom, loadingRoomId
                                                 {room.last_message_status === 'sent' ? 'check' : 'done_all'}
                                             </span>
                                         )}
-                                        <span className={`flex-1 ${room.last_message_is_deleted ? '' : 'truncate'}`}>
+                                        <span className="flex-1 truncate">
                                             {room.last_message_is_deleted ? (
-                                                <span className="flex items-center gap-1 italic text-slate-500 dark:text-slate-400">
-                                                    <span className="material-symbols-outlined text-[16px]">block</span>
-                                                    <span>This message was deleted</span>
+                                                <span className="inline-flex items-center gap-1 italic text-slate-500 dark:text-slate-400">
+                                                    <span className="material-symbols-outlined text-[16px] shrink-0">block</span>
+                                                    <span className="pr-1">This message was deleted</span>
                                                 </span>
                                             ) :
                                             room.last_message_type === 'image' ? (
@@ -515,7 +515,7 @@ export default function Sidebar({ rooms, activeRoom, onSelectRoom, loadingRoomId
                                                         )
                                                     ) : (
                                                         <>
-                                                            <span className="material-symbols-outlined text-[18px] translate-y-[0.5px]">image</span>
+                                                            <span className="material-symbols-outlined text-[18px] translate-y-[0.5px] shrink-0">image</span>
                                                             <span className="truncate">
                                                                 {room.last_message_attachments_count > 1 
                                                                     ? `${room.last_message_attachments_count} Photos`
@@ -525,53 +525,53 @@ export default function Sidebar({ rooms, activeRoom, onSelectRoom, loadingRoomId
                                                     )}
                                                 </span>
                                             ) :
-                                             room.last_message_type === 'file' ? (
+                                            room.last_message_type === 'file' ? (
                                                 <span className="flex items-center gap-1">
-                                                    <span className="material-symbols-outlined text-[18px] translate-y-[0.5px]">description</span>
+                                                    <span className="material-symbols-outlined text-[18px] translate-y-[0.5px] shrink-0">description</span>
                                                         <span className="truncate">
                                                             {room.last_message_file_name || 'File'}
                                                             {room.last_message_caption ? ` • ${renderTextWithEmojis(room.last_message_caption)}` : ''}
                                                         </span>
                                                 </span>
-                                             ) :
-                                             room.last_message_type === 'location' ? (
+                                            ) :
+                                            room.last_message_type === 'location' ? (
                                                 <span className="flex items-center gap-1">
-                                                    <span className="material-symbols-outlined text-[18px] translate-y-[0.5px]">location_on</span>
+                                                    <span className="material-symbols-outlined text-[18px] translate-y-[0.5px] shrink-0">location_on</span>
                                                     <span>Location</span>
                                                 </span>
-                                             ) :
-                                             room.last_message_type === 'audio' ? 'Sent an audio' :
-                                             room.last_message_type === 'gif' ? 'Sent a GIF' :
-                                             room.last_message_type === 'poll_vote' ? (
-                                                 <span className="flex items-center gap-1">
-                                                     <span className="shrink-0">
-                                                         {room.last_message_sender_id === user.id ? 'You' : renderTextWithEmojis(room.last_message_sender_name)}
-                                                     </span>
-                                                     <span>voted in:</span>
-                                                     <PollIcon className="w-4 h-4 shrink-0" />
-                                                     <span className="truncate">{renderTextWithEmojis(room.last_message_poll_question) || 'Poll'}</span>
-                                                 </span>
-                                             ) :
-                                             room.last_message_type === 'poll' ? (
-                                                 <span className="flex items-center gap-1">
-                                                     {room.type === 'group' && room.last_message_sender_name && (
-                                                        <span className="shrink-0">{room.last_message_sender_id === user.id ? 'You' : renderTextWithEmojis(room.last_message_sender_name)}:</span>
-                                                    )}
-                                                     <PollIcon className="w-4 h-4 shrink-0" />
-                                                     <span className="truncate">{renderTextWithEmojis(room.last_message_poll_question, '1.1em') || 'Poll'}</span>
-                                                 </span>
-                                             ) :
-                                             (room.last_message_content && room.last_message_content.includes('pinned a message')) ? (
-                                                 <span className="flex items-center gap-1">
-                                                     <span className="material-symbols-outlined text-[16px] translate-y-[0.5px]">push_pin</span>
-                                                     <span>
-                                                         {room.last_message_sender_id === user.id 
-                                                             ? 'You pinned a message' 
-                                                             : `${room.last_message_sender_name || 'Someone'} pinned a message`}
-                                                     </span>
-                                                 </span>
-                                             ) :
-                                             renderPreview(room.last_message_content)}
+                                            ) :
+                                            room.last_message_type === 'audio' ? 'Sent an audio' :
+                                            room.last_message_type === 'gif' ? 'Sent a GIF' :
+                                            room.last_message_type === 'poll_vote' ? (
+                                                <span className="flex items-center gap-1">
+                                                    <span className="shrink-0">
+                                                        {room.last_message_sender_id === user.id ? 'You' : renderTextWithEmojis(room.last_message_sender_name)}
+                                                    </span>
+                                                    <span>voted in:</span>
+                                                    <PollIcon className="w-4 h-4 shrink-0" />
+                                                    <span className="truncate">{renderTextWithEmojis(room.last_message_poll_question) || 'Poll'}</span>
+                                                </span>
+                                            ) :
+                                            room.last_message_type === 'poll' ? (
+                                                <span className="flex items-center gap-1">
+                                                    {room.type === 'group' && room.last_message_sender_name && (
+                                                       <span className="shrink-0">{room.last_message_sender_id === user.id ? 'You' : renderTextWithEmojis(room.last_message_sender_name)}:</span>
+                                                   )}
+                                                    <PollIcon className="w-4 h-4 shrink-0" />
+                                                    <span className="truncate">{renderTextWithEmojis(room.last_message_poll_question, '1.1em') || 'Poll'}</span>
+                                                </span>
+                                            ) :
+                                            (room.last_message_content && room.last_message_content.includes('pinned a message')) ? (
+                                                <span className="flex items-center gap-1">
+                                                    <span className="material-symbols-outlined text-[16px] translate-y-[0.5px] shrink-0">push_pin</span>
+                                                    <span className="truncate">
+                                                        {room.last_message_sender_id === user.id 
+                                                            ? 'You pinned a message' 
+                                                            : `${room.last_message_sender_name || 'Someone'} pinned a message`}
+                                                    </span>
+                                                </span>
+                                            ) :
+                                            renderPreview(room.last_message_content)}
                                         </span>
                                     </div>
                                 )}
