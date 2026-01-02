@@ -20,7 +20,7 @@ export default function LocationPicker({ isOpen, onClose, onSend }) {
         }
     }, [isOpen]);
 
-    const getCurrentLocation = () => {
+    const getCurrentLocation = (isFallback = false) => {
         if (!navigator.geolocation) {
             setError('Geolocation is not supported by your browser');
             return;
@@ -28,6 +28,12 @@ export default function LocationPicker({ isOpen, onClose, onSend }) {
 
         setLoading(true);
         setError(null);
+
+        const options = { 
+            enableHighAccuracy: !isFallback, 
+            timeout: isFallback ? 10000 : 15000, 
+            maximumAge: 0 
+        };
 
         navigator.geolocation.getCurrentPosition(
             async (position) => {
@@ -50,16 +56,40 @@ export default function LocationPicker({ isOpen, onClose, onSend }) {
                 setLoading(false);
             },
             (err) => {
-                console.warn('Geolocation error:', err.message);
+                console.warn('Geolocation error:', err.message, 'Fallback:', isFallback, 'Code:', err.code);
+                
+                // If High Accuracy failed, try once more with standard accuracy
+                if (!isFallback && err.code !== 1) { // Don't fallback if explicitly denied
+                    getCurrentLocation(true);
+                    return;
+                }
+
                 let msg = 'Could not get your location. Please try again.';
-                if (err.code === 1) msg = 'Location permission denied. Please enable location access in your browser settings.';
-                else if (err.code === 2) msg = 'Location unavailable. Check your GPS/network or ensure you are on an HTTPS connection.';
-                else if (err.code === 3) msg = 'Location request timed out. Please try again.';
+                
+                if (err.code === 1) {
+                    // Try to detect if it's the OS or the Browser blocking
+                    if (navigator.permissions) {
+                        navigator.permissions.query({ name: 'geolocation' }).then(result => {
+                            if (result.state === 'granted') {
+                                setError('Browser has permission, but your Operating System (Windows/Mac) is blocking location. Please check your System Privacy Settings.');
+                            } else {
+                                setError('Location permission denied. Please click the lock icon 🔒 next to the web address and ensure "Location" is set to "Allow".');
+                            }
+                        });
+                        setLoading(false);
+                        return;
+                    }
+                    msg = 'Location permission denied. Please check your browser and system settings.';
+                } else if (err.code === 2) {
+                    msg = 'Location unavailable. Your device might not have GPS, or your Wi-Fi is turned off.';
+                } else if (err.code === 3) {
+                    msg = 'Location request timed out. High-accuracy GPS might be taking too long.';
+                }
                 
                 setError(msg);
                 setLoading(false);
             },
-            { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
+            options
         );
     };
 
@@ -135,7 +165,7 @@ export default function LocationPicker({ isOpen, onClose, onSend }) {
                             
                             <div className="flex flex-col w-full gap-2 px-4 mt-2">
                                 <button
-                                    onClick={getCurrentLocation}
+                                    onClick={() => getCurrentLocation()}
                                     className="w-full py-2.5 bg-red-500 text-white rounded-xl hover:bg-red-600 transition-colors flex items-center justify-center gap-2 text-sm font-semibold shadow-md active:scale-95"
                                 >
                                     <span className="material-symbols-outlined text-[20px]">my_location</span>
