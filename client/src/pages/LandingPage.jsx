@@ -125,9 +125,9 @@ const LandingPage = () => {
                 <section className="py-20 sm:py-24 lg:py-32" id="features">
                     <div className="container mx-auto flex flex-col gap-12 px-4">
                         <div className="flex flex-col gap-4 text-center">
-                            <h1 className="text-3xl font-bold tracking-tighter text-gray-100 sm:text-4xl md:text-5xl text-glow-green">
+                            <h2 className="text-3xl font-bold tracking-tighter text-gray-100 sm:text-4xl md:text-5xl text-glow-green">
                                 // Core Protocols for Seamless Communication
-                            </h1>
+                            </h2>
                             <p className="mx-auto max-w-2xl text-base text-gray-400 sm:text-lg">
                                 &gt; Cipher is engineered for rapid, secure, and intuitive data exchange. Observe our unique functionalities.
                             </p>

@@ -132,9 +132,17 @@ export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone,
                 setShowMenu(false);
             }
         };
-
         if (showMenu) {
             document.addEventListener('mousedown', handleClickOutside);
+            // [NEW] Scroll into view when opened - with small delay for accuracy
+            setTimeout(() => {
+                if (menuRef.current) {
+                    menuRef.current.scrollIntoView({ 
+                        behavior: 'smooth', 
+                        block: 'nearest' 
+                    });
+                }
+            }, 50);
         }
         return () => {
             document.removeEventListener('mousedown', handleClickOutside);
@@ -250,10 +258,10 @@ export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone,
                         ${(msg.type === 'image' || msg.type === 'gif' || msg.type === 'location') ? 'p-1' : 'px-4 py-3'}
                         shadow-md text-sm leading-relaxed break-all relative overflow-hidden
                         ${isMe 
-                            ? `bg-violet-600 text-white ${(msg.type === 'gif') ? 'rounded-[10px]' : 'rounded-2xl rounded-tr-sm'} whitespace-pre-wrap` 
+                            ? `bg-violet-600 text-white border border-violet-500/50 ${(msg.type === 'gif') ? 'rounded-[10px]' : 'rounded-2xl rounded-tr-sm'} whitespace-pre-wrap` 
                             : isAi 
-                                ? `bg-white dark:bg-slate-800/80 text-slate-800 dark:text-slate-100 ${(msg.type === 'gif') ? 'rounded-[10px]' : 'rounded-2xl rounded-tl-sm'} border border-purple-200/50 dark:border-purple-500/30 shadow-purple-500/5 min-w-[200px]` 
-                                : `bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-200 ${(msg.type === 'gif') ? 'rounded-[10px]' : 'rounded-2xl rounded-tl-sm'} border border-slate-100 dark:border-slate-700 whitespace-pre-wrap`
+                                ? `bg-white dark:bg-slate-800/80 text-slate-800 dark:text-slate-100 ${(msg.type === 'gif') ? 'rounded-[10px]' : 'rounded-2xl rounded-tl-sm'} border border-purple-200 dark:border-purple-500/30 shadow-purple-500/5 min-w-[200px]` 
+                                : `bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-200 ${(msg.type === 'gif') ? 'rounded-[10px]' : 'rounded-2xl rounded-tl-sm'} border border-slate-200 dark:border-slate-700 whitespace-pre-wrap`
                         }
                     `}>
                         {msg.isSkeleton ? (
@@ -922,10 +930,10 @@ export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone,
                         <button
                             type="button"
                             className={`
-                                opacity-0 group-hover:opacity-100
+                                ${showMenu ? 'opacity-100 text-slate-800 dark:text-white bg-slate-100 dark:bg-slate-800/50' : 'opacity-0 group-hover:opacity-100'}
                                 transition-opacity duration-150
                                 text-slate-400 dark:text-slate-300 hover:text-slate-600 dark:hover:text-white
-                                p-1 rounded-full
+                                w-7 h-7 flex items-center justify-center rounded-full
                             `}
                             onClick={toggleMenu}
                         >
@@ -937,8 +945,8 @@ export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone,
                         <div
                             ref={menuRef}
                             className={`
-                                absolute top-full mt-2
-                                left-1/2 -translate-x-1/2
+                                absolute top-full mt-0.5
+                                left-1/2 -translate-x-1/2 ${isMe ? '-ml-8' : 'ml-8'}
                                 w-48
                                 rounded-2xl
                                 bg-white dark:bg-slate-900
@@ -1609,7 +1617,7 @@ export default function MessageList({ messages, setMessages, currentUser, roomId
             {/* Scrollable Messages Container - only show when there are messages */}
             <div 
                 ref={scrollRef}
-                className={`absolute inset-0 p-4 sm:p-6 space-y-4 sm:space-y-6 custom-scrollbar z-[1] ${
+                className={`absolute inset-0 p-4 sm:p-6 space-y-1 sm:space-y-1.5 custom-scrollbar z-[1] ${
                     hasMessages ? 'overflow-y-auto overflow-x-hidden' : 'overflow-hidden'
                 }`}
                 onScroll={handleScroll}
