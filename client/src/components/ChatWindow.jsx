@@ -1627,7 +1627,7 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
 
             {/* [NEW] Scoped Image Preview Modal */}
             {selectedImages && (
-                <div className="absolute inset-0 z-20 flex flex-col bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
+                <div className="absolute inset-0 z-[60] flex flex-col bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
                     <ImagePreviewModal 
                         files={selectedImages} 
                         onClose={() => setSelectedImages(null)}
@@ -1639,7 +1639,7 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
             )}
             {/* [NEW] Scoped File Preview Modal */}
             {selectedFiles && (
-                <div className="absolute inset-0 z-20 flex flex-col bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
+                <div className="absolute inset-0 z-[60] flex flex-col bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
                     <FilePreviewModal 
                         files={selectedFiles} 
                         onClose={() => setSelectedFiles(null)}
