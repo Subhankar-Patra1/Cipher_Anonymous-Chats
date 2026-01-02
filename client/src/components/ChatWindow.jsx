@@ -4,6 +4,7 @@ import { usePresence } from '../context/PresenceContext';
 import MessageList from './MessageList';
 import MessageInput from './MessageInput';
 import ProfilePanel from './ProfilePanel';
+import { useNotification } from '../context/NotificationContext';
 import ImagePreviewModal from './ImagePreviewModal';
 import FilePreviewModal from './FilePreviewModal';
 import PinnedMessagesPanel from './PinnedMessagesPanel';
@@ -12,6 +13,7 @@ import CreatePollModal from './CreatePollModal';
 import PinDurationModal from './PinDurationModal';
 import { linkifyText } from '../utils/linkify';
 import { renderTextWithEmojis } from '../utils/emojiRenderer';
+import { savePendingMessage, getPendingMessages, deletePendingMessage } from '../utils/db';
 
 const timeAgo = (dateString) => {
     if (!dateString) return '';
@@ -95,6 +97,7 @@ const PrivilegedUsersModal = ({ isOpen, onClose, title, roomId, roleFilter, toke
 export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, setShowGroupInfo, isLoading, highlightMessageId, onGoToMessage }) {
     const { token } = useAuth();
     const { presenceMap, fetchStatuses } = usePresence();
+    const { showNotification } = useNotification();
     const [showProfileCard, setShowProfileCard] = useState(false);
     
     const [messages, setMessages] = useState(room.initialMessages || []); 
@@ -289,6 +292,15 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
                 // [NEW] Emit delivered
                 if (msg.user_id !== user.id) {
                     socket.emit('message_delivered', { messageId: msg.id, roomId: room.id });
+
+                    // [NEW] Show notification if window hidden OR message is for different room (handled by parent typically, but here for active room if hidden)
+                    if (document.visibilityState === 'hidden') {
+                        showNotification(msg.display_name || msg.username || 'New Message', {
+                            body: msg.type === 'text' ? msg.content : `Sent a ${msg.type}`,
+                            tag: `room-${room.id}`,
+                            data: { roomId: room.id }
+                        });
+                    }
                 }
 
                 setTypingUsers(prev => prev.filter(u => u.userId !== msg.user_id));
@@ -597,12 +609,50 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
         setMessages(prev => prev.filter(m => m.id !== messageId));
     };
 
+    // [NEW] Sync Offline Messages
+    const syncOfflineMessages = useCallback(async () => {
+        if (!navigator.onLine || !socket || !socket.connected) return;
+
+        try {
+            const pending = await getPendingMessages();
+            const myPending = pending.filter(m => String(m.room_id) === String(room.id) && m.user_id === user.id);
+
+            for (const msg of myPending) {
+                console.log('[Offline Sync] Sending pending message:', msg.tempId);
+                socket.emit('send_message', {
+                    roomId: msg.room_id,
+                    content: msg.content,
+                    replyToMessageId: msg.replyTo ? msg.replyTo.id : null,
+                    tempId: msg.tempId
+                });
+                // Remove from DB once emitted (socket will handle the actual arrival/status update)
+                await deletePendingMessage(msg.tempId);
+            }
+        } catch (err) {
+            console.error('[Offline Sync] Failed to sync messages:', err);
+        }
+    }, [socket, room.id, user.id]);
+
+    useEffect(() => {
+        if (socket) {
+            socket.on('connect', syncOfflineMessages);
+            window.addEventListener('online', syncOfflineMessages);
+            syncOfflineMessages(); // Initial sync
+            return () => {
+                socket.off('connect', syncOfflineMessages);
+                window.removeEventListener('online', syncOfflineMessages);
+            };
+        }
+    }, [socket, syncOfflineMessages]);
+
     const handleSend = async (content, replyToMsg) => {
         if (!isExpired) {
             // [FIX] Use state replyTo if not passed as arg
             const finalReplyTo = replyToMsg || replyTo;
 
             const tempId = `temp-${Date.now()}`;
+            const isOffline = !navigator.onLine;
+            
             const tempMsg = {
                 id: tempId,
                 room_id: room.id,
@@ -612,17 +662,23 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
                 created_at: new Date().toISOString(),
                 username: user.username,
                 display_name: user ? user.display_name : 'Me',
-                status: 'sending'
+                status: isOffline ? 'pending' : 'sending',
+                tempId // Explicitly set tempId for IndexedDB key
             };
             setMessages(prev => [...prev, tempMsg]);
             setReplyTo(null);
             
-            socket.emit('send_message', { 
-                roomId: room.id, 
-                content,
-                replyToMessageId: finalReplyTo ? finalReplyTo.id : null,
-                tempId 
-            });
+            if (isOffline) {
+                console.log('[Offline] Saving message to queue:', tempId);
+                await savePendingMessage(tempMsg);
+            } else {
+                socket.emit('send_message', { 
+                    roomId: room.id, 
+                    content,
+                    replyToMessageId: finalReplyTo ? finalReplyTo.id : null,
+                    tempId 
+                });
+            }
         }
     };
 

@@ -13,6 +13,7 @@
     "@lottiefiles/dotlottie-react": "^0.17.12",
     "emoji-picker-react": "^4.16.1",
     "emoji-regex": "^10.6.0",
+    "idb": "^8.0.3",
     "katex": "^0.16.27",
     "lottie-react": "^2.4.1",
     "qrcode.react": "^4.2.0",
@@ -41,6 +42,7 @@
     "eslint-plugin-react-refresh": "^0.4.7",
     "postcss": "^8.4.38",
     "tailwindcss": "^3.4.4",
-    "vite": "^5.3.1"
+    "vite": "^5.3.1",
+    "vite-plugin-pwa": "^1.2.0"
   }
 }

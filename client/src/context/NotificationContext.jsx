@@ -76,7 +76,7 @@ export function NotificationProvider({ children }) {
     }, []);
 
     // Show a desktop notification
-    const showNotification = useCallback((title, options = {}) => {
+    const showNotification = useCallback(async (title, options = {}) => {
         // Check all conditions
         if (!isSupported) {
             console.log('[Notification] Browser does not support notifications');
@@ -94,16 +94,28 @@ export function NotificationProvider({ children }) {
         }
 
         try {
-            const notification = new Notification(title, {
-                icon: options.icon || '/logo.png',
-                badge: options.badge || '/logo.png',
+            const notificationOptions = {
+                icon: options.icon || '/icon-192.png',
+                badge: options.badge || '/icon-192.png',
                 body: options.body || '',
-                tag: options.tag || undefined, // Group notifications
+                tag: options.tag || 'cipher-msg', // Group notifications
                 silent: options.silent || false,
-                requireInteraction: false, // Auto-dismiss
+                requireInteraction: options.requireInteraction || false,
+                vibrate: [200, 100, 200],
                 data: options.data || {},
                 ...options
-            });
+            };
+
+            // Use Service Worker if available for better background support
+            if ('serviceWorker' in navigator) {
+                const registration = await navigator.serviceWorker.ready;
+                if (registration && registration.showNotification) {
+                    return await registration.showNotification(title, notificationOptions);
+                }
+            }
+
+            // Fallback to standard Notification API
+            const notification = new Notification(title, notificationOptions);
 
             // Handle click
             notification.onclick = (event) => {
