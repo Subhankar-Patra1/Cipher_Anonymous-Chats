@@ -11,7 +11,11 @@ export default function LocationPicker({ isOpen, onClose, onSend }) {
     const [address, setAddress] = useState('');
 
     useEffect(() => {
-        if (isOpen && !location) {
+        if (isOpen) {
+            // Reset states to ensure fresh fetch
+            setLocation(null);
+            setAddress('');
+            setError(null);
             getCurrentLocation();
         }
     }, [isOpen]);
