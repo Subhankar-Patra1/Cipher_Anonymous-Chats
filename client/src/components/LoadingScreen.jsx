@@ -32,7 +32,7 @@ export default function LoadingScreen() {
                     <img 
                         src="/logo.png" 
                         alt="Cipher" 
-                        className="w-24 h-24 object-contain relative z-10 drop-shadow-2xl animate-breathe" 
+                        className="w-48 h-48 object-contain relative z-10 drop-shadow-2xl animate-breathe" 
                     />
                 </div>
 

@@ -56,7 +56,7 @@ const LandingPage = () => {
                 <div className="container mx-auto px-4">
                     <div className="flex h-20 items-center justify-between">
                         <div className="flex items-center gap-3">
-                                <img src="/logo.png" alt="Cipher Logo" className="size-8" />
+                                <img src="/logo.png" alt="Cipher Logo" className="size-12" />
                                 <h2 className="text-xl font-bold text-gray-100 text-glow-green">Cipher</h2>
                         </div>
                         <nav className="hidden items-center gap-8 md:flex">
