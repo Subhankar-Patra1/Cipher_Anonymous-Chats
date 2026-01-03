@@ -14,6 +14,32 @@ import PinDurationModal from './PinDurationModal';
 import { linkifyText } from '../utils/linkify';
 import { renderTextWithEmojis } from '../utils/emojiRenderer';
 import { savePendingMessage, getPendingMessages, deletePendingMessage } from '../utils/db';
+import SelectionBar from './SelectionBar';
+
+// [NEW] Helper to convert blobs to PNG for Clipboard API compatibility
+const convertToPng = (blob) => {
+    return new Promise((resolve, reject) => {
+        const img = new Image();
+        const url = URL.createObjectURL(blob);
+        img.onload = () => {
+            const canvas = document.createElement('canvas');
+            canvas.width = img.width;
+            canvas.height = img.height;
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(img, 0, 0);
+            canvas.toBlob((pngBlob) => {
+                URL.revokeObjectURL(url);
+                if (pngBlob) resolve(pngBlob);
+                else reject(new Error('Canvas toBlob failed'));
+            }, 'image/png');
+        };
+        img.onerror = (e) => {
+            URL.revokeObjectURL(url);
+            reject(e);
+        };
+        img.src = url;
+    });
+};
 
 const timeAgo = (dateString) => {
     if (!dateString) return '';
@@ -112,6 +138,11 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
     const [pinToConfirm, setPinToConfirm] = useState(null);
     const [loadingMore, setLoadingMore] = useState(false);
     const [hasMore, setHasMore] = useState(true);
+
+    const [isSelectionMode, setIsSelectionMode] = useState(false);
+    const [selectedMessageIds, setSelectedMessageIds] = useState(new Set());
+    // [NEW] Delete Selection Modal State
+    const [deleteSelectionModal, setDeleteSelectionModal] = useState({ isOpen: false, count: 0, canDeleteForEveryone: false });
 
     const [isBlockedByMe, setIsBlockedByMe] = useState(room.is_blocked_by_me || false);
     const [isBlockedByThem, setIsBlockedByThem] = useState(room.is_blocked_by_them || false);
@@ -722,6 +753,192 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
     const handleLocalDelete = (messageId) => {
         setMessages(prev => prev.filter(m => m.id !== messageId));
     };
+
+    // [NEW] Selection Mode Handlers
+    const toggleSelectionMode = (initialMsgId) => {
+        setIsSelectionMode(true);
+        if (initialMsgId) {
+            setSelectedMessageIds(new Set([initialMsgId]));
+        }
+    };
+
+    const toggleMessageSelection = (msgId) => {
+        setSelectedMessageIds(prev => {
+            const next = new Set(prev);
+            if (next.has(msgId)) {
+                next.delete(msgId);
+            } else {
+                next.add(msgId);
+            }
+            // Optional: Auto-exit if empty? WhatsApp keeps mode even if 0 selected until Back pressed.
+            return next;
+        });
+    };
+
+    const handleCancelSelection = () => {
+        setIsSelectionMode(false);
+        setSelectedMessageIds(new Set());
+    };
+
+    // [NEW] Copy Logic
+    const canCopy = React.useMemo(() => {
+        if (selectedMessageIds.size === 0) return false;
+        const selected = messages.filter(m => selectedMessageIds.has(m.id));
+        return selected.every(m => {
+            if (m.type === 'audio' || m.type === 'file') return false;
+            // Image validation: allow if it has attachments or direct image_url (implies accessible)
+            if (m.type === 'image') return !!(m.image_url || (m.attachments && m.attachments.length > 0));
+            return true; 
+        });
+    }, [selectedMessageIds, messages]);
+
+    const handleCopySelectedMessages = async () => {
+        const selected = messages
+            .filter(m => selectedMessageIds.has(m.id))
+            .sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
+
+        const textParts = [];
+        const clipboardItems = [];
+
+        try {
+            // 1. Process all messages
+            for (const msg of selected) {
+                if (msg.type === 'image') {
+                    // Handle multi-image messages (attachments) or single
+                    const imagesToFetch = msg.attachments && msg.attachments.length > 0 
+                        ? msg.attachments 
+                        : (msg.image_url ? [{ url: msg.image_url }] : []);
+                    
+                    for (const img of imagesToFetch) {
+                        try {
+                            // Try direct fetch first
+                            const response = await fetch(img.url, { mode: 'cors' });
+                            if (!response.ok) throw new Error('Direct fetch failed');
+                            const blob = await response.blob();
+                            
+                            // [FIX] Convert to PNG if needed for clipboard support
+                            if (blob.type !== 'image/png') {
+                                const pngBlob = await convertToPng(blob);
+                                clipboardItems.push(new ClipboardItem({ 'image/png': pngBlob }));
+                            } else {
+                                clipboardItems.push(new ClipboardItem({ [blob.type]: blob }));
+                            }
+                        } catch (e) {
+                            console.warn("Direct image copy failed, trying proxy...", e);
+                            try {
+                                // Fallback to proxy
+                                const proxyUrl = `${import.meta.env.VITE_API_URL}/api/messages/proxy-download?url=${encodeURIComponent(img.url)}`;
+                                const response = await fetch(proxyUrl, { 
+                                    headers: { Authorization: `Bearer ${token}` }
+                                });
+                                const blob = await response.blob();
+                                // [FIX] Clipboard API usually requires image/png
+                                if (blob.type !== 'image/png') {
+                                    const pngBlob = await convertToPng(blob);
+                                    clipboardItems.push(new ClipboardItem({ 'image/png': pngBlob }));
+                                } else {
+                                    clipboardItems.push(new ClipboardItem({ [blob.type]: blob }));
+                                }
+                            } catch (proxyErr) {
+                                console.error("Proxy image copy failed", proxyErr);
+                            }
+                        }
+                    }
+                    if (msg.caption) textParts.push(msg.caption);
+                } else if (msg.content) {
+                     // Check for link messages, render text with emojis is just text
+                     textParts.push(msg.content);
+                }
+            }
+
+            // 2. Add text item if exists
+            if (textParts.length > 0) {
+                const fullText = textParts.join('\n');
+                clipboardItems.push(
+                    new ClipboardItem({
+                        "text/plain": new Blob([fullText], { type: "text/plain" }),
+                    })
+                );
+            }
+
+            // 3. Write to clipboard
+             if (clipboardItems.length > 0) {
+                 // Note: Writing multiple disparate items (images + text) usually only works if they are distinct "files" or if browser supports mixed content.
+                 // We try best effort.
+                await navigator.clipboard.write(clipboardItems);
+                // Optional: showtoast
+            }
+            
+            handleCancelSelection();
+        } catch (err) {
+            console.error("Copy failed", err);
+            // Fallback: Try Text Only if mixing failed
+            if (textParts.length > 0) {
+                try {
+                    await navigator.clipboard.writeText(textParts.join('\n'));
+                    handleCancelSelection();
+                } catch (e) { alert("Failed to copy"); }
+            } else {
+                 alert("Failed to copy images. Ensure HTTPS and CORS.");
+            }
+        }
+    };
+
+    const handleDeleteSelected = () => {
+        if (selectedMessageIds.size === 0) return;
+
+        const msgsToDelete = messages.filter(m => selectedMessageIds.has(m.id));
+        
+        // Determine ownership (all mine? ensure no AI/System messages if checking "mine")
+        // System messages usually don't have user_id equal to user.id, so simple check is enough.
+        const allMine = msgsToDelete.every(m => m.user_id === user.id && !m.isStreaming);
+        
+        setDeleteSelectionModal({
+            isOpen: true,
+            count: selectedMessageIds.size,
+            canDeleteForEveryone: allMine
+        });
+    };
+
+    const handleConfirmDeleteSelection = async (deleteForEveryone) => {
+        const idsToCheck = Array.from(selectedMessageIds);
+        setDeleteSelectionModal({ isOpen: false, count: 0, canDeleteForEveryone: false }); // Close immediately
+
+        try {
+            await Promise.all(idsToCheck.map(async (id) => {
+                if (deleteForEveryone) {
+                     await fetch(`${import.meta.env.VITE_API_URL}/api/messages/${id}/for-everyone`, {
+                        method: 'DELETE',
+                        headers: { Authorization: `Bearer ${token}` }
+                     });
+                     // Socket usually handles broadcast, but for immediate local update if needed:
+                } else {
+                    await fetch(`${import.meta.env.VITE_API_URL}/api/messages/${id}/for-me`, {
+                        method: 'DELETE',
+                        headers: { Authorization: `Bearer ${token}` }
+                    });
+                }
+            }));
+            
+            // Perform local cleanup only for "Delete for me" (Socket handles "Everyone")
+            // Actually, safe to just clear selection. 
+            // If "Everyone", the `message_deleted` event will come and remove them/update content.
+            // If "For Me", we need to remove them locally.
+            if (!deleteForEveryone) {
+                 setMessages(prev => prev.filter(m => !selectedMessageIds.has(m.id)));
+            }
+            
+            handleCancelSelection();
+        } catch (err) {
+            console.error("Bulk delete failed", err);
+            alert("Failed to delete some messages");
+        }
+    };
+
+    // [NEW] Clear selection on room change
+    useEffect(() => {
+        handleCancelSelection();
+    }, [room.id]);
 
     // [NEW] Sync Offline Messages
     const syncOfflineMessages = useCallback(async () => {
@@ -1663,6 +1880,11 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
                             setPinToConfirm(msg);
                         }
                     }}
+                    // Selection Props
+                    isSelectionMode={isSelectionMode}
+                    selectedMessageIds={selectedMessageIds}
+                    onToggleMessageSelection={toggleMessageSelection}
+                    onToggleSelectionMode={toggleSelectionMode}
                     searchTerm={searchTerm} 
                     onLoadMore={handleLoadOlderMessages}
                     hasMore={hasMore}
@@ -1684,29 +1906,42 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
 
             {/* Message Input or Block Banner */}
             {canSend ? (
-                <MessageInput 
-                    onSend={handleSend}         
-                    onSendAudio={handleSendAudio}
-                    onImageSelected={handleImageSelected}
-                    onFileSelected={handleFileSelected}
-                    onSendGif={handleSendGif}
-                    onLocationClick={() => setShowLocationPicker(true)}
-                    onPollClick={() => setShowCreatePoll(true)}
-                    disabled={!canSend || isExpired}
-                    replyTo={replyTo}          
-                    setReplyTo={setReplyTo}
-                    
-                    editingMessage={editingMessage}
-                    onCancelEdit={() => setEditingMessage(null)}
-                    onEditMessage={handleEditMessage}
-                    onTypingStart={() => socket?.emit('typing:start', { roomId: room.id })}
-                    onTypingStop={() => socket?.emit('typing:stop', { roomId: room.id })}
-                    members={members}
-                    currentUser={user}
-                    roomId={room.id}
-                    isBlocked={isBlockedByMe}
-                    onUnblock={handleUnblock}
-                />
+
+                <>
+                    {isSelectionMode ? (
+                        <SelectionBar 
+                            count={selectedMessageIds.size}
+                            onCancel={handleCancelSelection}
+                            onDelete={handleDeleteSelected}
+                            onCopy={handleCopySelectedMessages}
+                            canCopy={canCopy}
+                        />
+                    ) : (
+                        <MessageInput 
+                            onSend={handleSend}         
+                            onSendAudio={handleSendAudio}
+                            onImageSelected={handleImageSelected}
+                            onFileSelected={handleFileSelected}
+                            onSendGif={handleSendGif}
+                            onLocationClick={() => setShowLocationPicker(true)}
+                            onPollClick={() => setShowCreatePoll(true)}
+                            disabled={!canSend || isExpired}
+                            replyTo={replyTo}          
+                            setReplyTo={setReplyTo}
+                            
+                            editingMessage={editingMessage}
+                            onCancelEdit={() => setEditingMessage(null)}
+                            onEditMessage={handleEditMessage}
+                            onTypingStart={() => socket?.emit('typing:start', { roomId: room.id })}
+                            onTypingStop={() => socket?.emit('typing:stop', { roomId: room.id })}
+                            members={members}
+                            currentUser={user}
+                            roomId={room.id}
+                            isBlocked={isBlockedByMe}
+                            onUnblock={handleUnblock}
+                        />
+                    )}
+                </>
             ) : (
                 <div className="p-4 bg-transparent z-10 flex justify-center items-center h-[88px] transition-colors duration-300">
                     <div className="bg-slate-100/80 dark:bg-slate-800/80 px-6 py-3 rounded-full flex items-center gap-2 border border-slate-200 dark:border-slate-700 shadow-lg">
@@ -1883,6 +2118,51 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
                     }
                 }}
             />
+
+            {/* [NEW] Delete Selection Modal */}
+            {deleteSelectionModal.isOpen && (
+                <div className="absolute inset-0 z-[9999] flex items-center justify-center p-4 bg-black/40 backdrop-blur-[2px] animate-in fade-in duration-200">
+                    <div className="bg-white dark:bg-slate-900 rounded-2xl shadow-[0_20px_50px_rgba(0,0,0,0.3)] max-w-sm w-full overflow-hidden border border-slate-200 dark:border-slate-800 animate-in zoom-in-95 duration-200">
+                        <div className="p-6">
+                            <h3 className="text-lg font-semibold text-slate-800 dark:text-white mb-2">
+                                Delete {deleteSelectionModal.count} message{deleteSelectionModal.count !== 1 ? 's' : ''}?
+                            </h3>
+                            <p className="text-sm text-slate-500 dark:text-slate-400 mb-6">
+                                {deleteSelectionModal.canDeleteForEveryone 
+                                    ? "You can delete these messages for everyone or just for yourself."
+                                    : "You can only delete these messages for yourself."}
+                            </p>
+                            
+                            <div className="flex flex-col gap-2">
+                                {deleteSelectionModal.canDeleteForEveryone && (
+                                    <button
+                                        onClick={() => handleConfirmDeleteSelection(true)}
+                                        className="w-full py-2.5 px-4 rounded-xl bg-violet-600 hover:bg-violet-700 text-white font-medium transition-colors flex items-center justify-center gap-2"
+                                    >
+                                        <span className="material-symbols-outlined text-lg">delete_forever</span>
+                                        Delete for everyone
+                                    </button>
+                                )}
+                                
+                                <button
+                                    onClick={() => handleConfirmDeleteSelection(false)}
+                                    className="w-full py-2.5 px-4 rounded-xl bg-white dark:bg-slate-800 border border-violet-200 dark:border-slate-700 hover:bg-violet-50 dark:hover:bg-slate-700/50 text-violet-600 dark:text-violet-400 font-medium transition-colors flex items-center justify-center gap-2"
+                                >
+                                    <span className="material-symbols-outlined text-lg">delete</span>
+                                    Delete for me
+                                </button>
+                                
+                                <button
+                                    onClick={() => setDeleteSelectionModal({ ...deleteSelectionModal, isOpen: false })}
+                                    className="w-full py-2.5 px-4 rounded-xl text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 font-medium transition-colors mt-2"
+                                >
+                                    Cancel
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 }

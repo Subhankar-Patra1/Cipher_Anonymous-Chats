@@ -85,7 +85,7 @@ const CodeBlock = ({ inline, className, children, ...props }) => {
 };
 
 
-export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone, onRetry, onMarkHeard, onEdit, onImageLoad, onRegenerate, onPin, searchTerm, scrollToMessage, onImageClick, token }) => { // [MODIFIED] Added onPin
+export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone, onRetry, onMarkHeard, onEdit, onImageLoad, onRegenerate, onPin, searchTerm, scrollToMessage, onImageClick, token, isSelectionMode, isSelected, onToggleSelection, onEnableSelectionMode }) => { // [MODIFIED] Added Selection Props
  // [MODIFIED] Added onImageClick
     const [showMenu, setShowMenu] = useState(false);
     const [showFeedback, setShowFeedback] = useState(false); // [NEW] Feedback state
@@ -123,6 +123,7 @@ export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone,
 
     const toggleMenu = (e) => {
         e.stopPropagation();
+        if (isSelectionMode) return; // [NEW] Disable menu in selection mode
         setShowMenu(prev => !prev);
     };
 
@@ -218,9 +219,34 @@ export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone,
         <div 
             id={`msg-${msg.id}`}
             className={`
-                flex ${isMe ? 'justify-end' : 'justify-start'} group max-w-full ${showMenu ? 'z-[100] relative' : ''}
+                flex ${isMe ? 'justify-end' : 'justify-start'} group ${isSelectionMode ? 'w-[calc(100%+2rem)] sm:w-[calc(100%+3rem)]' : 'max-w-full'} ${showMenu ? 'z-[100] relative' : ''}
+                ${isSelectionMode ? 'cursor-pointer hover:bg-black/5 dark:hover:bg-white/5 transition-colors -mx-4 px-4 sm:-mx-6 sm:px-6 py-0.5' : ''}
             `}
+            onClick={(e) => {
+                if (isSelectionMode) {
+                    e.stopPropagation();
+                    onToggleSelection(msg.id);
+                }
+            }}
         >
+             {/* [NEW] Selection Checkbox */}
+             {isSelectionMode && (
+                <div className={`
+                    flex items-center justify-center mr-3 shrink-0 animate-in slide-in-from-left-2 duration-200
+                `}>
+                    <div className={`
+                        w-6 h-6 rounded-full border-2 flex items-center justify-center transition-all
+                        ${isSelected 
+                            ? 'bg-violet-600 border-violet-600' 
+                            : 'border-slate-300 dark:border-slate-500 bg-transparent hover:border-slate-400 dark:hover:border-slate-400'
+                        }
+                    `}>
+                        {isSelected && (
+                            <span className="material-symbols-outlined text-[16px] text-white font-bold leading-none">check</span>
+                        )}
+                    </div>
+                </div>
+            )}
             <div className={`max-w-[75%] flex flex-col ${isMe ? 'items-end' : 'items-start'}`}>
                 {/* ... (Avatar logic remains same) ... */}
                 {/* Feedback Popup */}
@@ -926,7 +952,7 @@ export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone,
                       !((msg.type === 'image' || msg.is_view_once) && (
                           (isMe && msg.status === 'sending') || 
                           (!isMe && !msg.is_view_once && !(msg.attachments && msg.attachments.length > 1) && (!isDownloaded || !imgLoaded))
-                      )) && (
+                      )) && !isSelectionMode && (
                         <button
                             type="button"
                             className={`
@@ -1276,6 +1302,19 @@ export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone,
                                     <span>Delete for everyone</span>
                                 </button>
                             )}
+                            
+                            {/* [NEW] Select Option */}
+                            <button
+                                className="w-full flex items-center gap-2 px-3 py-2.5 text-left text-sm text-slate-700 dark:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors first:rounded-t-2xl last:rounded-b-2xl"
+                                onClick={(e) => {
+                                    e.stopPropagation();
+                                    onEnableSelectionMode(msg.id);
+                                    setShowMenu(false);
+                                }}
+                            >
+                                <span className="material-symbols-outlined text-base">check_circle</span>
+                                <span>Select</span>
+                            </button>
                         </div>
                     )}
                 </div>
@@ -1297,7 +1336,7 @@ export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone,
     );
 };
 
-export default function MessageList({ messages, setMessages, currentUser, roomId, socket, onReply, onDelete, onRetry, onEdit, onRegenerate, onPin, searchTerm, onLoadMore, loadingMore, hasMore, isAiChat }) { // [MODIFIED] Added onPin
+export default function MessageList({ messages, setMessages, currentUser, roomId, socket, onReply, onDelete, onRetry, onEdit, onRegenerate, onPin, searchTerm, onLoadMore, loadingMore, hasMore, isAiChat, isSelectionMode, selectedMessageIds, onToggleMessageSelection, onToggleSelectionMode }) { // [MODIFIED] Added props // [MODIFIED] Added onPin
     const { token } = useAuth();
     const [confirmDeleteMessage, setConfirmDeleteMessage] = useState(null);
 
@@ -1751,6 +1790,10 @@ export default function MessageList({ messages, setMessages, currentUser, roomId
                             scrollToMessage={scrollToMessage}
                             onImageClick={handleImageClick}
                             token={token}
+                            isSelectionMode={isSelectionMode}
+                            isSelected={selectedMessageIds?.has(msg.id)}
+                            onToggleSelection={onToggleMessageSelection}
+                            onEnableSelectionMode={onToggleSelectionMode}
                         />
                     );
                 })

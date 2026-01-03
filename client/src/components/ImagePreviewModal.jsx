@@ -305,7 +305,7 @@ export default function ImagePreviewModal({ files, onClose, onSend, recipientNam
             {/* HEADER */}
             <div className="w-full max-w-5xl p-4 flex items-center justify-between z-50 shrink-0">
                 <div className="flex items-center gap-3">
-                    <button onClick={handleClose} className="p-2 -ml-2 rounded-full text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-800 transition-colors">
+                    <button onClick={handleClose} className="w-10 h-10 flex items-center justify-center rounded-full text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-800 transition-colors">
                         <span className="material-symbols-outlined">arrow_back</span>
                     </button>
                     {/* Recipient Info - Hidden on small screens if needed, but keeping for now */}
