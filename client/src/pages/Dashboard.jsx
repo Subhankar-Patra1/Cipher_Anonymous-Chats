@@ -340,6 +340,30 @@ export default function Dashboard() {
             });
         });
 
+        // [NEW] Handle Message Edit (Updates Sidebar)
+        newSocket.on('message_edited', (msg) => {
+            // msg contains: { id, room_id, content, caption, edited_at, edit_version }
+            setRooms(prev => {
+                const updatedRooms = [...prev];
+                const roomIndex = updatedRooms.findIndex(r => String(r.id) === String(msg.room_id));
+                
+                if (roomIndex > -1) {
+                    const room = { ...updatedRooms[roomIndex] };
+                    
+                    // Only update if the edited message IS the last message
+                    if (String(room.last_message_id) === String(msg.id)) {
+                         room.last_message_content = msg.content;
+                         if (msg.caption !== undefined) {
+                             room.last_message_caption = msg.caption;
+                         }
+                         updatedRooms[roomIndex] = room;
+                         return updatedRooms; // No sorting needed for edit
+                    }
+                }
+                return prev;
+            });
+        });
+
         // [NEW] Handle message deletion update for sidebar
         newSocket.on('message_deleted', ({ messageId, is_deleted_for_everyone }) => {
             if (!is_deleted_for_everyone) return;
