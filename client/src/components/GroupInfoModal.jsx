@@ -11,6 +11,7 @@ import GroupPermissionsView from './GroupPermissionsView';
 import GroupParticipantsView from './GroupParticipantsView';
 import SharedMedia from './SharedMedia'; // [NEW]
 import ImageViewerModal from './ImageViewerModal';
+import GroupOwnershipTransferView from './GroupOwnershipTransferView';
 
 export default function GroupInfoModal({ room, onClose, onLeave, onKick, socket, onGoToMessage }) {
     const { token, user: currentUser } = useAuth();
@@ -54,6 +55,43 @@ export default function GroupInfoModal({ room, onClose, onLeave, onKick, socket,
     
     // UI Helpers
     const [copySuccess, setCopySuccess] = useState('');
+    const [isTransferring, setIsTransferring] = useState(false);
+
+    const handleTransferOwnership = async (newOwnerId) => {
+        setIsTransferring(true);
+        try {
+            const res = await fetch(`${import.meta.env.VITE_API_URL}/api/rooms/${room.id}/transfer-ownership`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+                body: JSON.stringify({ newOwnerId })
+            });
+
+            if (res.ok) {
+                // Transfer successful, now leave (which triggers reload)
+                onLeave();
+            } else {
+                const err = await res.json();
+                alert(err.error || 'Failed to transfer ownership');
+                setIsTransferring(false);
+            }
+        } catch (error) {
+            console.error(error);
+            setIsTransferring(false);
+        }
+    };
+
+    const handleLeaveClick = () => {
+        // If owner and has other members, require transfer
+        if (isOwner && members.length > 1) {
+            setView('transfer_ownership');
+            return;
+        }
+
+        // Standard leave with confirm
+        if (confirm('Are you sure you want to leave this group?')) {
+            onLeave();
+        }
+    };
 
     useEffect(() => {
         if (room.id) {
@@ -473,6 +511,19 @@ export default function GroupInfoModal({ room, onClose, onLeave, onKick, socket,
                     />
                  </div>
             </div>
+        );
+    }
+
+    if (view === 'transfer_ownership') {
+        return (
+            <GroupOwnershipTransferView 
+                room={room}
+                members={members}
+                currentUser={currentUser}
+                onTransfer={handleTransferOwnership}
+                onBack={() => setView('main')}
+                isTransferring={isTransferring}
+            />
         );
     }
 
@@ -915,7 +966,7 @@ export default function GroupInfoModal({ room, onClose, onLeave, onKick, socket,
 
                             {/* Leave Group - Visible to everyone */}
                             <button
-                                onClick={onLeave}
+                                onClick={handleLeaveClick}
                                 className="w-full flex items-center gap-3 text-red-500 hover:text-red-600 dark:text-red-400 dark:hover:text-red-300 transition-colors p-2 rounded-lg hover:bg-red-50 dark:hover:bg-red-500/10 text-left"
                             >
                                 <span className="material-symbols-outlined">logout</span>

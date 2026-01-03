@@ -870,6 +870,25 @@ router.post('/:id/transfer-ownership', async (req, res) => {
         io.to(`room:${roomId}`).emit('group:member:role-updated', { groupId: parseInt(roomId), userId: newOwnerId, role: 'owner' });
         io.to(`room:${roomId}`).emit('group:ownership:transferred', { groupId: parseInt(roomId), oldOwnerId: req.user.id, newOwnerId });
 
+        // [NEW] Announce transfer in chat
+        const nameRes = await db.query('SELECT id, display_name FROM users WHERE id = ANY($1)', [[req.user.id, newOwnerId]]);
+        const oldOwnerName = nameRes.rows.find(u => u.id == req.user.id)?.display_name || 'Owner';
+        const newOwnerName = nameRes.rows.find(u => u.id == newOwnerId)?.display_name || 'User';
+
+        const sysMsgRes = await db.query(
+            'INSERT INTO messages (room_id, user_id, content, type) VALUES ($1, $2, $3, $4) RETURNING id',
+            [roomId, req.user.id, `${oldOwnerName} transferred ownership to ${newOwnerName}`, 'system']
+        );
+        
+        io.to(`room:${roomId}`).emit('new_message', {
+            id: sysMsgRes.rows[0].id,
+            room_id: parseInt(roomId),
+            user_id: req.user.id,
+            content: `${oldOwnerName} transferred ownership to ${newOwnerName}`,
+            type: 'system',
+            created_at: new Date().toISOString()
+        });
+
         res.json({ success: true });
     } catch (error) {
         console.error(error);

@@ -1462,17 +1462,25 @@ export default function MessageList({ messages, setMessages, currentUser, roomId
         }
     }, [messages, socket, roomId, currentUser.id]);
 
+    // [NEW] Track last message ID to detect REAL new messages at the bottom
+    const prevLastMsgIdRef = useRef(null);
+
     useEffect(() => {
         const div = scrollRef.current;
         if (!div) return;
         
         const lastMsg = messages[messages.length - 1];
         // [FIX] Force scroll if the last message is from me (sent just now)
-        // AI messages count as "from me" contextually if I triggered them? No, AI is separate.
-        // But if I sent a prompt, I want to see it.
+        // AND if it's actually a NEW message at the bottom (id changed).
         const isLastMsgMine = lastMsg && lastMsg.user_id === currentUser.id;
+        const isNewMessageNodes = lastMsg && lastMsg.id !== prevLastMsgIdRef.current;
 
-        if (shouldScrollToBottom.current || isLastMsgMine) {
+        // Update ref for next render
+        if (lastMsg) {
+             prevLastMsgIdRef.current = lastMsg.id;
+        }
+
+        if (shouldScrollToBottom.current || (isLastMsgMine && isNewMessageNodes)) {
             if (messages.length > 0) {
                 // [FIX] Use setTimeout to ensure DOM is fully painted/layout is done before scrolling
                 const behavior = shouldScrollToBottom.current ? 'auto' : 'smooth';
@@ -1483,8 +1491,24 @@ export default function MessageList({ messages, setMessages, currentUser, roomId
             }
         } else {
             // If receiving others' messages, only scroll if we were already at bottom
+            // OR if it's a new message from someone else (we want to see it if we are at bottom)
+            // But if we are loading history (msg added to top), lastMsg.id logic above handles it?
+            // Actually, if we load history, lastMsg.id DOES NOT change (it's still the same latest message).
+            // So isNewMessageNodes would be FALSE.
+            // So we wouldn't enter the FIRST block.
+            
+            // What about this block?
+            // "If receiving others' messages..."
+            // If we load history, we fall through to here.
+            // We only scroll if isNearBottom.
+            // Loading history moves us AWAY from bottom (content added to top pushes us down relative to scrollStart).
+            // But wait, the useLayoutEffect handles the prepending scroll adjustment.
+            
             const isNearBottom = div.scrollHeight - div.scrollTop - div.clientHeight < 200; // Increased threshold
-            if (isNearBottom) {
+            if (isNearBottom && isNewMessageNodes) {
+                 // Only scroll if it's a NEW message. 
+                 // If we just loaded history, lastMsg is the same, so isNewMessageNodes is False.
+                 // So we won't auto-scroll to bottom. Perfect.
                 bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
             }
         }
@@ -1673,9 +1697,12 @@ export default function MessageList({ messages, setMessages, currentUser, roomId
                             icon = 'settings';
                             textColor = 'text-orange-500 dark:text-orange-400';
                          } else if (msg.content.includes('pinned a message')) {
-                            icon = 'push_pin';
-                            textColor = 'text-amber-600 dark:text-amber-400';
-                         }
+                           icon = 'push_pin';
+                           textColor = 'text-amber-600 dark:text-amber-400';
+                        } else if (msg.content.includes('transferred ownership')) {
+                           icon = 'admin_panel_settings';
+                           textColor = 'text-purple-500 dark:text-purple-400';
+                        }
  
                          return (
                              <div key={msg.id || index} className="flex justify-center my-6 group/system animate-slide-in-up">

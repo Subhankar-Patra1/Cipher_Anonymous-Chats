@@ -49,6 +49,7 @@ const getMessagePreview = (msg) => {
         case 'file': return msg.file_name || 'Document';
         case 'gif': return 'GIF';
         case 'sticker': return 'Sticker';
+        case 'system': return msg.content; // [NEW] System message preview
         default: return msg.caption || 'New message';
     }
 };
@@ -982,7 +983,6 @@ export default function Dashboard() {
                     onClose={() => setShowGroupInfo(false)}
                     onGoToMessage={handleGoToMessage} // [NEW]
                     onLeave={async () => {
-                         if (!confirm('Are you sure you want to leave this group?')) return;
                          try {
                              await fetch(`${import.meta.env.VITE_API_URL}/api/rooms/${activeRoom.id}/leave`, {
                                  method: 'POST',
