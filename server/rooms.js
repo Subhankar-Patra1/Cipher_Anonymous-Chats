@@ -452,7 +452,8 @@ router.get('/', async (req, res) => {
             last_msg.attachments as last_message_attachments,
             last_msg.is_deleted_for_everyone as last_message_is_deleted,
             gp.send_mode, gp.allow_name_change, gp.allow_description_change, gp.allow_add_members, gp.allow_remove_members,
-            (SELECT COUNT(*) > 0 FROM blocked_users bu WHERE bu.blocker_id = $1::integer AND bu.blocked_id = (SELECT user_id FROM room_members rm2 WHERE rm2.room_id = r.id AND rm2.user_id != $1::integer LIMIT 1)) as is_blocked_by_me
+            (SELECT COUNT(*) > 0 FROM blocked_users bu WHERE bu.blocker_id = $1::integer AND bu.blocked_id = (SELECT user_id FROM room_members rm2 WHERE rm2.room_id = r.id AND rm2.user_id != $1::integer LIMIT 1)) as is_blocked_by_me,
+            (SELECT COUNT(*) > 0 FROM blocked_users bu WHERE bu.blocked_id = $1::integer AND bu.blocker_id = (SELECT user_id FROM room_members rm2 WHERE rm2.room_id = r.id AND rm2.user_id != $1::integer LIMIT 1)) as is_blocked_by_them
             FROM rooms r 
             JOIN room_members rm ON r.id = rm.room_id 
             LEFT JOIN group_permissions gp ON r.id = gp.group_id

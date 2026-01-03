@@ -446,6 +446,25 @@ export default function Dashboard() {
             fetchRooms();
         });
 
+        // [NEW] Handle real-time block/unblock (to update online status visibility in sidebar)
+        newSocket.on('you_are_blocked', ({ blockerId }) => {
+            setRooms(prevRooms => prevRooms.map(r => {
+                if (String(r.other_user_id) === String(blockerId)) {
+                    return { ...r, is_blocked_by_them: true };
+                }
+                return r;
+            }));
+        });
+
+        newSocket.on('you_are_unblocked', ({ blockerId }) => {
+            setRooms(prevRooms => prevRooms.map(r => {
+                if (String(r.other_user_id) === String(blockerId)) {
+                    return { ...r, is_blocked_by_them: false };
+                }
+                return r;
+            }));
+        });
+
         // [NEW] Poll vote - update chat list with "voted in" preview
         // ChatWindow now uses named handlers so it won't remove this listener
         newSocket.on('poll_vote', ({ roomId, pollId, poll, voterId, voterName, pollQuestion, hasVoted, lastMessage }) => {

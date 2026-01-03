@@ -442,7 +442,7 @@ export default function Sidebar({ rooms, activeRoom, onSelectRoom, loadingRoomId
                                     group
                                 </span>
                             )}
-                            {room.type === 'direct' && room.other_user_id && (
+                            {room.type === 'direct' && room.other_user_id && !room.is_blocked_by_me && !room.is_blocked_by_them && (
                                 <StatusDot online={presenceMap[room.other_user_id]?.online} />
                             )}
                             {/* Lock Badge */}

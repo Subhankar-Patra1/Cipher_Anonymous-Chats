@@ -371,6 +371,12 @@ router.post('/me/unblock', async (req, res) => {
             WHERE blocker_id = $1 AND blocked_id = $2
         `, [req.user.id, targetUserId]);
 
+        // [NEW] Notify blocked user so their UI can update
+        const io = req.app.get('io');
+        io.to(`user:${targetUserId}`).emit('you_are_unblocked', { 
+            blockerId: req.user.id 
+        });
+
         res.json({ success: true });
     } catch (err) {
         console.error("Unblock user error:", err);

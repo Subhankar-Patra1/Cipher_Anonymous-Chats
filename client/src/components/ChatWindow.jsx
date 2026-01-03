@@ -114,8 +114,15 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
     const [hasMore, setHasMore] = useState(true);
 
     const [isBlockedByMe, setIsBlockedByMe] = useState(room.is_blocked_by_me || false);
+    const [isBlockedByThem, setIsBlockedByThem] = useState(room.is_blocked_by_them || false);
     const [otherUserId, setOtherUserId] = useState(room.other_user_id || null);
     const [checkingBlockStatus, setCheckingBlockStatus] = useState(false);
+
+    // [NEW] Sync state with props (if parent updates room object)
+    useEffect(() => {
+        setIsBlockedByMe(room.is_blocked_by_me || false);
+        setIsBlockedByThem(room.is_blocked_by_them || false);
+    }, [room.is_blocked_by_me, room.is_blocked_by_them]);
 
     // [NEW] Refs to access latest values in socket handlers (avoid stale closure)
     const isBlockedByMeRef = useRef(isBlockedByMe);
@@ -675,6 +682,22 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
         socket.on('group:member:added', handleMemberAdded);
         socket.on('group:member:removed', handleMemberRemoved);
 
+        // [NEW] Handle real-time block/unblock (to update online status visibility)
+        const handleYouAreBlocked = ({ blockerId }) => {
+            if (otherUserIdRef.current && String(blockerId) === String(otherUserIdRef.current)) {
+                setIsBlockedByThem(true);
+            }
+        };
+
+        const handleYouAreUnblocked = ({ blockerId }) => {
+            if (otherUserIdRef.current && String(blockerId) === String(otherUserIdRef.current)) {
+                setIsBlockedByThem(false);
+            }
+        };
+
+        socket.on('you_are_blocked', handleYouAreBlocked);
+        socket.on('you_are_unblocked', handleYouAreUnblocked);
+
         return () => {
             socket.off('new_message', handleNewMessage);
             socket.off('messages_status_update', handleStatusUpdate);
@@ -689,6 +712,8 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
             socket.off('user:profile:updated', handleProfileUpdate);
             socket.off('group:member:added', handleMemberAdded);
             socket.off('group:member:removed', handleMemberRemoved);
+            socket.off('you_are_blocked', handleYouAreBlocked);
+            socket.off('you_are_unblocked', handleYouAreUnblocked);
             
             Object.values(typingTimeoutsRef.current).forEach(clearTimeout);
         };
@@ -1469,7 +1494,7 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
                                 </p>
                             )}
                             
-                            {room.type === 'direct' && otherUserStatus && (
+                            {room.type === 'direct' && otherUserStatus && !isBlockedByMe && !isBlockedByThem && (
                                 <div className="text-xs font-medium mt-0.5">
                                     {otherUserStatus.online ? (
                                         <span className="text-green-500 dark:text-green-400">Online now</span>
