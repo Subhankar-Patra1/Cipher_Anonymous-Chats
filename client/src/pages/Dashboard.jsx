@@ -289,6 +289,12 @@ export default function Dashboard() {
                      // Update unread count if not active - SKIP IF SILENT
                      if (activeRoomRef.current?.id !== room.id && !isSilent) {
                          room.unread_count = (room.unread_count || 0) + 1;
+                     } else if (activeRoomRef.current?.id === room.id) {
+                         // [NEW] If active room, mark as read on server immediately so refresh doesn't show unread
+                         fetch(`${import.meta.env.VITE_API_URL}/api/rooms/${room.id}/read`, {
+                             method: 'POST',
+                             headers: { Authorization: `Bearer ${token}` }
+                         }).catch(console.error);
                      }
                      // Update last message preview (Always update text)
                      room.last_message_content = msg.content;

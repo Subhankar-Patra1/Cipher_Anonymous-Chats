@@ -443,6 +443,7 @@ router.get('/', async (req, res) => {
              AND (m.blocked_for_user_id IS NULL OR m.blocked_for_user_id != $1::integer)
              -- NOTE: This filter is ONLY for unread count calculation. Do NOT reuse for message history queries.
              AND m.user_id NOT IN (SELECT blocked_id FROM blocked_users WHERE blocker_id = $1::integer)
+             AND m.user_id != $1::integer
             ) as unread_count,
             last_msg.content as last_message_content,
             last_msg.type as last_message_type,
