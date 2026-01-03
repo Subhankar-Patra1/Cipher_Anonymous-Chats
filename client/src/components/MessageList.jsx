@@ -344,7 +344,7 @@ export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone,
                                     </div>
                                 ) : (
                                     <div className="text-xs opacity-80 line-clamp-2">
-                                        {linkifyText(msg.replyTo.text)}
+                                        {linkifyText(msg.replyTo.text, '', isMe ? 'text-white/90 underline break-all' : 'text-violet-600 dark:text-violet-300 underline break-all')}
                                     </div>
                                 )}
                             </div>
@@ -896,7 +896,7 @@ export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone,
                         )}
                         
                         {isMe && (
-                            <div className="absolute bottom-1 right-3 flex items-center gap-1 text-violet-200/80 drop-shadow-md">
+                            <div className="absolute bottom-0.5 right-1.5 flex items-center gap-1 text-violet-200/80 drop-shadow-md">
                                 {msg.status === 'sending' && msg.type !== 'image' && <span className="material-symbols-outlined text-[10px] animate-spin">progress_activity</span>}
                                 {msg.status === 'error' && (
                                     <button 
@@ -1594,7 +1594,11 @@ export default function MessageList({ messages, setMessages, currentUser, roomId
         }, 2000);
     };
 
-    const hasMessages = messages.filter(m => m.type !== 'poll_vote').length > 0;
+    const hasMessages = messages.filter(m => {
+        const isDeletedForMe = Array.isArray(m.deleted_for_user_ids) && 
+                               m.deleted_for_user_ids.includes(String(currentUser.id));
+        return m.type !== 'poll_vote' && !isDeletedForMe;
+    }).length > 0;
 
     return (
         <div 

@@ -397,8 +397,17 @@ export default function Dashboard() {
                     last_message_content: null,
                     last_message_type: null,
                     last_message_sender_id: null,
+                    last_message_sender_name: null,
                     last_message_status: null,
-                    last_message_id: null
+                    last_message_id: null,
+                    last_message_caption: null,
+                    last_message_file_name: null,
+                    last_message_is_view_once: null,
+                    last_message_viewed_by: null,
+                    last_message_poll_question: null,
+                    last_message_attachments: null,
+                    last_message_attachments_count: 0,
+                    last_message_is_deleted: false
                 } : r
             ));
             

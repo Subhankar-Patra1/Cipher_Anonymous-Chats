@@ -120,7 +120,7 @@ export default function Sidebar({ rooms, activeRoom, onSelectRoom, loadingRoomId
 
     // [NEW] Helper to render preview with mentions highlighted
     const renderPreview = (content) => {
-        if (!content) return 'No messages yet';
+        if (!content) return 'No messages here';
         
         // Split by mention pattern: @[Name](user:ID)
         const parts = content.split(/(@\[.*?\]\(user:\d+\))/g);

@@ -108,7 +108,7 @@ export function NoMessages() {
             
             {/* Title - responsive text size */}
             <h3 className="text-base sm:text-lg font-semibold text-slate-700 dark:text-slate-200 mb-1 sm:mb-2">
-                No messages yet
+                No messages here
             </h3>
             
             {/* Description - responsive text and width */}

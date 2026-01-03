@@ -6,9 +6,20 @@ import { useState, useEffect, useRef } from 'react';
  */
 export default function YouTubePreview({ url, videoId, isMe }) {
     const [isPlaying, setIsPlaying] = useState(false);
-    const [metadata, setMetadata] = useState(null);
+    const [isClosing, setIsClosing] = useState(false);
     const [isLoading, setIsLoading] = useState(true);
+    const [metadata, setMetadata] = useState(null);
     const iframeRef = useRef(null);
+    const componentRef = useRef(null);
+
+    const handleClose = (e) => {
+        e.stopPropagation();
+        setIsClosing(true);
+        setTimeout(() => {
+            setIsPlaying(false);
+            setIsClosing(false);
+        }, 250); // Match born-out animation duration
+    };
 
     // Extract video ID from URL if not provided
     const extractedId = videoId || extractYouTubeId(url);
@@ -64,7 +75,7 @@ export default function YouTubePreview({ url, videoId, isMe }) {
     // If playing, show full embed
     if (isPlaying) {
         return (
-            <div className={`-mx-2 -mb-1 mt-2 rounded-lg overflow-hidden w-full max-w-full ${isMe ? 'bg-black/20' : 'bg-slate-100 dark:bg-slate-900'}`}>
+            <div className={`mt-2 rounded-lg overflow-hidden ${isMe ? 'ml-[-12px] mr-[-12px]' : 'ml-[-12px] mr-[-36px]'} mb-[-8px] w-[340px] sm:w-[400px] ${isMe ? 'bg-black/20' : 'bg-slate-100 dark:bg-slate-900'} ${isClosing ? 'player-out' : 'player-in'}`}>
                 <div className="relative w-full" style={{ aspectRatio: '16/9' }}>
                     <iframe
                         ref={iframeRef}
@@ -77,7 +88,7 @@ export default function YouTubePreview({ url, videoId, isMe }) {
                 </div>
                 {/* Close button */}
                 <button 
-                    onClick={() => setIsPlaying(false)}
+                    onClick={handleClose}
                     className={`w-full py-2 text-xs transition-colors flex items-center justify-center gap-1 ${closeBtnClass}`}
                 >
                     <span className="material-symbols-outlined text-sm">close</span>
@@ -90,7 +101,7 @@ export default function YouTubePreview({ url, videoId, isMe }) {
     // Compact preview (WhatsApp style) - thumbnail on right
     return (
         <div 
-            className={`-mx-2 -mb-1 mt-2 rounded-lg overflow-hidden cursor-pointer transition-colors border border-transparent ${containerClass} ${!isMe ? 'hover:bg-slate-200 dark:hover:bg-slate-800' : 'hover:bg-black/30'} border-opacity-50`}
+            className={`mt-2 rounded-lg overflow-hidden cursor-pointer transition-colors border border-transparent ${isMe ? 'ml-[-12px] mr-[-12px]' : 'ml-[-12px] mr-[-36px]'} mb-[-8px] w-[340px] sm:w-[400px] ${containerClass} ${!isMe ? 'hover:bg-slate-200 dark:hover:bg-slate-800' : 'hover:bg-black/30'} border-opacity-50`}
             onClick={() => setIsPlaying(true)}
         >
             <div className="flex items-center gap-3 p-2">

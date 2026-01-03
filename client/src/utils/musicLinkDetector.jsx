@@ -53,7 +53,7 @@ export function renderMusicPreviews(text, isMe) {
     if (links.length === 0) return null;
     
     return (
-        <div className="music-previews flex flex-col gap-2 max-w-[340px]">
+        <div className="music-previews flex flex-col gap-2 w-full">
             {links.map((link, index) => {
                 if (link.type === 'youtube') {
                     return (
