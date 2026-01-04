@@ -10,8 +10,9 @@ import PickerPanel from './PickerPanel';
 import ContentEditable from 'react-contenteditable';
 import { linkifyText } from '../utils/linkify';
 import { renderTextWithEmojis, renderTextWithEmojisToHtml } from '../utils/emojiRenderer';
-import SharedMedia from './SharedMedia'; // [NEW]
+import SharedMedia from './SharedMedia';
 import ImageViewerModal from './ImageViewerModal';
+import LinkedDevices from './LinkedDevices';
 
 
 const timeAgo = (dateString) => {
@@ -53,6 +54,7 @@ export default function ProfilePanel({ userId, roomId, onClose, onActionSuccess,
     
     // [NEW] Passcode Modal
     const [showPasscodeModal, setShowPasscodeModal] = useState(false);
+    const [showLinkedDevices, setShowLinkedDevices] = useState(false);
     
     // Display Name State
     const [isEditingName, setIsEditingName] = useState(false);
@@ -969,6 +971,14 @@ export default function ProfilePanel({ userId, roomId, onClose, onActionSuccess,
                                     <span className="material-symbols-outlined text-slate-400 dark:text-slate-500">lock</span>
                                     <span className="text-sm font-medium">App Lock</span>
                                 </button>
+                                
+                                <button 
+                                    onClick={() => setShowLinkedDevices(true)}
+                                    className="w-full flex items-center gap-4 p-3 hover:bg-slate-100 dark:hover:bg-slate-800/50 rounded-lg text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors text-left"
+                                >
+                                    <span className="material-symbols-outlined text-slate-400 dark:text-slate-500">devices</span>
+                                    <span className="text-sm font-medium">Linked Devices</span>
+                                </button>
 
                                 {/* Notification Settings */}
                                 {notificationsSupported && (
@@ -1062,6 +1072,10 @@ export default function ProfilePanel({ userId, roomId, onClose, onActionSuccess,
             
             {showPasscodeModal && (
                 <PasscodeSettingsModal onClose={() => setShowPasscodeModal(false)} />
+            )}
+            
+            {showLinkedDevices && (
+                <LinkedDevices onClose={() => setShowLinkedDevices(false)} />
             )}
             
             {/* Image Viewer */}

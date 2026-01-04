@@ -26,6 +26,7 @@
     "pg": "^8.11.3",
     "redis": "^5.10.0",
     "socket.io": "^4.8.1",
+    "ua-parser-js": "^2.0.7",
     "uuid": "^9.0.1"
   },
   "devDependencies": {

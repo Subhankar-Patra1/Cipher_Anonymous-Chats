@@ -40,6 +40,11 @@ app.use((req, res, next) => {
 const authRoutes = require('./auth');
 app.use('/api/auth', authRoutes);
 
+// [NEW] Sessions Route
+const sessionsRoutes = require('./routes/sessions');
+app.use('/api/sessions', sessionsRoutes);
+
+
 const roomRoutes = require('./rooms');
 app.use('/api/rooms', roomRoutes);
 
@@ -195,7 +200,7 @@ const jwt = require('jsonwebtoken');
 const JWT_SECRET = process.env.JWT_SECRET || 'supersecretkey';
 
 // Socket Auth Middleware
-io.use((socket, next) => {
+io.use(async (socket, next) => {
     console.log(`[DEBUG] Handshake attempt: SocketID=${socket.id}`);
     const token = socket.handshake.auth.token;
     
@@ -207,7 +212,22 @@ io.use((socket, next) => {
     try {
         const decoded = jwt.verify(token, JWT_SECRET);
         socket.user = decoded;
-        console.log(`[DEBUG] Auth successful for user ${decoded.username} (${decoded.id}). SocketID=${socket.id}`);
+
+        // [NEW] Validate Session
+        if (decoded.sessionId) {
+             const sessionCheck = await db.query('SELECT id FROM user_sessions WHERE id = $1 AND user_id = $2', [decoded.sessionId, decoded.id]);
+             if (sessionCheck.rows.length === 0) {
+                 console.error(`[DEBUG] Socket connection rejected: Session invalid/revoked. SocketID=${socket.id}`);
+                 return next(new Error('Session invalid'));
+             }
+             socket.sessionId = decoded.sessionId;
+        } else {
+            // Strict mode: Reject if no sessionId found (User requirement)
+            console.error(`[DEBUG] Socket connection rejected: Token missing sessionId. SocketID=${socket.id}`);
+            return next(new Error('Authentication error - Legacy token'));
+        }
+
+        console.log(`[DEBUG] Auth successful for user ${decoded.username} (${decoded.id}). Session=${decoded.sessionId} SocketID=${socket.id}`);
         next();
     } catch (err) {
         console.error(`[DEBUG] Socket connection rejected: Invalid token. SocketID=${socket.id} Error=${err.message}`);

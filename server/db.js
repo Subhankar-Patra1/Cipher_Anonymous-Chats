@@ -165,6 +165,20 @@ const createTables = async () => {
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 PRIMARY KEY (blocker_id, blocked_id)
             );
+
+            -- [NEW] User Sessions (Linked Devices)
+            CREATE TABLE IF NOT EXISTS user_sessions (
+                id UUID PRIMARY KEY,
+                user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+                device_name TEXT,
+                device_type TEXT, -- desktop, mobile, tablet
+                os TEXT,
+                browser TEXT,
+                ip_address TEXT,
+                location TEXT,
+                last_active_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
         `);
         console.log("Tables created successfully");
     } catch (err) {

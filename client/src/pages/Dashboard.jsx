@@ -430,6 +430,41 @@ export default function Dashboard() {
              });
         });
 
+        // [NEW] Session Revocation Handling
+        newSocket.on('session:revoked', ({ sessionId }) => {
+             console.log('[DEBUG-CLIENT] session:revoked received', sessionId);
+             try {
+                if (!token) return;
+                const base64Url = token.split('.')[1];
+                const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
+                const payload = JSON.parse(window.atob(base64));
+                
+                if (payload.sessionId === sessionId) {
+                    console.log('[DEBUG-CLIENT] My session revoked. Logging out...');
+                    logout();
+                }
+             } catch (e) {
+                 console.error('Error processing session revocation:', e);
+             }
+        });
+
+        newSocket.on('session:revoked-others', ({ currentSessionId }) => {
+            console.log('[DEBUG-CLIENT] session:revoked-others received, keeping:', currentSessionId);
+            try {
+                if (!token) return;
+                const base64Url = token.split('.')[1];
+                const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
+                const payload = JSON.parse(window.atob(base64));
+                
+                if (payload.sessionId !== currentSessionId) {
+                    console.log('[DEBUG-CLIENT] I am one of the "others". Logging out...');
+                    logout();
+                }
+            } catch (e) {
+                console.error(e);
+            }
+        });
+
         // [NEW] Chat cleared/deleted events
         newSocket.on('messages_status_update', ({ roomId, messageIds, status }) => {
             setRooms(prev => prev.map(r => {
