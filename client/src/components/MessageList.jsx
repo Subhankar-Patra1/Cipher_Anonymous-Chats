@@ -19,6 +19,7 @@ import PollMessage from './PollMessage';
 import PollIcon from './icons/PollIcon';
 import { NoMessages } from './EmptyState';
 import { renderMusicPreviews, hasMusicLinks } from '../utils/musicLinkDetector';
+import MessageInfoModal from './MessageInfoModal'; // [NEW] Message Info
 
 const formatDuration = (ms) => {
     if (!ms) return '0:00';
@@ -100,12 +101,14 @@ const getContrastColor = (hexColor) => {
     return yiq >= 128 ? 'text-slate-900' : 'text-white';
 };
 
-export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone, onRetry, onMarkHeard, onEdit, onImageLoad, onRegenerate, onPin, searchTerm, scrollToMessage, onImageClick, token, isSelectionMode, isSelected, onToggleSelection, onEnableSelectionMode, bubbleColor }) => { // [MODIFIED] Added bubbleColor
+export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone, onRetry, onMarkHeard, onEdit, onImageLoad, onRegenerate, onPin, searchTerm, scrollToMessage, onImageClick, isSelectionMode, isSelected, onToggleSelection, onEnableSelectionMode, bubbleColor, onBottomInView, onViewInfo }) => { // [MODIFIED] Added bubbleColor, onBottomInView, onViewInfo
  // [MODIFIED] Added onImageClick
     const [showMenu, setShowMenu] = useState(false);
+    const [menuClosing, setMenuClosing] = useState(false); // [NEW] For close animation
     const [showFeedback, setShowFeedback] = useState(false); // [NEW] Feedback state
+    const [viewingMessageInfo, setViewingMessageInfo] = useState(null); // [NEW] State for MessageInfoModal
     const menuRef = useRef(null);
-    const { user } = useAuth(); 
+    const { user, token } = useAuth(); 
     const isAudio = msg.type === 'audio';
     const [imgLoaded, setImgLoaded] = useState(false);
     const [isDownloaded, setIsDownloaded] = useState(() => {
@@ -136,16 +139,29 @@ export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone,
         }
     };
 
+    // [NEW] Close menu with animation
+    const closeMenu = () => {
+        setMenuClosing(true);
+        setTimeout(() => {
+            setShowMenu(false);
+            setMenuClosing(false);
+        }, 180); // Match animation duration
+    };
+
     const toggleMenu = (e) => {
         e.stopPropagation();
         if (isSelectionMode) return; // [NEW] Disable menu in selection mode
-        setShowMenu(prev => !prev);
+        if (showMenu) {
+            closeMenu();
+        } else {
+            setShowMenu(true);
+        }
     };
 
     useEffect(() => {
         const handleClickOutside = (event) => {
             if (menuRef.current && !menuRef.current.contains(event.target)) {
-                setShowMenu(false);
+                closeMenu();
             }
         };
         if (showMenu) {
@@ -989,8 +1005,8 @@ export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone,
                         <div
                             ref={menuRef}
                             className={`
-                                absolute top-full mt-0.5
-                                left-1/2 -translate-x-1/2 ${isMe ? '-ml-8' : 'ml-8'}
+                                absolute top-[calc(100%+2px)]
+                                ${isMe ? 'right-0' : 'left-0'}
                                 w-48
                                 rounded-2xl
                                 bg-white dark:bg-slate-900
@@ -998,7 +1014,12 @@ export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone,
                                 shadow-2xl shadow-black/20 dark:shadow-black/60
                                 py-1
                                 z-[9999]
+                                transition-all duration-[180ms] ease-out
+                                ${menuClosing 
+                                    ? 'opacity-0 scale-95' 
+                                    : 'opacity-100 scale-100 animate-[menuBornIn_180ms_ease-out]'}
                             `}
+                            style={{ transformOrigin: isMe ? 'top right' : 'top left' }}
                         >
                             {isAi && onRegenerate && (
                                 <button 
@@ -1222,6 +1243,7 @@ export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone,
                                     </button>
                                 ) : (
                                     // Copy button for single image or text messages
+                                    !msg.is_view_once && (
                                     <button 
                                         className="w-full flex items-center gap-2 px-3 py-2.5 text-left text-sm text-slate-700 dark:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors first:rounded-t-2xl last:rounded-b-2xl"
                                         onClick={async (e) => {
@@ -1263,11 +1285,12 @@ export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone,
                                         <span className="material-symbols-outlined text-base">content_copy</span>
                                         <span>{msg.type === 'image' ? 'Copy' : 'Copy Text'}</span>
                                     </button>
+                                    )
                                 )
                             )}
 
                             {/* [NEW] Pin/Unpin Option */}
-                            {!isAi && onPin && !msg.is_deleted_for_everyone && (
+                            {!isAi && onPin && !msg.is_deleted_for_everyone && !msg.is_view_once && (
                                 <button 
                                     className="w-full flex items-center gap-2 px-3 py-2.5 text-left text-sm text-slate-700 dark:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors first:rounded-t-2xl last:rounded-b-2xl"
                                     onClick={(e) => {
@@ -1320,6 +1343,21 @@ export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone,
                                     <span>Delete for everyone</span>
                                 </button>
                             )}
+
+                             {/* [NEW] Message Info */}
+                             {!msg.is_deleted_for_everyone && msg.type !== 'system' && (isMe || msg.room_type === 'group' || (msg.room_type === 'direct' && isMe)) && (
+                                <button
+                                    className="w-full flex items-center gap-2 px-3 py-2.5 text-left text-sm text-slate-700 dark:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors first:rounded-t-2xl last:rounded-b-2xl"
+                                    onClick={(e) => {
+                                        e.stopPropagation();
+                                        onViewInfo(msg.id);
+                                        setShowMenu(false);
+                                    }}
+                                >
+                                    <span className="material-symbols-outlined text-base">info</span>
+                                    <span>Message info</span>
+                                </button>
+                             )}
                             
                             {/* [NEW] Select Option */}
                             <button
@@ -1386,6 +1424,7 @@ export default function MessageList({
 
     // [NEW] Viewer State
     const [viewingImage, setViewingImage] = useState(null);
+    const [viewingMessageInfo, setViewingMessageInfo] = useState(null); // [NEW] Info Modal State
 
     const [showScrollButton, setShowScrollButton] = useState(false);
     const scrollRef = useRef(null);
@@ -1922,6 +1961,8 @@ export default function MessageList({
                             onEnableSelectionMode={onToggleSelectionMode}
                             isInMultiSelect={isSelectionMode} // Assuming Prop adjustment if needed, else strict pass
                             bubbleColor={chatPreferences?.bubbleColor} // [NEW]
+                            onViewInfo={(id) => setViewingMessageInfo(id)} // [NEW] Info Modal
+                            onBottomInView={onBottomInView} // [NEW]
                         />
                         </React.Fragment>
                     );
@@ -1997,6 +2038,14 @@ export default function MessageList({
                         </div>
                     </div>
                 </div>
+            )}
+
+            {/* [NEW] Message Info Modal */}
+            {viewingMessageInfo && (
+                <MessageInfoModal 
+                    messageId={viewingMessageInfo} 
+                    onClose={() => setViewingMessageInfo(null)} 
+                />
             )}
         </div>
     );

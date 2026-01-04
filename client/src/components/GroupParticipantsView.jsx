@@ -104,7 +104,7 @@ const GroupParticipantsViewContent = ({
                                     {isOwner && member.role === 'member' && (
                                         <button 
                                             onClick={() => onPromote(member.id)}
-                                            className="p-1.5 text-slate-400 hover:text-violet-600 dark:hover:text-violet-400 hover:bg-violet-600/10 dark:hover:bg-violet-400/10 rounded-lg transition-colors"
+                                            className="w-8 h-8 flex items-center justify-center text-slate-400 hover:text-violet-600 dark:hover:text-violet-400 hover:bg-violet-600/10 dark:hover:bg-violet-400/10 rounded-full transition-colors"
                                             title="Promote to Admin"
                                         >
                                             <span className="material-symbols-outlined text-[18px]">add_moderator</span>
@@ -113,7 +113,7 @@ const GroupParticipantsViewContent = ({
                                     {isOwner && member.role === 'admin' && (
                                         <button 
                                             onClick={() => onDemote(member.id)}
-                                            className="p-1.5 text-slate-400 hover:text-amber-600 dark:hover:text-amber-400 hover:bg-amber-600/10 dark:hover:bg-amber-400/10 rounded-lg transition-colors"
+                                            className="w-8 h-8 flex items-center justify-center text-slate-400 hover:text-amber-600 dark:hover:text-amber-400 hover:bg-amber-600/10 dark:hover:bg-amber-400/10 rounded-full transition-colors"
                                             title="Demote to Member"
                                         >
                                             <span className="material-symbols-outlined text-[18px]">remove_moderator</span>
@@ -124,7 +124,7 @@ const GroupParticipantsViewContent = ({
                                     {(isOwner || (isAdmin && member.role === 'member')) && (
                                         <button 
                                             onClick={() => onKick(member.id)}
-                                            className="p-1.5 text-slate-400 hover:text-red-600 dark:hover:text-red-400 hover:bg-red-600/10 dark:hover:bg-red-400/10 rounded-lg transition-colors"
+                                            className="w-8 h-8 flex items-center justify-center text-slate-400 hover:text-red-600 dark:hover:text-red-400 hover:bg-red-600/10 dark:hover:bg-red-400/10 rounded-full transition-colors"
                                             title="Remove from group"
                                         >
                                             <span className="material-symbols-outlined text-[18px]">person_remove</span>

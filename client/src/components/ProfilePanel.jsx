@@ -11,7 +11,7 @@ import ContentEditable from 'react-contenteditable';
 import { linkifyText } from '../utils/linkify';
 import { renderTextWithEmojis, renderTextWithEmojisToHtml } from '../utils/emojiRenderer';
 import SharedMedia from './SharedMedia';
-import ImageViewerModal from './ImageViewerModal';
+import AvatarViewerModal from './AvatarViewerModal';
 import LinkedDevices from './LinkedDevices';
 import ChatColorPicker from './ChatColorPicker'; // [NEW]
 
@@ -48,6 +48,8 @@ export default function ProfilePanel({ userId, roomId, onClose, onActionSuccess,
     
     const [isEditModalOpen, setIsEditModalOpen] = useState(false);
     const [viewingImage, setViewingImage] = useState(null);
+    const [avatarSourceRect, setAvatarSourceRect] = useState(null);
+    const avatarRef = useRef(null);
 
     const [isEditingBio, setIsEditingBio] = useState(false);
     const [editedBio, setEditedBio] = useState('');
@@ -538,9 +540,19 @@ export default function ProfilePanel({ userId, roomId, onClose, onActionSuccess,
                          {/* Avatar */}
                          <div className="relative group mb-4">
                             <div 
+                                ref={avatarRef}
                                 className={`w-28 h-28 rounded-full flex items-center justify-center text-4xl font-bold text-white shadow-xl overflow-hidden border-[3px] border-white dark:border-slate-800 ${!avatarSource ? 'bg-gradient-to-br from-violet-500 to-indigo-600' : 'bg-slate-200 dark:bg-slate-800'} ${avatarSource ? 'cursor-pointer' : ''} transition-colors`}
                                 onClick={() => {
-                                    if (avatarSource) setViewingImage(avatarSource);
+                                    if (avatarSource && avatarRef.current) {
+                                        const rect = avatarRef.current.getBoundingClientRect();
+                                        setAvatarSourceRect({
+                                            top: rect.top,
+                                            left: rect.left,
+                                            width: rect.width,
+                                            height: rect.height
+                                        });
+                                        setViewingImage(avatarSource);
+                                    }
                                 }}
                             >
                                 {avatarSource ? (
@@ -1127,11 +1139,16 @@ export default function ProfilePanel({ userId, roomId, onClose, onActionSuccess,
                 <LinkedDevices onClose={() => setShowLinkedDevices(false)} />
             )}
             
-            {/* Image Viewer */}
+            {/* Image Viewer with Hero Animation */}
             {viewingImage && (
-                <ImageViewerModal
-                    images={[{ src: viewingImage, alt: profile.display_name || "Profile Photo" }]}
-                    onClose={() => setViewingImage(null)}
+                <AvatarViewerModal
+                    src={viewingImage}
+                    alt={profile.display_name || "Profile Photo"}
+                    sourceRect={avatarSourceRect}
+                    onClose={() => {
+                        setViewingImage(null);
+                        setAvatarSourceRect(null);
+                    }}
                 />
             )}
         </>,

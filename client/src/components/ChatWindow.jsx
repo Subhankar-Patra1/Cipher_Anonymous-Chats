@@ -2109,7 +2109,7 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
                             onCancel={handleCancelSelection}
                             onDelete={handleDeleteSelected}
                             onCopy={handleCopySelectedMessages}
-                            canCopy={canCopy}
+                            canCopy={canCopy && !Array.from(selectedMessageIds).some(id => messages.find(m => m.id === id)?.is_view_once)}
                         />
                     ) : (
                         <MessageInput 

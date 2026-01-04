@@ -618,6 +618,173 @@ router.post('/', async (req, res) => {
     }
 });
 
+// [NEW] Message Info
+router.get('/:id/info', async (req, res) => {
+    const messageId = req.params.id;
+    const userId = req.user.id;
+
+    try {
+        // 1. Fetch Message & Basic Checks
+        // We need message details + room_id to check permissions
+        const messageRes = await db.query(`
+            SELECT m.*, r.type as room_type 
+            FROM messages m
+            JOIN rooms r ON m.room_id = r.id
+            WHERE m.id = $1
+        `, [messageId]);
+
+        if (messageRes.rows.length === 0) {
+            return res.status(404).json({ error: 'Message not found' });
+        }
+
+        const msg = messageRes.rows[0];
+
+        // 2. Permission Checks
+        // Rule: Deleted messages -> No Info
+        if (msg.is_deleted_for_everyone) {
+            return res.status(403).json({ error: 'Message info not available for deleted messages' });
+        }
+        
+        // Rule: Member of room?
+        const memberRes = await db.query('SELECT role FROM room_members WHERE room_id = $1 AND user_id = $2', [msg.room_id, userId]);
+        if (!memberRes.rows[0]) {
+            return res.status(403).json({ error: 'Not a member of this room' });
+        }
+
+        // Rule: Direct Chat -> Receiver CANNOT see info (Only Sender)
+        if (msg.room_type === 'direct' && msg.user_id !== userId) {
+            return res.status(403).json({ error: 'Message info is only available to the sender in direct chats' });
+        }
+
+        // 3. Fetch Room Members (for Profiles & Last Read At)
+        const membersRes = await db.query(`
+            SELECT rm.user_id, rm.last_read_at, u.display_name, u.username, u.avatar_thumb_url
+            FROM room_members rm
+            JOIN users u ON rm.user_id = u.id
+            WHERE rm.room_id = $1
+        `, [msg.room_id]);
+
+        const membersMap = {};
+        membersRes.rows.forEach(m => {
+            membersMap[m.user_id] = m;
+        });
+
+        // 4. Compute Lists
+        const readBy = [];
+        const deliveredTo = [];
+        
+        // Arrays from DB (default to empty if null)
+        const dbReadBy = msg.read_by || [];
+        const dbDeliveredTo = msg.delivered_to || [];
+
+        // Logic:
+        // Read By: Users in msg.read_by
+        // Timestamp: Use member.last_read_at as APPROXIMATION
+        // We explicitly flag it as approximate.
+        
+        // Deduplicate and process Read By
+        const uniqueReadBy = [...new Set(dbReadBy)];
+        uniqueReadBy.forEach(uid => {
+            if (uid === msg.user_id) return; 
+
+            const member = membersMap[uid];
+            if (member) {
+                readBy.push({
+                    userId: uid,
+                    name: member.display_name || member.username,
+                    avatar: member.avatar_thumb_url,
+                    at: member.last_read_at, // The approximation
+                    approximate: true
+                });
+            }
+        });
+
+        // [NEW] Process Viewed By (for View Once)
+        const viewedBy = [];
+        const dbViewedBy = msg.viewed_by || [];
+        const uniqueViewedBy = [...new Set(dbViewedBy)];
+        
+        uniqueViewedBy.forEach(uid => {
+             if (uid === msg.user_id) return;
+             const member = membersMap[uid];
+             if (member) {
+                 viewedBy.push({
+                     userId: uid,
+                     name: member.display_name || member.username,
+                     avatar: member.avatar_thumb_url,
+                     at: null, // No specific timestamp for "viewed" in this schema
+                     approximate: false
+                 });
+             }
+        });
+
+        // Computed Delivered To
+        // Users in delivered_to
+        const uniqueDelivered = [...new Set(dbDeliveredTo)];
+        uniqueDelivered.forEach(uid => {
+             if (uid === msg.user_id) return;
+             // If already read, they must have received it, right?
+             // Usually yes, but let's list them if they are in delivered_to OR read_by?
+             // Typically "Delivered To" list excludes those who already "Read" it in UI to avoid dupes?
+             // WhatsApp shows "Read By" and "Delivered To" separately. If you read it, you disappear from Delivered?
+             // Let's keep them distinct for backend, Frontend can merge/filter.
+             // Actually, usually it's "Read By" (Complete), "Delivered to" (Remaining).
+             // BUT user asked for "Delivered to (2)" list in the example: 
+             // "Read by (3)... Delivered to (2)..."
+             // This implies disjoint sets? Or purely status?
+             // Let's return raw lists, Frontend can decide if it subtracts.
+             // BUT standard is: Read implies Delivered.
+             // Let's return everyone who got it.
+             
+             const member = membersMap[uid];
+             if (member) {
+                 deliveredTo.push({
+                     userId: uid,
+                     name: member.display_name || member.username,
+                     avatar: member.avatar_thumb_url,
+                     at: null // Not tracking delivered timestamp yet
+                 });
+             }
+        });
+
+        // Filter: Remove 'Read' users from 'Delivered' list for cleaner UI?
+        // User's example: Read by Alice, Bob. Delivered to Charlie, Dave.
+        // This suggests disjoint sets.
+        const readUserIds = new Set(readBy.map(r => r.userId));
+        const finalDeliveredTo = deliveredTo.filter(d => !readUserIds.has(d.userId));
+
+        // 5. Construct Response
+        res.json({
+            message: {
+                id: msg.id,
+                type: msg.type,
+                content: msg.content,
+                caption: msg.caption, // [NEW]
+                created_at: msg.created_at,
+                edited_at: msg.edited_at, 
+                media_url: msg.image_url || msg.file_url || msg.audio_url || msg.gif_url,
+                // [NEW] Details for preview
+                file_name: msg.file_name,
+                file_size: msg.file_size,
+                audio_duration_ms: msg.audio_duration_ms,
+                attachments: msg.attachments, // For multi-image check if needed
+                is_view_once: msg.is_view_once // [NEW]
+            },
+            receipts: {
+                readBy,
+                deliveredTo: finalDeliveredTo,
+                viewedBy // [NEW]
+            },
+            // Group info for context
+            isGroup: msg.room_type === 'group'
+        });
+
+    } catch (err) {
+        console.error('Error fetching message info:', err);
+        res.status(500).json({ error: 'Server error' });
+    }
+});
+
 // Delete for me
 router.delete('/:id/for-me', async (req, res) => {
     const messageId = req.params.id;

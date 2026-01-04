@@ -1661,18 +1661,22 @@ router.get('/:id/preferences', async (req, res) => {
 router.post('/:id/preferences', async (req, res) => {
     const roomId = req.params.id;
     const { bubbleColor, wallpaper } = req.body;
+    
+    // Check which fields are explicitly provided (to allow setting to null for "default")
+    const hasBubbleColor = 'bubbleColor' in req.body;
+    const hasWallpaper = 'wallpaper' in req.body;
 
     try {
-        // Upsert preferences
+        // Upsert preferences - explicitly handle null values for "reset to default"
         await db.query(`
             INSERT INTO user_chat_preferences (user_id, room_id, bubble_color, wallpaper, updated_at)
             VALUES ($1, $2, $3, $4, NOW())
             ON CONFLICT (user_id, room_id) 
             DO UPDATE SET 
-                bubble_color = COALESCE(EXCLUDED.bubble_color, user_chat_preferences.bubble_color),
-                wallpaper = COALESCE(EXCLUDED.wallpaper, user_chat_preferences.wallpaper),
+                bubble_color = CASE WHEN $5 THEN $3 ELSE user_chat_preferences.bubble_color END,
+                wallpaper = CASE WHEN $6 THEN $4 ELSE user_chat_preferences.wallpaper END,
                 updated_at = NOW()
-        `, [req.user.id, roomId, bubbleColor || null, wallpaper || null]);
+        `, [req.user.id, roomId, bubbleColor ?? null, wallpaper ?? null, hasBubbleColor, hasWallpaper]);
 
         // Emit to user's devices
         const io = req.app.get('io');

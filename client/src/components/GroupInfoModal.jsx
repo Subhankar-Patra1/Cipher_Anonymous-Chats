@@ -10,7 +10,7 @@ import AvatarEditorModal from './AvatarEditorModal';
 import GroupPermissionsView from './GroupPermissionsView';
 import GroupParticipantsView from './GroupParticipantsView';
 import SharedMedia from './SharedMedia'; // [NEW]
-import ImageViewerModal from './ImageViewerModal';
+import AvatarViewerModal from './AvatarViewerModal';
 import GroupOwnershipTransferView from './GroupOwnershipTransferView';
 import ChatColorPicker from './ChatColorPicker'; // [NEW]
 
@@ -46,6 +46,8 @@ export default function GroupInfoModal({ room, onClose, onLeave, onKick, socket,
     const [localAvatarThumb, setLocalAvatarThumb] = useState(room.avatar_thumb_url);
     const [isAvatarModalOpen, setIsAvatarModalOpen] = useState(false);
     const [fullScreenImage, setFullScreenImage] = useState(null);
+    const [avatarSourceRect, setAvatarSourceRect] = useState(null);
+    const groupAvatarRef = useRef(null);
 
     // Emoji Picker (for Bio)
     const [showEmoji, setShowEmoji] = useState(false);
@@ -562,11 +564,16 @@ export default function GroupInfoModal({ room, onClose, onLeave, onKick, socket,
 
     return (
         <div className="fixed inset-0 bg-gray-900/80 dark:bg-slate-950/80 backdrop-blur-sm flex items-center justify-center z-50 p-4 transition-colors duration-300">
-             {/* Full Screen Image Modal */}
+             {/* Full Screen Image Modal with Hero Animation */}
             {fullScreenImage && (
-                <ImageViewerModal
-                    images={[{ src: fullScreenImage, alt: room.name || "Group Photo" }]}
-                    onClose={() => setFullScreenImage(null)}
+                <AvatarViewerModal
+                    src={fullScreenImage}
+                    alt={room.name || "Group Photo"}
+                    sourceRect={avatarSourceRect}
+                    onClose={() => {
+                        setFullScreenImage(null);
+                        setAvatarSourceRect(null);
+                    }}
                 />
             )}
 
@@ -588,7 +595,19 @@ export default function GroupInfoModal({ room, onClose, onLeave, onKick, socket,
                         {/* Avatar */}
                         <div className="relative group shrink-0">
                             <button 
-                                onClick={() => localAvatar && setFullScreenImage(localAvatar)}
+                                ref={groupAvatarRef}
+                                onClick={() => {
+                                    if (localAvatar && groupAvatarRef.current) {
+                                        const rect = groupAvatarRef.current.getBoundingClientRect();
+                                        setAvatarSourceRect({
+                                            top: rect.top,
+                                            left: rect.left,
+                                            width: rect.width,
+                                            height: rect.height
+                                        });
+                                        setFullScreenImage(localAvatar);
+                                    }
+                                }}
                                 className={`w-14 h-14 rounded-full overflow-hidden flex items-center justify-center font-bold text-xl border-2 border-slate-200 dark:border-slate-700/50 transition-transform ${localAvatar ? 'hover:scale-105 cursor-zoom-in' : 'bg-slate-200 dark:bg-slate-800 text-slate-500 dark:text-slate-500 cursor-default'}`}
                             >
                                 {localAvatarThumb ? (

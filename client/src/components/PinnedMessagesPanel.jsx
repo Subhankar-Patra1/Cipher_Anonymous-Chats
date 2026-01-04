@@ -171,11 +171,11 @@ export default function PinnedMessagesPanel({ roomId, onGoToMessage, onUnpin, so
                                             <img src={msg.avatar_thumb_url} alt="" className="w-6 h-6 rounded-full object-cover" />
                                         ) : (
                                             <div className="w-6 h-6 rounded-full bg-slate-200 dark:bg-slate-700 flex items-center justify-center text-xs font-bold">
-                                                {msg.display_name?.[0]?.toUpperCase() || '?'}
+                                                {(msg.display_name?.replace(/[\uD800-\uDFFF]/g, '')?.[0] || '?').toUpperCase()}
                                             </div>
                                         )}
                                         <span className="text-xs font-semibold text-slate-700 dark:text-slate-200">
-                                            {msg.display_name}
+                                            {renderTextWithEmojis(msg.display_name)}
                                         </span>
                                     </div>
                                     <p className="text-sm text-slate-600 dark:text-slate-300 truncate mt-1 ml-8">

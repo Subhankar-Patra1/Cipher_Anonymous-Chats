@@ -926,7 +926,7 @@ export default function MessageInput({
                                     <>
                                          <span className="material-symbols-outlined text-violet-500 dark:text-violet-300 text-sm">mic</span>
                                          <div className="flex flex-col">
-                                            <span className="text-sm font-semibold text-violet-600 dark:text-violet-300">{replyTo.sender}</span>
+                                            <span className="text-sm font-semibold text-violet-600 dark:text-violet-300">{renderTextWithEmojis(replyTo.sender)}</span>
                                             <span className="text-xs text-slate-600 dark:text-slate-300">Voice message</span>
                                         </div>
                                     </>
