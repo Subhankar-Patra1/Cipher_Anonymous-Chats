@@ -170,8 +170,12 @@ router.get('/me', async (req, res) => {
                  return res.status(401).json({ error: 'Session expired' });
             }
 
-            // Update activity (throttled)
-            await db.query('UPDATE user_sessions SET last_active_at = NOW() WHERE id = $1', [decoded.sessionId]);
+            // Update activity (throttled - only update if more than 1 minute has passed)
+            // This prevents excessively slowing down the /me request which is called on every page load
+            const diffMinutes = (now - lastActive) / (1000 * 60);
+            if (diffMinutes > 1) {
+                await db.query('UPDATE user_sessions SET last_active_at = NOW() WHERE id = $1', [decoded.sessionId]);
+            }
         } else {
              // For legacy tokens (optional: force logout or allow temporarily)
              // User requested "Review Required ... requires all existing users to log out"

@@ -5,7 +5,7 @@ import { renderTextWithEmojis } from '../utils/emojiRenderer';
 
 export default function LockScreen() {
     const { isLocked, unlockApp, removePasscode } = useAppLock();
-    const { user, logout } = useAuth(); // [FIX] Get logout from context
+    const { user, logout, loading } = useAuth(); // [FIX] Get logout and loading from context
     const [passcode, setPasscode] = useState(['', '', '', '']);
     const [error, setError] = useState(false);
     const [isShaking, setIsShaking] = useState(false);
@@ -75,6 +75,12 @@ export default function LockScreen() {
         // We should probably explicitly close lock screen to be safe or reload.
         window.location.href = '/auth'; // Hard redirect to clear everything is safest for logout from lock screen
     };
+
+    // [FIX] If session is expired (not loading AND no user), do not show lock screen
+    // This prevents the "Enter Passcode -> Landing Page" flow
+    // If we are NOT loading and NOT logged in, we should bypass the lock screen
+    // The lock screen is only relevant for protecing an ACTIVE session.
+    if (!loading && !user) return null;
 
     if (!isLocked) return null;
 
