@@ -247,6 +247,7 @@ io.on('connection', async (socket) => {
     // Join user-specific channel for notifications
     socket.join(`user:${socket.user.id}`);
 
+
     // Auto-join all existing rooms to receive notifications
     try {
         const roomsRes = await db.query('SELECT room_id FROM room_members WHERE user_id = $1', [socket.user.id]);
@@ -254,9 +255,59 @@ io.on('connection', async (socket) => {
         rooms.forEach(row => {
             socket.join(`room:${row.room_id}`);
         });
+
+        // [NEW] Delivery Catch-up: Mark messages as delivered for this user
+        // Find messages sent to rooms I'm in, where I haven't received them yet, and I am NOT the sender.
+        // We use a simplified query: Find messages in my rooms, from others, not in deliveries.
+        const userId = socket.user.id;
+        
+        // 1. Get all messages ID that are pending delivery for this user
+        // Optimization: Limit to recent messages? For now, we do all.
+        // We need to join with room_members to ensure I am still in the room? 
+        // Logic: messages in rooms I am member of, sender != me, left join deliveries is null.
+        
+        const pendingRes = await db.query(`
+            SELECT m.id, m.user_id as sender_id, m.room_id
+            FROM messages m
+            JOIN room_members rm ON m.room_id = rm.room_id
+            LEFT JOIN message_deliveries md ON m.id = md.message_id AND md.user_id = $1
+            WHERE rm.user_id = $1
+            AND m.user_id != $1
+            AND md.message_id IS NULL
+        `, [userId]);
+
+        const pendingMessages = pendingRes.rows;
+
+        if (pendingMessages.length > 0) {
+            console.log(`[DEBUG] Marking ${pendingMessages.length} messages as delivered for user ${userId}`);
+            
+            // 2. Batch insert into message_deliveries
+            // We can do this in a loop or a bulk insert. Loop is safer for simple pg usage without helper.
+            // Using ON CONFLICT DO NOTHING for idempotency.
+            const now = new Date().toISOString();
+            
+            for (const msg of pendingMessages) {
+                await db.query(`
+                    INSERT INTO message_deliveries (message_id, user_id, delivered_at)
+                    VALUES ($1, $2, $3)
+                    ON CONFLICT DO NOTHING
+                `, [msg.id, userId, now]);
+
+                // 3. Emit to sender if online
+                // We emit to specific user channel
+                io.to(`user:${msg.sender_id}`).emit('message:delivered', {
+                    messageId: msg.id,
+                    userId: userId,
+                    deliveredAt: now,
+                    roomId: msg.room_id
+                });
+            }
+        }
+
     } catch (err) {
-        console.error('Error joining rooms:', err);
+        console.error('Error joining rooms / deliveries:', err);
     }
+
 
     socket.on('join_room', async (roomId) => {
         // Verify membership
@@ -476,6 +527,35 @@ io.on('connection', async (socket) => {
                     };
                     
                     io.to(`user:${row.user_id}`).emit('new_message', msgPayload);
+
+                    // [NEW] Delivery Logic: If recipient is online, mark as delivered for SENDER
+                    if (row.user_id !== socket.user.id) {
+                        try {
+                            const userRoom = io.sockets.adapter.rooms.get(`user:${row.user_id}`);
+                            const isOnline = userRoom && userRoom.size > 0;
+                            
+                            if (isOnline) {
+                                // 1. Record delivery in DB
+                                await db.query(`
+                                    INSERT INTO message_deliveries (message_id, user_id, delivered_at)
+                                    VALUES ($1, $2, NOW())
+                                    ON CONFLICT DO NOTHING
+                                `, [message.id, row.user_id]);
+
+                                // 2. Notify Sender (that Recipient X got it)
+                                // We send { messageId, userId, ... }
+                                // It allows sender client to turn tick double or update info.
+                                io.to(`user:${socket.user.id}`).emit('message:delivered', {
+                                    messageId: message.id,
+                                    userId: row.user_id,
+                                    deliveredAt: new Date().toISOString(),
+                                    roomId: roomId
+                                });
+                            }
+                        } catch (err) {
+                            console.error('[Delivery Error]', err);
+                        }
+                    }
                 }
             } else {
                 console.log(`User ${socket.user.username} tried to send message to room ${roomId} but is not a member`);
@@ -518,6 +598,15 @@ io.on('connection', async (socket) => {
                       AND user_id NOT IN (SELECT blocked_id FROM blocked_users WHERE blocker_id = $3)
                     RETURNING id, cardinality(read_by) as read_count
                  `, [validIds, roomId, socket.user.id]);
+
+                 // [NEW] Also ensure these messages are marked as DELIVERED in the database
+                 if (validIds.length > 0) {
+                     await db.query(`
+                        INSERT INTO message_deliveries (message_id, user_id)
+                        SELECT unnest($1::int[]), $2
+                        ON CONFLICT (message_id, user_id) DO NOTHING
+                     `, [validIds, socket.user.id]);
+                 }
                  
                  const updatedMessages = updateRes.rows;
                  const fullyReadIds = [];
@@ -549,17 +638,21 @@ io.on('connection', async (socket) => {
 
     socket.on('message_delivered', async ({ messageId, roomId }) => {
         try {
-            // Update delivered_to
+            const userId = socket.user.id;
+            const now = new Date().toISOString();
+            
+            // Update delivered_to array and delivered_at JSONB
             // [MODIFIED] Soft Block: Do not send delivered receipt IF sender is blocked by reader (One-Way)
             const updateRes = await db.query(`
                 UPDATE messages 
-                SET delivered_to = array_append(COALESCE(delivered_to, '{}'), $1)
+                SET delivered_to = array_append(COALESCE(delivered_to, '{}'), $1),
+                    delivered_at = COALESCE(delivered_at, '{}')::jsonb || jsonb_build_object($1::text, $4::text)
                 WHERE id = $2 
                   AND room_id = $3
                   AND NOT ($1 = ANY(COALESCE(delivered_to, '{}')))
                   AND user_id NOT IN (SELECT blocked_id FROM blocked_users WHERE blocker_id = $1)
                 RETURNING id, status
-            `, [socket.user.id, messageId, roomId]);
+            `, [userId, messageId, roomId, now]);
 
             if (updateRes.rowCount > 0) {
                 const msg = updateRes.rows[0];

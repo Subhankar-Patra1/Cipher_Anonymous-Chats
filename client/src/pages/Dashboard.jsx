@@ -212,6 +212,16 @@ export default function Dashboard() {
 
         // ... existing listeners ...
 
+        // [NEW] Handle Message Delivered (Updates Sidebar Tick)
+        newSocket.on('message:delivered', ({ messageId, roomId }) => {
+            setRooms(prev => prev.map(r => {
+                if (String(r.id) === String(roomId) && String(r.last_message_id) === String(messageId)) {
+                    return { ...r, last_message_status: 'delivered' };
+                }
+                return r;
+            })); 
+        });
+
         // [NEW] Force refresh rooms list (fallback for syncing)
         newSocket.on('rooms:refresh', () => {
              console.log('[DEBUG-CLIENT] rooms:refresh received. Fetching data...');

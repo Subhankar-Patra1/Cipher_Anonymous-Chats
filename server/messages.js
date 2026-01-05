@@ -640,23 +640,20 @@ router.get('/:id/info', async (req, res) => {
         const msg = messageRes.rows[0];
 
         // 2. Permission Checks
-        // Rule: Deleted messages -> No Info
         if (msg.is_deleted_for_everyone) {
             return res.status(403).json({ error: 'Message info not available for deleted messages' });
         }
         
-        // Rule: Member of room?
         const memberRes = await db.query('SELECT role FROM room_members WHERE room_id = $1 AND user_id = $2', [msg.room_id, userId]);
         if (!memberRes.rows[0]) {
             return res.status(403).json({ error: 'Not a member of this room' });
         }
 
-        // Rule: Direct Chat -> Receiver CANNOT see info (Only Sender)
         if (msg.room_type === 'direct' && msg.user_id !== userId) {
             return res.status(403).json({ error: 'Message info is only available to the sender in direct chats' });
         }
 
-        // 3. Fetch Room Members (for Profiles & Last Read At)
+        // 3. Fetch Room Members
         const membersRes = await db.query(`
             SELECT rm.user_id, rm.last_read_at, u.display_name, u.username, u.avatar_thumb_url
             FROM room_members rm
@@ -669,113 +666,109 @@ router.get('/:id/info', async (req, res) => {
             membersMap[m.user_id] = m;
         });
 
-        // 4. Compute Lists
+        // 4. Fetch Semantic Interactions (Played, Opened) from New Table
+        const interactionsRes = await db.query(`
+            SELECT user_id, interaction_type, created_at 
+            FROM message_interactions 
+            WHERE message_id = $1
+        `, [messageId]);
+
+        // Buckets
+        const playedBy = [];
+        const openedBy = [];
+
+        interactionsRes.rows.forEach(row => {
+            const member = membersMap[row.user_id];
+            if (!member || row.user_id === msg.user_id) return; // Skip self interactions if stored
+
+            const entry = {
+                userId: row.user_id,
+                name: member.display_name || member.username,
+                avatar: member.avatar_thumb_url,
+                at: row.created_at
+            };
+
+            if (row.interaction_type === 'played') playedBy.push(entry);
+            if (row.interaction_type === 'opened') openedBy.push(entry);
+        });
+
+        // 5. Compute Read (Existing Logic)
         const readBy = [];
-        const deliveredTo = [];
-        
-        // Arrays from DB (default to empty if null)
         const dbReadBy = msg.read_by || [];
-        const dbDeliveredTo = msg.delivered_to || [];
-
-        // Logic:
-        // Read By: Users in msg.read_by
-        // Timestamp: Use member.last_read_at as APPROXIMATION
-        // We explicitly flag it as approximate.
-        
-        // Deduplicate and process Read By
-        const uniqueReadBy = [...new Set(dbReadBy)];
-        uniqueReadBy.forEach(uid => {
+        [...new Set(dbReadBy)].forEach(uid => {
             if (uid === msg.user_id) return; 
-
             const member = membersMap[uid];
             if (member) {
                 readBy.push({
                     userId: uid,
                     name: member.display_name || member.username,
                     avatar: member.avatar_thumb_url,
-                    at: member.last_read_at, // The approximation
+                    at: member.last_read_at, 
                     approximate: true
                 });
             }
         });
 
-        // [NEW] Process Viewed By (for View Once)
-        const viewedBy = [];
-        const dbViewedBy = msg.viewed_by || [];
-        const uniqueViewedBy = [...new Set(dbViewedBy)];
+        // [NEW] Delivered To (from message_deliveries table - Source of Truth)
+        const deliveriesRes = await db.query(`
+            SELECT user_id, delivered_at
+            FROM message_deliveries
+            WHERE message_id = $1
+        `, [messageId]);
+
+        const deliveredTo = [];
+        const deliveredUserIds = new Set();
         
-        uniqueViewedBy.forEach(uid => {
-             if (uid === msg.user_id) return;
-             const member = membersMap[uid];
-             if (member) {
-                 viewedBy.push({
-                     userId: uid,
-                     name: member.display_name || member.username,
-                     avatar: member.avatar_thumb_url,
-                     at: null, // No specific timestamp for "viewed" in this schema
-                     approximate: false
-                 });
-             }
+        deliveriesRes.rows.forEach(row => {
+            if (row.user_id === msg.user_id) return; // Should not happen but safe guard
+            const member = membersMap[row.user_id];
+            // Even if member left, we show they got it? For now only show if in mapping.
+            if (member) {
+                deliveredTo.push({
+                    userId: row.user_id,
+                    name: member.display_name || member.username,
+                    avatar: member.avatar_thumb_url,
+                    at: row.delivered_at
+                });
+                deliveredUserIds.add(row.user_id);
+            }
         });
 
-        // Computed Delivered To
-        // Users in delivered_to
-        const uniqueDelivered = [...new Set(dbDeliveredTo)];
-        uniqueDelivered.forEach(uid => {
-             if (uid === msg.user_id) return;
-             // If already read, they must have received it, right?
-             // Usually yes, but let's list them if they are in delivered_to OR read_by?
-             // Typically "Delivered To" list excludes those who already "Read" it in UI to avoid dupes?
-             // WhatsApp shows "Read By" and "Delivered To" separately. If you read it, you disappear from Delivered?
-             // Let's keep them distinct for backend, Frontend can merge/filter.
-             // Actually, usually it's "Read By" (Complete), "Delivered to" (Remaining).
-             // BUT user asked for "Delivered to (2)" list in the example: 
-             // "Read by (3)... Delivered to (2)..."
-             // This implies disjoint sets? Or purely status?
-             // Let's return raw lists, Frontend can decide if it subtracts.
-             // BUT standard is: Read implies Delivered.
-             // Let's return everyone who got it.
-             
-             const member = membersMap[uid];
-             if (member) {
-                 deliveredTo.push({
-                     userId: uid,
-                     name: member.display_name || member.username,
-                     avatar: member.avatar_thumb_url,
-                     at: null // Not tracking delivered timestamp yet
-                 });
-             }
+        // [NEW] Pending (Everyone in room - sender - delivered)
+        const pending = [];
+        Object.values(membersMap).forEach(member => {
+            if (member.user_id === msg.user_id) return; // Sender
+            if (!deliveredUserIds.has(member.user_id)) {
+                pending.push({
+                    userId: member.user_id,
+                    name: member.display_name || member.username,
+                    avatar: member.avatar_thumb_url
+                });
+            }
         });
 
-        // Filter: Remove 'Read' users from 'Delivered' list for cleaner UI?
-        // User's example: Read by Alice, Bob. Delivered to Charlie, Dave.
-        // This suggests disjoint sets.
-        const readUserIds = new Set(readBy.map(r => r.userId));
-        const finalDeliveredTo = deliveredTo.filter(d => !readUserIds.has(d.userId));
 
-        // 5. Construct Response
+        // 6. Response
         res.json({
             message: {
                 id: msg.id,
                 type: msg.type,
                 content: msg.content,
-                caption: msg.caption, // [NEW]
+                caption: msg.caption,
                 created_at: msg.created_at,
-                edited_at: msg.edited_at, 
                 media_url: msg.image_url || msg.file_url || msg.audio_url || msg.gif_url,
-                // [NEW] Details for preview
                 file_name: msg.file_name,
                 file_size: msg.file_size,
                 audio_duration_ms: msg.audio_duration_ms,
-                attachments: msg.attachments, // For multi-image check if needed
-                is_view_once: msg.is_view_once // [NEW]
+                is_view_once: msg.is_view_once
             },
-            receipts: {
-                readBy,
-                deliveredTo: finalDeliveredTo,
-                viewedBy // [NEW]
+            interactions: {
+                read: readBy,
+                played: playedBy,
+                opened: openedBy
             },
-            // Group info for context
+            delivered: deliveredTo,
+            pending: pending,
             isGroup: msg.room_type === 'group'
         });
 
@@ -855,18 +848,26 @@ router.delete('/:id/for-everyone', async (req, res) => {
     }
 });
 
-// Mark audio as heard
+// Mark audio as heard (Played)
 router.post('/:id/audio-heard', async (req, res) => {
     const messageId = req.params.id;
     const userId = req.user.id;
 
     try {
+        // [MODIFIED] Use message_interactions
         await db.query(`
-            INSERT INTO audio_play_state (user_id, message_id, heard_at)
-            VALUES ($1, $2, NOW())
-            ON CONFLICT (user_id, message_id) DO UPDATE SET heard_at = NOW()
-        `, [userId, messageId]);
+            INSERT INTO message_interactions (message_id, user_id, interaction_type)
+            VALUES ($1, $2, 'played')
+            ON CONFLICT (message_id, user_id, interaction_type) DO UPDATE SET created_at = NOW()
+        `, [messageId, userId]);
 
+        // [NEW] Ensure delivery is recorded if played
+        await db.query(`
+            INSERT INTO message_deliveries (message_id, user_id)
+            VALUES ($1, $2)
+            ON CONFLICT (message_id, user_id) DO NOTHING
+        `, [messageId, userId]);
+        
         res.json({ success: true });
     } catch (err) {
         console.error('Error marking audio as heard:', err);
@@ -989,12 +990,28 @@ router.get('/:id/view-once', async (req, res) => {
              return res.status(403).json({ error: 'Photo expired' });
         }
 
-        // Mark as viewed
+        // Mark as viewed with timestamp (Existing logic + New Table)
+        const now = new Date().toISOString();
         await db.query(`
             UPDATE messages 
-            SET viewed_by = array_append(COALESCE(viewed_by, '{}'), $1)
+            SET viewed_by = array_append(COALESCE(viewed_by, '{}'), $1),
+                viewed_at = COALESCE(viewed_at, '{}')::jsonb || jsonb_build_object($1::text, $3::text)
             WHERE id = $2
-        `, [userId, messageId]);
+        `, [userId, messageId, now]);
+
+        // [NEW] Insert into message_interactions
+        await db.query(`
+            INSERT INTO message_interactions (message_id, user_id, interaction_type)
+            VALUES ($1, $2, 'opened')
+            ON CONFLICT (message_id, user_id, interaction_type) DO NOTHING
+        `, [messageId, userId]);
+
+        // [NEW] Ensure delivery is recorded if opened
+        await db.query(`
+            INSERT INTO message_deliveries (message_id, user_id)
+            VALUES ($1, $2)
+            ON CONFLICT (message_id, user_id) DO NOTHING
+        `, [messageId, userId]);
         
         // Notify room
         const io = req.app.get('io');

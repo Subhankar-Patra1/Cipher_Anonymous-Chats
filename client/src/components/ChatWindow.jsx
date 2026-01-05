@@ -442,8 +442,9 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
         // Guard: Only hydrate once per room
         if (hasHydratedRef.current) return;
         
-        // Guard: Must have messages
-        if (!room.initialMessages || room.initialMessages.length === 0) return;
+        // Guard: Must have messages (or explicit empty array from fetch)
+        // [FIX] Allow empty array (new rooms) to proceed
+        if (!room.initialMessages) return;
         
         // Guard: Must match current room (prevent stale updates)
         if (String(activeChatIdRef.current) !== String(room.id)) {
@@ -761,6 +762,14 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
              setTypingUsers(prev => prev.filter(u => u.userId !== user_id));
         };
 
+        const handleMessageDelivered = ({ messageId, roomId }) => {
+            if (String(roomId) === String(room.id)) {
+                setMessages(prev => prev.map(msg => 
+                    String(msg.id) === String(messageId) ? { ...msg, status: 'delivered' } : msg
+                ));
+            }
+        };
+
         socket.on('new_message', handleNewMessage);
         socket.on('messages_status_update', handleStatusUpdate);
         socket.on('message_deleted', handleMessageDeleted);
@@ -768,6 +777,7 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
         socket.on('message_viewed', handleMessageViewed);
         socket.on('typing:start', handleTypingStart);
         socket.on('typing:stop', handleTypingStop);
+        socket.on('message:delivered', handleMessageDelivered);
 
         // [NEW] Pin Events
         socket.on('message_pinned', ({ messageId, roomId, pinnedBy }) => {

@@ -137,6 +137,65 @@ const MessagePreview = ({ msg }) => {
     );
 };
 
+
+
+// Helper Component for a User Row
+const UserRow = ({ user, statusTime, statusLabel }) => (
+    <div className="flex items-center gap-3 px-4 py-2 hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors">
+        <div className="w-10 h-10 rounded-full bg-slate-200 dark:bg-slate-700 overflow-hidden shrink-0">
+            {user.avatar ? (
+                <img src={user.avatar} alt={user.name} className="w-full h-full object-cover" />
+            ) : (
+                <div className="w-full h-full flex items-center justify-center text-slate-500 font-bold">
+                    {user.name?.[0]?.toUpperCase()}
+                </div>
+            )}
+        </div>
+        <div className="flex-1 min-w-0">
+            <div className="text-sm font-medium text-slate-800 dark:text-slate-200 truncate">
+                {renderTextWithEmojis(user.name)}
+            </div>
+        </div>
+        <div className="flex flex-col items-end">
+            {statusTime && (
+                <span className="text-xs font-mono text-slate-500 dark:text-slate-400 whitespace-nowrap">
+                    {statusTime}
+                </span>
+            )}
+            {statusLabel && (
+                <span className="text-[9px] text-slate-400 dark:text-slate-500 lowercase">
+                    {statusLabel}
+                </span>
+            )}
+        </div>
+    </div>
+);
+
+const Section = ({ title, icon, users, emptyText, showApproximate = false, hideTime = false }) => (
+    <div className="p-2">
+        <div className="px-4 py-2 flex items-center justify-between">
+            <h3 className="text-sm font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">{title}</h3>
+            {icon}
+        </div>
+        {(!users || users.length === 0) ? (
+            <div className="px-4 py-3 text-center text-sm text-slate-400 italic">
+                {emptyText}
+            </div>
+        ) : (
+            <div className="flex flex-col">
+                {users.map(user => (
+                    <UserRow 
+                        key={user.userId} 
+                        user={user} 
+                        statusTime={hideTime ? null : formatReadTime(user.at, user.approximate)}
+                        statusLabel={user.approximate ? '(approx)' : null}
+                    />
+                ))}
+            </div>
+        )}
+    </div>
+);
+
 export default function MessageInfoModal({ messageId, onClose }) {
     const { token } = useAuth();
     const [data, setData] = useState(null);
@@ -205,189 +264,133 @@ export default function MessageInfoModal({ messageId, onClose }) {
                              </div>
                         </div>
 
-                        {data.message.is_view_once ? (
-                         /* VIEW ONCE LAYOUT: OPENED / SEEN / DELIVERED */
                         <div className="divide-y divide-slate-100 dark:divide-slate-800/50">
-                            {/* Opened */}
-                            <div className="p-2">
-                                <div className="px-4 py-2 flex items-center justify-between">
-                                    <h3 className="text-sm font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Opened</h3>
-                                     <div className="w-5 h-5 rounded-full border-2 border-dashed border-slate-400 flex items-center justify-center">
-                                         <div className="w-3 h-3 rounded-full bg-transparent"></div> 
-                                         {/* Simulating the icon */}
-                                     </div>
-                                </div>
-                                {(!data.receipts.viewedBy || data.receipts.viewedBy.length === 0) ? (
-                                    <div className="px-4 py-3 text-center text-sm text-slate-400 italic">
-                                        Not opened yet
-                                    </div>
-                                ) : (
-                                    <div className="flex flex-col">
-                                        {data.receipts.viewedBy.map(user => (
-                                            <div key={user.userId} className="flex items-center gap-3 px-4 py-2 hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors">
-                                                <div className="w-10 h-10 rounded-full bg-slate-200 dark:bg-slate-700 overflow-hidden shrink-0">
-                                                    {user.avatar ? <img src={user.avatar} alt={user.name} className="w-full h-full object-cover" /> : <div className="w-full h-full flex items-center justify-center text-slate-500 font-bold">{user.name?.[0]?.toUpperCase()}</div>}
-                                                </div>
-                                                <div className="flex-1 min-w-0">
-                                                    <div className="text-sm font-medium text-slate-800 dark:text-slate-200 truncate">{renderTextWithEmojis(user.name)}</div>
-                                                </div>
-                                                {/* No timestamp for Opened unless we add it to DB */}
-                                            </div>
-                                        ))}
-                                    </div>
-                                )}
-                            </div>
+                            {(() => {
+                                const { message, interactions, delivered, pending } = data;
+                                const { read = [], played = [], opened = [] } = interactions || {};
+                                
+                                // [NEW] Calculate Effective Delivered and Pending lists
+                                // If a user has Read/Played/Opened, they implicitly have the message Delivered.
+                                // This fixes issues where legacy messages or race conditions result in no delivery record.
+                                
+                                const effectiveDelivered = [...delivered];
+                                const deliveredIds = new Set(delivered.map(u => u.userId));
 
-                            {/* Seen (Standard Read Receipts minus Opened) */}
-                            <div className="p-2">
-                                <div className="px-4 py-2 flex items-center justify-between">
-                                    <h3 className="text-sm font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Seen</h3>
-                                    <span className="material-symbols-outlined text-[18px] text-blue-500 filled">done_all</span>
-                                </div>
-                                {(() => {
-                                    // Filter out users who have already OPENED it from SEEN list (since Opened implies Seen)
-                                    // Or simply list everyone who has read it but NOT opened it
-                                    const openedIds = new Set((data.receipts.viewedBy || []).map(u => u.userId));
-                                    const seenUsers = data.receipts.readBy.filter(u => !openedIds.has(u.userId));
-                                    
-                                    if (seenUsers.length === 0) {
-                                         return (
-                                            <div className="px-4 py-3 text-center text-sm text-slate-400 italic">
-                                                --
-                                            </div>
-                                         );
-                                    }
+                                // Add anyone who interacted but isn't in delivered
+                                [read, played, opened].forEach(list => {
+                                    list?.forEach(u => {
+                                        if (!deliveredIds.has(u.userId)) {
+                                            effectiveDelivered.push(u); // Use interaction time as proxy
+                                            deliveredIds.add(u.userId);
+                                        }
+                                    });
+                                });
+
+                                // Filter pending: Remove anyone who is now in effectiveDelivered
+                                const effectivePending = pending.filter(u => !deliveredIds.has(u.userId));
+
+                                const renderPending = () => effectivePending && effectivePending.length > 0 && (
+                                    <div className="pb-6">
+                                        <Section 
+                                            title="Sent to" 
+                                            icon={<span className="material-symbols-outlined text-[18px] text-slate-400">check</span>}
+                                            users={effectivePending} 
+                                            emptyText="Sent"
+                                            hideTime={true}
+                                        />
+                                    </div>
+                                );
+                                
+                                // Logic for Voice Messages: Played, Seen, Delivered
+                                if (message.type === 'audio') {
+                                    // Seen: SHOW ALL (No disjoint)
+                                    // Delivered: SHOW ALL (No disjoint)
+
                                     return (
-                                        <div className="flex flex-col">
-                                            {seenUsers.map(user => (
-                                                <div key={user.userId} className="flex items-center gap-3 px-4 py-2 hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors">
-                                                    <div className="w-10 h-10 rounded-full bg-slate-200 dark:bg-slate-700 overflow-hidden shrink-0">
-                                                        {user.avatar ? <img src={user.avatar} alt={user.name} className="w-full h-full object-cover" /> : <div className="w-full h-full flex items-center justify-center text-slate-500 font-bold">{user.name?.[0]?.toUpperCase()}</div>}
-                                                    </div>
-                                                    <div className="flex-1 min-w-0">
-                                                        <div className="text-sm font-medium text-slate-800 dark:text-slate-200 truncate">{renderTextWithEmojis(user.name)}</div>
-                                                    </div>
-                                                    <div className="flex flex-col items-end">
-                                                        <span className="text-xs font-mono text-slate-500 dark:text-slate-400">{formatReadTime(user.at, user.approximate)}</span>
-                                                        {user.approximate && <span className="text-[9px] text-slate-400 dark:text-slate-500 lowercase">(approx)</span>}
-                                                    </div>
-                                                </div>
-                                            ))}
-                                        </div>
+                                        <>
+                                            <Section 
+                                                title="Played" 
+                                                icon={<span className="material-symbols-outlined text-[18px] text-blue-500 filled">play_circle</span>}
+                                                users={played} 
+                                                emptyText="Not played yet"
+                                            />
+                                            {read.length > 0 && (
+                                                <Section 
+                                                    title="Seen" 
+                                                    icon={<span className="material-symbols-outlined text-[18px] text-blue-500 filled">done_all</span>}
+                                                    users={read} 
+                                                    emptyText="Not seen yet"
+                                                />
+                                            )}
+                                            {effectiveDelivered.length > 0 && (
+                                                <Section 
+                                                    title="Delivered to" 
+                                                    icon={<span className="material-symbols-outlined text-[18px] text-slate-400">done_all</span>}
+                                                    users={effectiveDelivered} 
+                                                    emptyText="Delivered"
+                                                />
+                                            )}
+                                            {renderPending()}
+                                        </>
                                     );
-                                })()}
-                            </div>
+                                }
 
-                            {/* Delivered */}
-                            <div className="p-2 pb-6">
-                                <div className="px-4 py-2 flex items-center justify-between">
-                                    <h3 className="text-sm font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Delivered to</h3>
-                                    <span className="material-symbols-outlined text-[18px] text-slate-400">done_all</span>
-                                </div>
-                                {data.receipts.deliveredTo.length === 0 ? (
-                                    <div className="px-4 py-3 text-center text-sm text-slate-400 italic">--</div>
-                                ) : (
-                                    <div className="flex flex-col">
-                                        {data.receipts.deliveredTo.map(user => (
-                                            <div key={user.userId} className="flex items-center gap-3 px-4 py-2 hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors">
-                                                <div className="w-10 h-10 rounded-full bg-slate-200 dark:bg-slate-700 overflow-hidden shrink-0">
-                                                    {user.avatar ? <img src={user.avatar} alt={user.name} className="w-full h-full object-cover" /> : <div className="w-full h-full flex items-center justify-center text-slate-500 font-bold">{user.name?.[0]?.toUpperCase()}</div>}
-                                                </div>
-                                                <div className="flex-1 min-w-0">
-                                                    <div className="text-sm font-medium text-slate-800 dark:text-slate-200 truncate">{renderTextWithEmojis(user.name)}</div>
-                                                </div>
-                                                <div className="text-xs text-slate-400 dark:text-slate-600">{user.at ? formatTime(user.at) : '-'}</div>
-                                            </div>
-                                        ))}
-                                    </div>
-                                )}
-                            </div>
-                        </div>
-                        ) : (
-                        /* STANDARD LAYOUT: READ BY / DELIVERED TO */
-                        <div className="divide-y divide-slate-100 dark:divide-slate-800/50">
-                            {/* Read By */}
-                            <div className="p-2">
-                                <div className="px-4 py-2 flex items-center justify-between">
-                                    <h3 className="text-sm font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Read by</h3>
-                                    <span className="material-symbols-outlined text-[18px] text-blue-500 filled">done_all</span>
-                                </div>
-                                {data.receipts.readBy.length === 0 ? (
-                                    <div className="px-4 py-3 text-center text-sm text-slate-400 italic">
-                                        Not read yet
-                                    </div>
-                                ) : (
-                                    <div className="flex flex-col">
-                                        {data.receipts.readBy.map(user => (
-                                            <div key={user.userId} className="flex items-center gap-3 px-4 py-2 hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors">
-                                                <div className="w-10 h-10 rounded-full bg-slate-200 dark:bg-slate-700 overflow-hidden shrink-0">
-                                                    {user.avatar ? (
-                                                        <img src={user.avatar} alt={user.name} className="w-full h-full object-cover" />
-                                                    ) : (
-                                                        <div className="w-full h-full flex items-center justify-center text-slate-500 font-bold">
-                                                            {user.name?.[0]?.toUpperCase()}
-                                                        </div>
-                                                    )}
-                                                </div>
-                                                <div className="flex-1 min-w-0">
-                                                    <div className="text-sm font-medium text-slate-800 dark:text-slate-200 truncate">
-                                                        {renderTextWithEmojis(user.name)}
-                                                    </div>
-                                                </div>
-                                                <div className="flex flex-col items-end">
-                                                      <span className="text-xs font-mono text-slate-500 dark:text-slate-400 whitespace-nowrap">
-                                                          {formatReadTime(user.at, user.approximate)}
-                                                      </span>
-                                                      {user.approximate && (
-                                                          <span className="text-[9px] text-slate-400 dark:text-slate-500 lowercase">
-                                                              (approx)
-                                                          </span>
-                                                      )}
-                                                </div>
-                                            </div>
-                                        ))}
-                                    </div>
-                                )}
-                            </div>
+                                // Logic for View Once: Opened, Seen, Delivered
+                                if (message.is_view_once) {
+                                    // Seen: SHOW ALL (No disjoint)
+                                    // Delivered: SHOW ALL
 
-                            {/* Delivered To */}
-                            <div className="p-2 pb-6">
-                                <div className="px-4 py-2 flex items-center justify-between">
-                                    <h3 className="text-sm font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Delivered to</h3>
-                                    <span className="material-symbols-outlined text-[18px] text-slate-400">done_all</span>
-                                </div>
-                                {data.receipts.deliveredTo.length === 0 ? (
-                                    <div className="px-4 py-3 text-center text-sm text-slate-400 italic">
-                                        --
-                                    </div>
-                                ) : (
-                                    <div className="flex flex-col">
-                                        {data.receipts.deliveredTo.map(user => (
-                                            <div key={user.userId} className="flex items-center gap-3 px-4 py-2 hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors">
-                                                <div className="w-10 h-10 rounded-full bg-slate-200 dark:bg-slate-700 overflow-hidden shrink-0">
-                                                    {user.avatar ? (
-                                                        <img src={user.avatar} alt={user.name} className="w-full h-full object-cover" />
-                                                    ) : (
-                                                        <div className="w-full h-full flex items-center justify-center text-slate-500 font-bold">
-                                                            {user.name?.[0]?.toUpperCase()}
-                                                        </div>
-                                                    )}
-                                                </div>
-                                                <div className="flex-1 min-w-0">
-                                                    <div className="text-sm font-medium text-slate-800 dark:text-slate-200 truncate">
-                                                        {renderTextWithEmojis(user.name)}
-                                                    </div>
-                                                </div>
-                                                <div className="text-xs text-slate-400 dark:text-slate-600">
-                                                    {user.at ? formatTime(user.at) : '-'}
-                                                </div>
-                                            </div>
-                                        ))}
-                                    </div>
-                                )}
-                            </div>
+                                    return (
+                                        <>
+                                            <Section 
+                                                title="Opened" 
+                                                icon={<div className="w-5 h-5 rounded-full border-2 border-dashed border-slate-400 flex items-center justify-center"><div className="w-3 h-3 rounded-full bg-transparent"></div></div>}
+                                                users={opened} 
+                                                emptyText="Not opened yet"
+                                            />
+                                            {read.length > 0 && (
+                                                <Section 
+                                                    title="Seen" 
+                                                    icon={<span className="material-symbols-outlined text-[18px] text-blue-500 filled">done_all</span>}
+                                                    users={read} 
+                                                    emptyText="Not seen yet"
+                                                />
+                                            )}
+                                            {effectiveDelivered.length > 0 && (
+                                                <Section 
+                                                    title="Delivered to" 
+                                                    icon={<span className="material-symbols-outlined text-[18px] text-slate-400">done_all</span>}
+                                                    users={effectiveDelivered} 
+                                                    emptyText="Delivered"
+                                                />
+                                            )}
+                                            {renderPending()}
+                                        </>
+                                    );
+                                }
+
+                                // Logic for Others (Text, Image, etc.): Read, Delivered
+                                return (
+                                    <>
+                                        <Section 
+                                            title="Read by" 
+                                            icon={<span className="material-symbols-outlined text-[18px] text-blue-500 filled">done_all</span>}
+                                            users={read} 
+                                            emptyText="Not read yet"
+                                        />
+                                        {effectiveDelivered.length > 0 && (
+                                            <Section 
+                                                title="Delivered to" 
+                                                icon={<span className="material-symbols-outlined text-[18px] text-slate-400">done_all</span>}
+                                                users={effectiveDelivered} 
+                                                emptyText="Delivered"
+                                            />
+                                        )}
+                                        {renderPending()}
+                                    </>
+                                );
+                            })()}
                         </div>
-                        )}
                     </div>
                 )}
             </div>
