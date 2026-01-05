@@ -871,7 +871,7 @@ export default function MessageInput({
     return (
         <div className="p-2 md:p-4 bg-transparent z-10 relative transition-colors duration-300">
             <form onSubmit={handleSubmit} className="flex gap-3 max-w-4xl mx-auto items-end">
-                <div className="flex-1 flex flex-col gap-1">
+                <div className="flex-1 flex flex-col gap-1 min-w-0">
                     {/* Editing Bar */}
                     {editingMessage && (
                          <div className="
