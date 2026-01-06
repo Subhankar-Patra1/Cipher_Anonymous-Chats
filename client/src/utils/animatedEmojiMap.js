@@ -917,24 +917,28 @@ export const linkToBigEmoji = (content) => {
 // Regex pattern covers most Unicode emoji ranges
 const EMOJI_REGEX = /^(?:\p{Emoji_Presentation}|\p{Emoji}\uFE0F|\p{Emoji_Modifier_Base}\p{Emoji_Modifier}?|[\u{1F3F4}](?:\u{E0067}\u{E0062}(?:\u{E0065}\u{E006E}\u{E0067}|\u{E0073}\u{E0063}\u{E0074}|\u{E0077}\u{E006C}\u{E0073})\u{E007F})?|[\u{1F1E6}-\u{1F1FF}]{2})+$/u;
 
+// Broader regex to catch all emoji-like characters including multi-char sequences
+const EMOJI_TEST_REGEX = /^(?:\p{Extended_Pictographic}|\p{Emoji_Presentation}|\p{Emoji}\uFE0F|\p{Emoji_Modifier_Base}\p{Emoji_Modifier}?)+$/u;
+
 export const isSingleEmoji = (content) => {
     if (!content) return false;
     const trimmed = content.trim();
     if (!trimmed) return false;
     
-    // Check if it matches emoji-only pattern
-    if (!EMOJI_REGEX.test(trimmed)) return false;
-    
     // Count grapheme clusters (visual characters) using Intl.Segmenter if available
     if (typeof Intl !== 'undefined' && Intl.Segmenter) {
         const segmenter = new Intl.Segmenter('en', { granularity: 'grapheme' });
         const segments = [...segmenter.segment(trimmed)];
+        
         // Allow 1-3 emojis for big display
-        return segments.length >= 1 && segments.length <= 3;
+        if (segments.length < 1 || segments.length > 3) return false;
+
+        // Verify each segment is likely an emoji
+        return segments.every(seg => EMOJI_TEST_REGEX.test(seg.segment));
     }
     
-    // Fallback: rough estimate based on string length (less accurate)
-    return trimmed.length <= 14; // Most emojis are 2-4 chars, 3 emojis max ~12 chars
+    // Fallback: use strict regex and length check
+    return EMOJI_REGEX.test(trimmed) && trimmed.length <= 14; 
 }
 
 // Split emoji content into individual emojis for separate rendering

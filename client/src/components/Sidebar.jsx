@@ -524,7 +524,7 @@ export default function Sidebar({ rooms, activeRoom, onSelectRoom, loadingRoomId
                                                     ) : (
                                                         <>
                                                             <span className="material-symbols-outlined text-[18px] translate-y-[0.5px] shrink-0">image</span>
-                                                            <span className="truncate">
+                                                            <span className="truncate py-0.5 leading-normal">
                                                                 {room.last_message_attachments_count > 1 
                                                                     ? `${room.last_message_attachments_count} Photos`
                                                                     : (room.last_message_caption ? renderTextWithEmojis(room.last_message_caption) : 'Photo')}
@@ -539,7 +539,7 @@ export default function Sidebar({ rooms, activeRoom, onSelectRoom, loadingRoomId
                                                         <span className="shrink-0 inline-flex items-center">{room.last_message_sender_id === user.id ? 'You:' : <>{renderTextWithEmojis(room.last_message_sender_name || 'User')}:</>}</span>
                                                     )}
                                                     <span className="material-symbols-outlined text-[18px] translate-y-[0.5px] shrink-0">description</span>
-                                                        <span className="truncate">
+                                                        <span className="truncate py-0.5 leading-normal">
                                                             {room.last_message_file_name || 'File'}
                                                             {room.last_message_caption ? ` • ${renderTextWithEmojis(room.last_message_caption)}` : ''}
                                                         </span>
@@ -577,7 +577,7 @@ export default function Sidebar({ rooms, activeRoom, onSelectRoom, loadingRoomId
                                                     </span>
                                                     <span>voted in:</span>
                                                     <PollIcon className="w-4 h-4 shrink-0" />
-                                                    <span className="truncate">{renderTextWithEmojis(room.last_message_poll_question) || 'Poll'}</span>
+                                                    <span className="truncate py-0.5 leading-normal">{renderTextWithEmojis(room.last_message_poll_question) || 'Poll'}</span>
                                                 </span>
                                             ) :
                                             room.last_message_type === 'poll' ? (
@@ -586,13 +586,13 @@ export default function Sidebar({ rooms, activeRoom, onSelectRoom, loadingRoomId
                                                        <span className="shrink-0">{room.last_message_sender_id === user.id ? 'You' : renderTextWithEmojis(room.last_message_sender_name)}:</span>
                                                    )}
                                                     <PollIcon className="w-4 h-4 shrink-0" />
-                                                    <span className="truncate">{renderTextWithEmojis(room.last_message_poll_question, '1.1em') || 'Poll'}</span>
+                                                    <span className="truncate py-0.5 leading-normal">{renderTextWithEmojis(room.last_message_poll_question, '1.1em') || 'Poll'}</span>
                                                 </span>
                                             ) :
                                             (room.last_message_content && room.last_message_content.includes('pinned a message')) ? (
                                                 <span className="flex items-center gap-1">
                                                     <span className="material-symbols-outlined text-[16px] translate-y-[0.5px] shrink-0">push_pin</span>
-                                                    <span className="truncate">
+                                                    <span className="truncate py-0.5 leading-normal">
                                                         {room.last_message_sender_id === user.id 
                                                             ? 'You pinned a message' 
                                                             : `${room.last_message_sender_name || 'Someone'} pinned a message`}
@@ -605,7 +605,7 @@ export default function Sidebar({ rooms, activeRoom, onSelectRoom, loadingRoomId
                                                     {room.type === 'group' && room.last_message_type !== 'system' && room.last_message_sender_id && (
                                                         <span className="mr-1 shrink-0 inline-flex items-center">{room.last_message_sender_id === user.id ? 'You:' : <>{renderTextWithEmojis(room.last_message_sender_name || 'User')}:</>}</span>
                                                     )}
-                                                    <span className="truncate">{renderPreview(room.last_message_content)}</span>
+                                                    <span className="truncate py-0.5 leading-normal">{renderPreview(room.last_message_content)}</span>
                                                 </span>
                                             )
                                         }

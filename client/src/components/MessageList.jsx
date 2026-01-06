@@ -987,7 +987,11 @@ export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone,
                         )}
                         
                         {isMe && (
-                            <div className="absolute bottom-0.5 right-1.5 flex items-center gap-1 text-violet-200/80 drop-shadow-md">
+                            <div className={`absolute bottom-0.5 right-1.5 flex items-center gap-1 ${
+                                ((linkToBigEmoji(msg.content) || (splitEmojis(msg.content).length >= 1 && splitEmojis(msg.content).length <= 3 && isSingleEmoji(msg.content))) && !msg.replyTo)
+                                    ? 'bg-black/30 backdrop-blur-[2px] rounded-full px-1.5 py-0.5 text-white/90 shadow-sm'
+                                    : 'text-violet-200/80 drop-shadow-md'
+                            }`}>
                                 {msg.status === 'sending' && msg.type !== 'image' && <span className="material-symbols-outlined text-[10px] animate-spin">progress_activity</span>}
                                 {msg.status === 'error' && (
                                     <button 
@@ -1891,6 +1895,9 @@ export default function MessageList({
                     const isSystem = msg.type === 'system';
                     
                     if (isSystem) {
+                         // [FIX] If system message is deleted (e.g. unpinned), hide it completely
+                         if (msg.is_deleted_for_everyone) return null;
+
                          // ... (keep system message logic)
                          let icon = 'info';
                          let textColor = 'text-slate-500 dark:text-slate-400';
