@@ -5,11 +5,11 @@ import { useAuth } from '../context/AuthContext';
 import AudioPlayer from './AudioPlayer';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import remarkMath from 'remark-math'; // [NEW]
+import remarkMath from 'remark-math';
 import rehypeHighlight from 'rehype-highlight';
-import rehypeKatex from 'rehype-katex'; // [NEW]
+import rehypeKatex from 'rehype-katex';
 import 'highlight.js/styles/atom-one-dark.css';
-import 'katex/dist/katex.min.css'; // [NEW]
+import 'katex/dist/katex.min.css';
 import SparkleLogo from './icons/SparkleLogo';
 import { renderTextWithEmojis } from '../utils/emojiRenderer';
 import { formatBytes } from '../utils/formatBytes';
@@ -19,7 +19,9 @@ import PollMessage from './PollMessage';
 import PollIcon from './icons/PollIcon';
 import { NoMessages } from './EmptyState';
 import { renderMusicPreviews, hasMusicLinks } from '../utils/musicLinkDetector';
-import MessageInfoModal from './MessageInfoModal'; // [NEW] Message Info
+import MessageInfoModal from './MessageInfoModal';
+import BigAnimatedEmoji from './BigAnimatedEmoji'; // [NEW]
+import { linkToBigEmoji, isSingleEmoji } from '../utils/animatedEmojiMap'; // [NEW]
 
 const formatDuration = (ms) => {
     if (!ms) return '0:00';
@@ -312,13 +314,16 @@ export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone,
                 <div className="relative group">
                     <div className={`
                         message-bubble
-                        ${(msg.type === 'image' || msg.type === 'gif' || msg.type === 'location') ? 'p-1' : 'px-4 py-3'}
-                        shadow-md text-sm leading-relaxed break-all relative overflow-hidden
-                        ${isMe 
-                            ? `bg-violet-600 border border-violet-500/50 ${(msg.type === 'gif') ? 'rounded-[10px]' : 'rounded-2xl rounded-tr-sm'} whitespace-pre-wrap` 
-                            : isAi 
-                                ? `bg-white dark:bg-slate-800/80 text-slate-800 dark:text-slate-100 ${(msg.type === 'gif') ? 'rounded-[10px]' : 'rounded-2xl rounded-tl-sm'} border border-purple-200 dark:border-purple-500/30 shadow-purple-500/5 min-w-[200px]` 
-                                : `bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-200 ${(msg.type === 'gif') ? 'rounded-[10px]' : 'rounded-2xl rounded-tl-sm'} border border-slate-200 dark:border-slate-700 whitespace-pre-wrap`
+                        ${(msg.type === 'image' || msg.type === 'gif' || msg.type === 'location' || ((linkToBigEmoji(msg.content) || isSingleEmoji(msg.content)) && !msg.replyTo)) ? 'p-1' : 'px-4 py-3'}
+                        ${((linkToBigEmoji(msg.content) || isSingleEmoji(msg.content)) && !msg.replyTo) ? 'bg-transparent shadow-none border-none !p-0' : 'shadow-md'} 
+                        text-sm leading-relaxed break-all relative overflow-hidden
+                        ${((linkToBigEmoji(msg.content) || isSingleEmoji(msg.content)) && !msg.replyTo) 
+                            ? '' // No background classes for Big Emoji
+                            : isMe 
+                                ? `bg-violet-600 border border-violet-500/50 ${(msg.type === 'gif') ? 'rounded-[10px]' : 'rounded-2xl rounded-tr-sm'} whitespace-pre-wrap` 
+                                : isAi 
+                                    ? `bg-white dark:bg-slate-800/80 text-slate-800 dark:text-slate-100 ${(msg.type === 'gif') ? 'rounded-[10px]' : 'rounded-2xl rounded-tl-sm'} border border-purple-200 dark:border-purple-500/30 shadow-purple-500/5 min-w-[200px]` 
+                                    : `bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-200 ${(msg.type === 'gif') ? 'rounded-[10px]' : 'rounded-2xl rounded-tl-sm'} border border-slate-200 dark:border-slate-700 whitespace-pre-wrap`
                         }
                         ${isMe ? (bubbleColor ? getContrastColor(bubbleColor) : 'text-white') : ''}
                     `}
@@ -481,6 +486,25 @@ export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone,
                                 </p>
                             )}
                             </>
+                        ) : ((linkToBigEmoji(msg.content) || isSingleEmoji(msg.content)) && !msg.replyTo) ? (
+                            // Big emoji display - either animated or native large
+                            <div className="p-2">
+                                {linkToBigEmoji(msg.content) ? (
+                                    <BigAnimatedEmoji 
+                                        url={linkToBigEmoji(msg.content)} 
+                                        alt={msg.content} 
+                                        size={128}
+                                    />
+                                ) : (
+                                    // Native big emoji (no animation available)
+                                    <span 
+                                        className="select-none block text-center leading-none"
+                                        style={{ fontSize: '80px' }}
+                                    >
+                                        {msg.content}
+                                    </span>
+                                )}
+                            </div>
                         ) : msg.type === 'image' ? (
                             msg.is_view_once ? (
                                 <div className="flex flex-col mt-1 mb-1 max-w-[280px] sm:max-w-[320px] min-w-[120px]">

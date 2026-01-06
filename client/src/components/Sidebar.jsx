@@ -152,7 +152,7 @@ export default function Sidebar({ rooms, activeRoom, onSelectRoom, loadingRoomId
                 .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1') // Link [text](url)
                 .replace(/^#+\s+/g, '');         // Heading #
 
-            return renderTextWithEmojis(stripped);
+            return stripped;
         });
     };
 
