@@ -122,6 +122,9 @@ export default function Sidebar({ rooms, activeRoom, onSelectRoom, loadingRoomId
     const renderPreview = (content) => {
         if (!content) return 'No messages here';
         
+        // [NEW] Mask spoilers with dots (no reveal in sidebar - Telegram behavior)
+        content = content.replace(/\|\|.*?\|\|/g, '•••••');
+        
         // Split by mention pattern: @[Name](user:ID)
         const parts = content.split(/(@\[.*?\]\(user:\d+\))/g);
         
@@ -461,14 +464,24 @@ export default function Sidebar({ rooms, activeRoom, onSelectRoom, loadingRoomId
                                 </span>
                                 {room.type === 'group' && !room.last_message_content && !room.last_message_type && !drafts[room.id] ? (
                                     <span className="text-[10px] text-slate-500 font-mono">#{room.code}</span>
-                                ) : drafts[room.id] ? (
-                                    <div className="text-xs truncate flex items-center gap-1">
-                                        <span className="text-orange-500 dark:text-orange-400 font-medium">Draft:</span>
-                                        <span className="text-slate-500 dark:text-slate-400 truncate">
-                                            {drafts[room.id].replace(/<[^>]*>/g, '').slice(0, 30)}
-                                        </span>
-                                    </div>
-                                ) : isRoomLocked(room.id) ? (
+                                ) : drafts[room.id] ? (() => {
+                                    // Process draft: extract emoji alt text and mask spoilers
+                                    let draftText = drafts[room.id];
+                                    // Replace img tags with their alt text (emoji characters)
+                                    draftText = draftText.replace(/<img[^>]*alt="([^"]*)"[^>]*>/gi, '$1');
+                                    // Strip remaining HTML tags
+                                    draftText = draftText.replace(/<[^>]*>/g, '');
+                                    // Mask spoilers with dots
+                                    draftText = draftText.replace(/\|\|.*?\|\|/g, '•••••');
+                                    return (
+                                        <div className="text-xs truncate flex items-center gap-1">
+                                            <span className="text-orange-500 dark:text-orange-400 font-medium">Draft:</span>
+                                            <span className="text-slate-500 dark:text-slate-400 truncate">
+                                                {draftText.slice(0, 30)}
+                                            </span>
+                                        </div>
+                                    );
+                                })() : isRoomLocked(room.id) ? (
                                     <div className="text-xs truncate flex items-center gap-1 text-amber-600 dark:text-amber-400">
                                         <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
                                             <path fillRule="evenodd" d="M5 9V7a5 5 0 0110 0v2a2 2 0 012 2v5a2 2 0 01-2 2H5a2 2 0 01-2-2v-5a2 2 0 012-2zm8-2v2H7V7a3 3 0 016 0z" clipRule="evenodd" />

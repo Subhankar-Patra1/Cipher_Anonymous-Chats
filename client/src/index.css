@@ -52,11 +52,251 @@
 /* Bold text live preview in editor */
 .bold-star {
   opacity: 0.3;
-  color: #94a3b8; /* slate-400 */
 }
 .bold-content {
   font-weight: 800;
-  color: #f8fafc; /* slate-50 - bright */
+}
+ 
+ /* Live preview for spoilers in editor */
+ .spoiler-star {
+   opacity: 0.3;
+ }
+ .spoiler-content-preview {
+   background-color: rgba(100, 100, 100, 0.3); /* Neutral gray for visibility in both modes */
+   border-radius: 4px;
+   padding: 0 2px;
+   filter: blur(4px); /* Blur the text to indicate spoiler */
+   transition: filter 0.15s ease, background-color 0.15s ease;
+ }
+
+ /* Dark mode: slightly lighter gray background */
+ html.dark .spoiler-content-preview {
+   background-color: rgba(160, 160, 160, 0.25);
+ }
+
+ /* Reveal on hover for preview purposes */
+ .spoiler-content-preview:hover {
+   filter: blur(0);
+   background-color: rgba(139, 92, 246, 0.15); /* violet hint on hover */
+ }
+ 
+ /* Spoiler text in chat messages (Telegram-style animation) */
+.message-bubble .spoiler-message,
+.spoiler-message {
+  position: relative;
+  display: inline; /* Changed from inline-block to fix alignment and wrapping */
+  color: inherit; /* Inherit text color (White on purple, Dark on white) */
+  user-select: none;
+  cursor: pointer;
+  border-radius: 6px;
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+  /* Note: Filter Removed to keep dots crisp */
+}
+
+/* Force hide hidden content */
+.message-bubble .spoiler-message:not(.spoiler-revealed) .spoiler-content,
+.spoiler-message:not(.spoiler-revealed) .spoiler-content {
+  opacity: 0 !important;
+}
+
+/* Background / Blurred Overlay */
+.message-bubble .spoiler-message::before,
+.spoiler-message::before {
+  content: '';
+  position: absolute;
+  inset: 1px 0 -1px 0; /* Shift down 1px to align with text baseline better */
+  background-color: currentColor; /* Matches text color (white on purple, dark on white) */
+  opacity: 0.25;
+  transition: opacity 220ms ease, transform 220ms ease;
+  z-index: 1;
+  border-radius: 6px;
+}
+
+/* Dust / dots layer */
+.message-bubble .spoiler-message::after,
+.spoiler-message::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 2;
+  border-radius: 6px;
+
+  /* Use currentColor to match text color automatically */
+  background-color: currentColor;
+  opacity: 0.65;
+
+  -webkit-mask-image:
+    radial-gradient(circle, black 1px, transparent 1.5px),
+    radial-gradient(circle, black 1px, transparent 1.5px),
+    radial-gradient(circle, black 0.8px, transparent 1.2px);
+  mask-image:
+    radial-gradient(circle, black 1px, transparent 1.5px),
+    radial-gradient(circle, black 1px, transparent 1.5px),
+    radial-gradient(circle, black 0.8px, transparent 1.2px);
+
+  -webkit-mask-size: 8px 8px, 12px 12px, 6px 6px;
+  mask-size: 8px 8px, 12px 12px, 6px 6px;
+  
+  inset: 1px 0 -1px 0; /* Shift down 1px to align with text baseline better */
+  pointer-events: none;
+  z-index: 2;
+  border-radius: 6px;
+  
+  -webkit-mask-position: 0 0, 6px 6px, 3px 3px;
+  mask-position: 0 0, 6px 6px, 3px 3px;
+
+  animation: spoiler-blink 0.5s ease-in-out infinite;
+  transition: opacity 220ms ease, transform 220ms ease;
+}
+
+/* Dust blinking animation */
+
+@keyframes spoiler-blink {
+  0%, 100% {
+    opacity: 0.6;
+  }
+  50% {
+    opacity: 0.3;
+  }
+}
+
+/* Reveal Animation (Telegram-style dissolve) */
+.message-bubble .spoiler-message.spoiler-revealed,
+.spoiler-message.spoiler-revealed {
+  color: inherit;
+  text-shadow: none;
+  background: transparent; /* Removed box highlight */
+  cursor: default;
+  user-select: text;
+}
+
+/* Hide dust and overlay on reveal */
+.message-bubble .spoiler-message.spoiler-revealed::after,
+.message-bubble .spoiler-message.spoiler-revealed::before,
+.spoiler-message.spoiler-revealed::after,
+.spoiler-message.spoiler-revealed::before {
+  opacity: 0;
+  transform: scale(1.1);
+  animation: none; /* Crucial: Stops the blink animation so opacity can hit 0 */
+  pointer-events: none; /* Crucial: Lets clicks pass through to links */
+}
+
+/* Big emoji spoiler sizing - ensure proper display */
+.message-bubble .spoiler-message.inline-flex,
+.spoiler-message.inline-flex {
+  background: transparent !important;
+  padding: 0 !important;
+  border-radius: 0 !important;
+  display: inline-flex !important;
+  flex-direction: row !important; /* Force horizontal */
+  flex-wrap: nowrap !important; /* Prevent vertical stacking */
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  margin: 14px !important;
+  transition: transform 0.3s ease;
+}
+
+/* Ensure the emoji wrapper is also flex row */
+.message-bubble .spoiler-message.inline-flex .spoiler-content,
+.spoiler-message.inline-flex .spoiler-content {
+  display: flex !important;
+  flex-direction: row !important;
+  flex-wrap: nowrap !important;
+  align-items: center;
+  justify-content: center;
+  gap: 4px; /* Space between side-by-side emojis */
+}
+
+/* The Background Box for Big Emojis - now wraps horizontal row */
+.message-bubble .spoiler-message.inline-flex::before,
+.spoiler-message.inline-flex::before {
+  content: '';
+  position: absolute;
+  inset: -12px !important;
+  background: rgba(100, 116, 139, 0.45) !important;
+  border-radius: 20px !important;
+  opacity: 1;
+  z-index: 1;
+  transition: opacity 0.3s ease, transform 0.3s ease;
+}
+
+/* Light mode background */
+html:not(.dark) .message-bubble .spoiler-message.inline-flex::before,
+html:not(.dark) .spoiler-message.inline-flex::before {
+  background: rgba(71, 85, 105, 0.5) !important;
+}
+
+/* The Dust Overlay for Big Emojis */
+.message-bubble .spoiler-message.inline-flex::after,
+.spoiler-message.inline-flex::after {
+  content: '';
+  position: absolute;
+  inset: -12px !important;
+  border-radius: 20px !important;
+  opacity: 0.8;
+  z-index: 2;
+  transition: opacity 0.3s ease, transform 0.3s ease;
+  -webkit-mask-image:
+    radial-gradient(circle, black 1px, transparent 1.5px),
+    radial-gradient(circle, black 1px, transparent 1.5px),
+    radial-gradient(circle, black 0.8px, transparent 1.2px);
+  mask-image:
+    radial-gradient(circle, black 1px, transparent 1.5px),
+    radial-gradient(circle, black 1px, transparent 1.5px),
+    radial-gradient(circle, black 0.8px, transparent 1.2px);
+  -webkit-mask-size: 8px 8px, 12px 12px, 6px 6px;
+  mask-size: 8px 8px, 12px 12px, 6px 6px;
+  -webkit-mask-position: 0 0, 6px 6px, 3px 3px;
+  mask-position: 0 0, 6px 6px, 3px 3px;
+  background-color: currentColor;
+  animation: spoiler-blink 0.5s ease-in-out infinite;
+}
+
+/* Blur effect for multi-emoji content */
+.message-bubble .spoiler-message.inline-flex:not(.spoiler-revealed) .spoiler-content,
+.spoiler-message.inline-flex:not(.spoiler-revealed) .spoiler-content {
+  filter: blur(35px) saturate(0) brightness(0.6);
+  opacity: 0.4;
+  transition: filter 0.3s ease, opacity 0.3s ease;
+}
+
+/* Fully revealed state */
+.message-bubble .spoiler-message.inline-flex.spoiler-revealed {
+  /* Margin stays to avoid jumps */
+}
+
+.message-bubble .spoiler-message.inline-flex.spoiler-revealed .spoiler-content,
+.spoiler-message.inline-flex.spoiler-revealed .spoiler-content {
+  filter: none;
+  opacity: 1;
+}
+
+.message-bubble .spoiler-message.inline-flex.spoiler-revealed::before,
+.message-bubble .spoiler-message.inline-flex.spoiler-revealed::after,
+.spoiler-message.inline-flex.spoiler-revealed::before,
+.spoiler-message.inline-flex.spoiler-revealed::after {
+  opacity: 0 !important;
+  transform: scale(0.95);
+  pointer-events: none;
+  animation: none;
+}
+
+/* Editor Specific Overrides */
+.editor-content .spoiler-message,
+.editor-content .spoiler-content,
+.editor-content .spoiler-content-preview {
+  color: inherit !important;
+  text-shadow: none !important;
+  opacity: 1 !important;
+  filter: none !important;
+}
+
+.editor-content .spoiler-message::before,
+.editor-content .spoiler-message::after {
+  display: none !important;
 }
 
 /* Custom Scrollbar */

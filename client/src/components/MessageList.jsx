@@ -22,6 +22,23 @@ import { renderMusicPreviews, hasMusicLinks } from '../utils/musicLinkDetector';
 import MessageInfoModal from './MessageInfoModal';
 import BigAnimatedEmoji from './BigAnimatedEmoji'; // [NEW]
 import { linkToBigEmoji, isSingleEmoji, splitEmojis } from '../utils/animatedEmojiMap'; // [NEW]
+import emojiRegex from 'emoji-regex'; // [NEW] For spoiler emoji detection
+
+// Helper to detect if message is ONLY a spoiler containing 1-3 emojis
+const isSpoilerOnlyEmojis = (content) => {
+    if (!content) return false;
+    // Check if content matches pattern: ||emojis|| with nothing else
+    const spoilerMatch = content.trim().match(/^\|\|(.+?)\|\|$/);
+    if (!spoilerMatch) return false;
+    
+    const spoilerContent = spoilerMatch[1].trim();
+    const regex = emojiRegex();
+    const matches = [...spoilerContent.matchAll(regex)];
+    const emojiText = matches.map(m => m[0]).join('');
+    
+    // Check if spoiler content is ONLY 1-3 emojis
+    return emojiText.length > 0 && spoilerContent.replace(regex, '').trim() === '' && matches.length <= 3;
+};
 
 const formatDuration = (ms) => {
     if (!ms) return '0:00';
@@ -314,11 +331,11 @@ export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone,
                 <div className="relative group">
                     <div className={`
                         message-bubble
-                        ${(msg.type === 'image' || msg.type === 'gif' || msg.type === 'location' || ((linkToBigEmoji(msg.content) || isSingleEmoji(msg.content)) && !msg.replyTo)) ? 'p-1' : 'px-4 py-3'}
-                        ${((linkToBigEmoji(msg.content) || isSingleEmoji(msg.content)) && !msg.replyTo) ? 'bg-transparent shadow-none border-none !p-0' : 'shadow-md'} 
+                        ${(msg.type === 'image' || msg.type === 'gif' || msg.type === 'location' || ((linkToBigEmoji(msg.content) || isSingleEmoji(msg.content) || isSpoilerOnlyEmojis(msg.content)) && !msg.replyTo)) ? 'p-1' : 'px-4 py-3'}
+                        ${((linkToBigEmoji(msg.content) || isSingleEmoji(msg.content) || isSpoilerOnlyEmojis(msg.content)) && !msg.replyTo) ? 'bg-transparent shadow-none border-none !p-0' : 'shadow-md'} 
                         text-sm leading-relaxed break-all relative overflow-hidden
-                        ${((linkToBigEmoji(msg.content) || isSingleEmoji(msg.content)) && !msg.replyTo) 
-                            ? '' // No background classes for Big Emoji
+                        ${((linkToBigEmoji(msg.content) || isSingleEmoji(msg.content) || isSpoilerOnlyEmojis(msg.content)) && !msg.replyTo) 
+                            ? '' // No background classes for Big Emoji or Spoiler Emoji
                             : isMe 
                                 ? `bg-violet-600 border border-violet-500/50 ${(msg.type === 'gif') ? 'rounded-[10px]' : 'rounded-2xl rounded-tr-sm'} whitespace-pre-wrap` 
                                 : isAi 
@@ -409,7 +426,7 @@ export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone,
                                     </div>
                                 ) : (
                                     <div className="text-xs opacity-80 line-clamp-2">
-                                        {linkifyText(msg.replyTo.text, '', isMe ? 'text-white/90 underline break-all' : 'text-violet-600 dark:text-violet-300 underline break-all')}
+                                        {linkifyText(msg.replyTo.text, '', isMe ? 'text-white/90 underline break-all' : 'text-violet-600 dark:text-violet-300 underline break-all', { disableBigEmoji: true })}
                                     </div>
                                 )}
                             </div>
@@ -987,10 +1004,10 @@ export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone,
                         )}
                         
                         {isMe && (
-                            <div className={`absolute bottom-0.5 right-1.5 flex items-center gap-1 ${
-                                ((linkToBigEmoji(msg.content) || (splitEmojis(msg.content).length >= 1 && splitEmojis(msg.content).length <= 3 && isSingleEmoji(msg.content))) && !msg.replyTo)
-                                    ? 'bg-black/30 backdrop-blur-[2px] rounded-full px-1.5 py-0.5 text-white/90 shadow-sm'
-                                    : 'text-violet-200/80 drop-shadow-md'
+                            <div className={`absolute flex items-center gap-1 ${
+                                ((linkToBigEmoji(msg.content) || (splitEmojis(msg.content).length >= 1 && splitEmojis(msg.content).length <= 3 && isSingleEmoji(msg.content)) || isSpoilerOnlyEmojis(msg.content)) && !msg.replyTo)
+                                    ? 'bottom-1 right-0 bg-black/30 backdrop-blur-[2px] rounded-full px-1.5 py-0.5 text-white/90 shadow-sm'
+                                    : 'bottom-0.5 right-1.5 text-violet-200/80 drop-shadow-md'
                             }`}>
                                 {msg.status === 'sending' && msg.type !== 'image' && <span className="material-symbols-outlined text-[10px] animate-spin">progress_activity</span>}
                                 {msg.status === 'error' && (

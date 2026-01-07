@@ -1,5 +1,90 @@
 
+import { useState } from 'react';
 import emojiRegex from 'emoji-regex';
+import { linkToBigEmoji, isSingleEmoji, splitEmojis } from './animatedEmojiMap';
+
+// Helper to check if text is only emojis (1-3)
+const isOnlyEmojis = (text) => {
+    if (!text) return false;
+    const trimmed = text.trim();
+    if (!trimmed) return false;
+    
+    // Use the same logic as isSingleEmoji but allow analysis
+    const regex = emojiRegex();
+    const matches = [...trimmed.matchAll(regex)];
+    const emojiText = matches.map(m => m[0]).join('');
+    
+    // Check if text is ONLY emojis (no other characters)
+    return emojiText.length > 0 && trimmed.replace(regex, '').trim() === '' && matches.length <= 3;
+};
+
+// Get emoji size class based on count
+const getEmojiSize = (count) => {
+    if (count === 1) return { fontSize: '80px', imgSize: 128 };
+    if (count === 2) return { fontSize: '60px', imgSize: 96 };
+    return { fontSize: '48px', imgSize: 72 }; // 3 emojis
+};
+
+// Spoiler component - reveals ONCE on click (Telegram behavior)
+// Now with dynamic emoji sizing for emoji-only content
+const SpoilerText = ({ children, keyProp, rawContent, disableBigEmoji }) => {
+    const [revealed, setRevealed] = useState(false);
+    
+    // Check if this is emoji-only spoiler content
+    const isBigEmoji = !disableBigEmoji && rawContent && isOnlyEmojis(rawContent);
+    const emojis = isBigEmoji ? splitEmojis(rawContent.trim()) : [];
+    const emojiCount = emojis.length;
+    const sizeConfig = getEmojiSize(emojiCount);
+    
+    return (
+        <span
+            key={keyProp}
+            className={`spoiler-message ${revealed ? 'spoiler-revealed' : ''} ${isBigEmoji ? 'inline-flex items-center gap-1' : ''}`}
+            style={isBigEmoji ? { padding: '4px 8px', borderRadius: '12px' } : {}}
+            onClick={(e) => {
+                e.stopPropagation();
+                if (!revealed) setRevealed(true); // Only reveal, never re-hide
+            }}
+        >
+            {isBigEmoji ? (
+                // Render big emojis with dynamic sizing
+                <span className="spoiler-content transition-opacity duration-200">
+                    {emojis.map((emoji, idx) => {
+                        const animatedUrl = linkToBigEmoji(emoji);
+                        return animatedUrl ? (
+                            <img
+                                key={idx}
+                                src={animatedUrl}
+                                alt={emoji}
+                                className="select-none pointer-events-none"
+                                style={{
+                                    width: `${sizeConfig.imgSize}px`,
+                                    height: `${sizeConfig.imgSize}px`,
+                                }}
+                                draggable="false"
+                                loading="lazy"
+                            />
+                        ) : (
+                            <span
+                                key={idx}
+                                className="select-none leading-none"
+                                style={{
+                                    fontSize: sizeConfig.fontSize,
+                                    filter: 'drop-shadow(0 1px 2px rgba(0,0,0,0.15))'
+                                }}
+                            >
+                                {emoji}
+                            </span>
+                        );
+                    })}
+                </span>
+            ) : (
+                // Normal spoiler content
+                <span className="spoiler-content transition-opacity duration-200">{children}</span>
+            )}
+        </span>
+    );
+};
 
 // Helper to convert emoji to hex code, stripping VS16 (fe0f) for CDN compatibility
 export const toHex = (emoji) => {
@@ -22,35 +107,66 @@ export const textToHtml = (text) => {
 // ... (previous imports and helpers)
 
 // Main function to linkify text and render emojis
-export const linkifyText = (text, searchTerm = '', linkClass) => {
+export const linkifyText = (text, searchTerm = '', linkClass, options = {}) => {
     if (!text) return null;
 
     // Regex for mentions: @[Name](user:ID)
     const mentionRegex = /@\[(.*?)\]\(user:(\d+)\)/g;
     const urlRegex = /(https?:\/\/[^\s]+|www\.[^\s]+)/gi;
     
-    // We need to parse everything in order. 
-    // Strategy: Split by Mentions first, then process chunks for URLs and Emojis.
-
     const parts = [];
     let globalKey = 0;
 
-    // Helper process generic text (URLs + Emojis + Search Highlight)
-    // NOTE: This is formerly the main body logic, extracted to reusable function
-    const processGenericText = (genericText) => {
-        if (!genericText) return;
+    // 1. Process Spoilers: ||text||
+    // This is the new top-level processor for text segments
+    const processSpoilers = (segment, outputArray) => {
+        if (!segment) return;
+
+        const spoilerRegex = /\|\|(.+?)\|\|/g;
+        let match;
+        let lastIndex = 0;
+
+        while ((match = spoilerRegex.exec(segment)) !== null) {
+            const before = segment.slice(lastIndex, match.index);
+            const spoilerContent = match[1];
+
+            // Process text before spoiler
+            processUrls(before, outputArray);
+
+            // Process content INSIDE spoiler (linkify it)
+            const contentElements = [];
+            processUrls(spoilerContent, contentElements); // Recurse for links inside
+
+            outputArray.push(
+                <SpoilerText keyProp={globalKey++} rawContent={spoilerContent} disableBigEmoji={options.disableBigEmoji}>
+                    {contentElements.length > 0 ? contentElements : spoilerContent}
+                </SpoilerText>
+            );
+
+            lastIndex = spoilerRegex.lastIndex;
+        }
+
+        // Process remaining text
+        if (lastIndex < segment.length) {
+            processUrls(segment.slice(lastIndex), outputArray);
+        }
+    };
+
+    // 2. Process URLs (formerly processGenericText)
+    const processUrls = (segment, outputArray) => {
+        if (!segment) return;
         
         let localLastIndex = 0;
         let match;
         
         // Find URLs in this chunk
-        while ((match = urlRegex.exec(genericText)) !== null) {
+        while ((match = urlRegex.exec(segment)) !== null) {
             const url = match[0];
             const start = match.index;
 
-            // Before URL: Emojis + Search
+            // Before URL: Process Bold/Base text
             if (start > localLastIndex) {
-                 processTextSegment(genericText.slice(localLastIndex, start));
+                 processBoldSection(segment.slice(localLastIndex, start), outputArray);
             }
 
             let href = url;
@@ -58,16 +174,17 @@ export const linkifyText = (text, searchTerm = '', linkClass) => {
                 href = "https://" + href;
             }
 
-const defaultLinkClass = "text-white hover:text-slate-200 underline break-words decoration-violet-400 decoration-1 hover:decoration-2";
+            const defaultLinkClass = "text-white hover:text-slate-200 underline break-words decoration-violet-400 decoration-1 hover:decoration-2";
             const finalLinkClass = linkClass !== undefined ? linkClass : defaultLinkClass;
 
-            parts.push(
+            outputArray.push(
                 <a
                     key={globalKey++}
                     href={href}
                     target="_blank"
                     rel="noopener noreferrer"
                     className={finalLinkClass}
+                    onClick={(e) => e.stopPropagation()} // Prevent triggering spoiler reveal if clicked directly
                 >
                     {url}
                 </a>
@@ -77,68 +194,42 @@ const defaultLinkClass = "text-white hover:text-slate-200 underline break-words 
         }
 
         // Tail after last URL
-        if (localLastIndex < genericText.length) {
-            processTextSegment(genericText.slice(localLastIndex));
+        if (localLastIndex < segment.length) {
+            processBoldSection(segment.slice(localLastIndex), outputArray);
         }
     };
-    
-    const highlightText = (content) => {
-        if (!content) return null;
-        if (!searchTerm || !searchTerm.trim()) return content;
 
-        // Escape regex special chars in searchTerm
-        const safeTerm = searchTerm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        const regex = new RegExp(`(${safeTerm})`, 'gi');
-        const theseParts = content.split(regex);
-        
-        return theseParts.map((part, i) => {
-            if (part.toLowerCase() === searchTerm.toLowerCase()) {
-                return (
-                     <mark key={`hl-${globalKey++}`} className="bg-yellow-300 dark:bg-yellow-500/50 text-slate-900 dark:text-white rounded-sm px-0.5 mx-0.5 font-semibold">
-                        {part}
-                    </mark>
-                );
-            }
-            return part;
-        });
-    };
-
-    const processTextSegment = (segment) => {
+    // 3. Process Bold
+    const processBoldSection = (segment, outputArray) => {
         if (!segment) return;
         
-        // Bold text: *text* or **text** - NO space allowed adjacent to asterisks inside
-        // *text* = bold, but *text * or * text* = not bold
         const boldRegex = /\*\*(?!\s)([^*]+?)(?<!\s)\*\*|\*(?!\s)([^*]+?)(?<!\s)\*/g;
-        let boldMatch;
-        let boldLastIndex = 0;
+        let match;
+        let lastIndex = 0;
         
-        while ((boldMatch = boldRegex.exec(segment)) !== null) {
-            const beforeBold = segment.slice(boldLastIndex, boldMatch.index);
+        while ((match = boldRegex.exec(segment)) !== null) {
+            const before = segment.slice(lastIndex, match.index);
+            const content = match[1] || match[2];
             
-            // Process text before bold (emojis + highlight)
-            if (beforeBold) {
-                processEmojisAndHighlight(beforeBold);
+            if (before) {
+                processEmojisAndHighlight(before, outputArray);
             }
             
-            // Render bold text (also process emojis inside bold)
-            // boldMatch[1] = double asterisk content, boldMatch[2] = single asterisk content
-            const boldContent = boldMatch[1] || boldMatch[2];
-            parts.push(
+            outputArray.push(
                 <strong key={globalKey++} className="font-bold">
-                    {processEmojisInline(boldContent)}
+                    {processEmojisInline(content)}
                 </strong>
             );
             
-            boldLastIndex = boldRegex.lastIndex;
+            lastIndex = boldRegex.lastIndex;
         }
         
-        // Process remaining text after last bold
-        if (boldLastIndex < segment.length) {
-            processEmojisAndHighlight(segment.slice(boldLastIndex));
+        if (lastIndex < segment.length) {
+            processEmojisAndHighlight(segment.slice(lastIndex), outputArray);
         }
     };
     
-    // Helper to process emojis and return inline elements (for inside bold)
+    // 4. Helper to process emojis and return inline elements (for inside bold)
     const processEmojisInline = (text) => {
         if (!text) return null;
         const regex = emojiRegex();
@@ -172,29 +263,29 @@ const defaultLinkClass = "text-white hover:text-slate-200 underline break-words 
         return result.length > 0 ? result : text;
     };
     
-    // Process emojis and highlight (original logic)
-    const processEmojisAndHighlight = (text) => {
+    // 5. Process Emojis and Highlight (Base Level)
+    const processEmojisAndHighlight = (text, outputArray) => {
         if (!text) return;
         const regex = emojiRegex();
         let lastEmojiIndex = 0;
-        let emojiMatch;
+        let match;
 
-        while ((emojiMatch = regex.exec(text)) !== null) {
-            const emojiChar = emojiMatch[0];
-            const index = emojiMatch.index;
+        while ((match = regex.exec(text)) !== null) {
+             const index = match.index;
+             const emojiChar = match[0];
 
             if (index > lastEmojiIndex) {
                const sub = text.substring(lastEmojiIndex, index);
                const highlighted = highlightText(sub);
                if (Array.isArray(highlighted)) {
-                   highlighted.forEach(h => parts.push(<span key={globalKey++}>{h}</span>));
+                   highlighted.forEach(h => outputArray.push(<span key={globalKey++}>{h}</span>));
                } else {
-                   parts.push(<span key={globalKey++}>{highlighted}</span>);
+                   outputArray.push(<span key={globalKey++}>{highlighted}</span>);
                }
             }
 
             const hex = toHex(emojiChar);
-            parts.push(
+            outputArray.push(
                 <img
                     key={globalKey++}
                     src={`https://cdn.jsdelivr.net/npm/emoji-datasource-apple/img/apple/64/${hex}.png`}
@@ -219,14 +310,33 @@ const defaultLinkClass = "text-white hover:text-slate-200 underline break-words 
         if (lastEmojiIndex < text.length) {
             const sub = text.substring(lastEmojiIndex);
             const highlighted = highlightText(sub);
-             if (Array.isArray(highlighted)) {
-                   highlighted.forEach(h => parts.push(<span key={globalKey++}>{h}</span>));
-               } else {
-                   parts.push(<span key={globalKey++}>{highlighted}</span>);
-               }
+            if (Array.isArray(highlighted)) {
+                   highlighted.forEach(h => outputArray.push(<span key={globalKey++}>{h}</span>));
+            } else {
+                   outputArray.push(<span key={globalKey++}>{highlighted}</span>);
+            }
         }
     };
 
+    const highlightText = (content) => {
+        if (!content) return null;
+        if (!searchTerm || !searchTerm.trim()) return content;
+
+        const safeTerm = searchTerm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const regex = new RegExp(`(${safeTerm})`, 'gi');
+        const theseParts = content.split(regex);
+        
+        return theseParts.map((part, i) => {
+            if (part.toLowerCase() === searchTerm.toLowerCase()) {
+                return (
+                     <mark key={`hl-${globalKey++}`} className="bg-yellow-300 dark:bg-yellow-500/50 text-slate-900 dark:text-white rounded-sm px-0.5 mx-0.5 font-semibold">
+                        {part}
+                    </mark>
+                );
+            }
+            return part;
+        });
+    };
 
     // --- Main Loop: Split by Mentions ---
     let mainMatch;
@@ -240,14 +350,12 @@ const defaultLinkClass = "text-white hover:text-slate-200 underline break-words 
 
         // Process text BEFORE mention
         if (start > mainLastIndex) {
-            processGenericText(text.slice(mainLastIndex, start));
+            // New entry point: processSpoilers
+            processSpoilers(text.slice(mainLastIndex, start), parts);
         }
 
         // Render Mention
-        // We use dangerouslySetInnerHTML for name to render emojis insde name correctly (since name comes from processed source or just raw text)
-        // Actually, name here is raw text "Name 🕶️". We can use textToHtml on it.
         const nameHtml = textToHtml(name);
-        
         parts.push(
             <span 
                 key={globalKey++} 
@@ -263,7 +371,7 @@ const defaultLinkClass = "text-white hover:text-slate-200 underline break-words 
 
     // Process TAIL
     if (mainLastIndex < text.length) {
-        processGenericText(text.slice(mainLastIndex));
+        processSpoilers(text.slice(mainLastIndex), parts);
     }
 
     return parts;

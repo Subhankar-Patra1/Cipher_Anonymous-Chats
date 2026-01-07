@@ -4,7 +4,7 @@ import PickerPanel from './PickerPanel';
 import ContentEditable from 'react-contenteditable';
 import useAudioRecorder from '../utils/useAudioRecorder';
 import { renderTextWithEmojis, renderTextWithEmojisToHtml } from '../utils/emojiRenderer';
-import { linkifyText } from '../utils/linkify';
+import { linkifyText, textToHtml } from '../utils/linkify';
 
 
 
@@ -77,6 +77,13 @@ export default function MessageInput({
     const [showMentionPopup, setShowMentionPopup] = useState(false);
     const [mentionSearch, setMentionSearch] = useState('');
     const [mentionIndex, setMentionIndex] = useState(0);
+
+    // [NEW] Formatting Toolbar State
+    const [showFormatToolbar, setShowFormatToolbar] = useState(false);
+    const [toolbarPosition, setToolbarPosition] = useState({ top: 0, left: 0 });
+    const [isBoldActive, setIsBoldActive] = useState(false);
+    const [isSpoilerActive, setIsSpoilerActive] = useState(false);
+    const formatToolbarRef = useRef(null);
 
     const fileInputRef = useRef(null);
     const attachmentInputRef = useRef(null);
@@ -263,32 +270,159 @@ export default function MessageInput({
         }
     };
 
-    // [NEW] Apply live bold formatting to HTML for preview
-    const applyBoldFormatting = (htmlContent) => {
+    // [NEW] Apply live formatting (Bold, Spoiler) to HTML for preview
+    const applyLiveFormatting = (htmlContent) => {
         if (!htmlContent) return '';
         
         const tempDiv = document.createElement('div');
         tempDiv.innerHTML = htmlContent;
 
-        // Cleanup: remove existing bold-star and bold-content spans to re-evaluate
-        tempDiv.querySelectorAll('.bold-star, .bold-content').forEach(span => {
+        // Cleanup: remove existing formatting spans to re-evaluate
+        tempDiv.querySelectorAll('.bold-star, .bold-content, .spoiler-star, .spoiler-content-preview').forEach(span => {
             span.replaceWith(...span.childNodes);
         });
         tempDiv.normalize();
 
-        const html = tempDiv.innerHTML;
-        // Regex for bold that permits tags (like <img>) inside the content
-        // Pattern: * followed by non-space, then any chars/tags (no block tags), ending with non-space follow by *
-        // We use lookaheads/lookbehinds for the start/end non-space check.
-        const boldRegex = /\*\*(?!(?:\s|&nbsp;))((?:(?!<\/?(?:div|p|br)[^>]*>)[^*]|<[^>]+>)+?)(?<!(?:\s|&nbsp;))\*\*|\*(?!(?:\s|&nbsp;))((?:(?!<\/?(?:div|p|br)[^>]*>)[^*]|<[^>]+>)+?)(?<!(?:\s|&nbsp;))\*/g;
+        let html = tempDiv.innerHTML;
         
-        const newHtml = html.replace(boldRegex, (match, double, single) => {
+        // 1. Bold Regex
+        const boldRegex = /\*\*(?!(?:\s|&nbsp;))((?:(?!<\/?(?:div|p|br)[^>]*>)[^*]|<[^>]+>)+?)(?<!(?:\s|&nbsp;))\*\*|\*(?!(?:\s|&nbsp;))((?:(?!<\/?(?:div|p|br)[^>]*>)[^*]|<[^>]+>)+?)(?<!(?:\s|&nbsp;))\*/g;
+        html = html.replace(boldRegex, (match, double, single) => {
             const stars = match.startsWith('**') ? '**' : '*';
             const content = double || single;
             return `<span class="bold-star">${stars}</span><span class="bold-content">${content}</span><span class="bold-star">${stars}</span>`;
         });
+
+        // 2. Spoiler Regex
+        const spoilerRegex = /\|\|(?!(?:\s|&nbsp;))((?:(?!<\/?(?:div|p|br)[^>]*>)[^|]|<[^>]+>)+?)(?<!(?:\s|&nbsp;))\|\|/g;
+        html = html.replace(spoilerRegex, (match, content) => {
+            return `<span class="spoiler-star">||</span><span class="spoiler-content-preview">${content}</span><span class="spoiler-star">||</span>`;
+        });
         
-        return newHtml;
+        return html;
+    };
+
+    // [NEW] Formatting Boundary Detection (Telegram-grade fix)
+    // Finds formatting bounds around cursor position in PLAINTEXT
+    const findFormatBounds = (text, cursorStart, cursorEnd, delimiter) => {
+        const len = delimiter.length;
+        if (!text || text.length < len * 2) return null;
+
+        // Look left for opening delimiter from cursorStart
+        let left = cursorStart;
+        while (left >= len) {
+            if (text.slice(left - len, left) === delimiter) break;
+            left--;
+        }
+
+        // Look right for closing delimiter from cursorEnd
+        let right = cursorEnd;
+        while (right <= text.length - len) {
+            if (text.slice(right, right + len) === delimiter) break;
+            right++;
+        }
+
+        // Validate we actually found matching delimiters
+        const hasOpeningDelimiter = left >= len && text.slice(left - len, left) === delimiter;
+        const hasClosingDelimiter = right <= text.length - len && text.slice(right, right + len) === delimiter;
+
+        if (!hasOpeningDelimiter || !hasClosingDelimiter) return null;
+
+        // Make sure opening comes before closing
+        const openStart = left - len;
+        const closeEnd = right + len;
+        if (openStart >= right) return null;
+
+        return {
+            start: openStart,       // Start of opening delimiter
+            end: closeEnd,          // End of closing delimiter
+            innerStart: left,       // Start of inner content (after opening delimiter)
+            innerEnd: right         // End of inner content (before closing delimiter)
+        };
+    };
+
+    // [NEW] Get plaintext from editor, also returns cursor offsets
+    const getSelectionContext = () => {
+        const selection = window.getSelection();
+        if (!selection || !editorRef.current) return null;
+
+        // Get the full plaintext from the editor
+        const tempDiv = document.createElement('div');
+        tempDiv.innerHTML = editorRef.current.innerHTML;
+        
+        // Replace <br> with newlines before extracting text
+        tempDiv.querySelectorAll('br').forEach(br => br.replaceWith('\n'));
+        
+        // Replace emoji images with their alt text
+        tempDiv.querySelectorAll('img').forEach(img => {
+            const alt = img.getAttribute('alt') || '';
+            img.replaceWith(alt);
+        });
+        
+        // Remove formatting spans but keep content
+        tempDiv.querySelectorAll('.bold-star, .bold-content, .spoiler-star, .spoiler-content-preview').forEach(span => {
+            span.replaceWith(...span.childNodes);
+        });
+        tempDiv.normalize();
+        
+        const fullText = tempDiv.textContent || '';
+        
+        if (selection.isCollapsed) {
+            // No selection, just cursor position
+            const offset = getCaretOffset(editorRef.current);
+            return {
+                fullText,
+                start: offset,
+                end: offset,
+                selected: '',
+                isCollapsed: true
+            };
+        }
+        
+        // Get selection offsets in plaintext terms
+        const range = selection.getRangeAt(0);
+        
+        // Calculate start offset
+        const preStartRange = document.createRange();
+        preStartRange.selectNodeContents(editorRef.current);
+        preStartRange.setEnd(range.startContainer, range.startOffset);
+        const startContainer = document.createElement('div');
+        startContainer.appendChild(preStartRange.cloneContents());
+        startContainer.querySelectorAll('br').forEach(br => br.replaceWith('\n'));
+        startContainer.querySelectorAll('img').forEach(img => {
+            const alt = img.getAttribute('alt') || '';
+            img.replaceWith(alt);
+        });
+        startContainer.querySelectorAll('.bold-star, .bold-content, .spoiler-star, .spoiler-content-preview').forEach(span => {
+            span.replaceWith(...span.childNodes);
+        });
+        startContainer.normalize();
+        const start = startContainer.textContent.length;
+        
+        // Calculate end offset
+        const preEndRange = document.createRange();
+        preEndRange.selectNodeContents(editorRef.current);
+        preEndRange.setEnd(range.endContainer, range.endOffset);
+        const endContainer = document.createElement('div');
+        endContainer.appendChild(preEndRange.cloneContents());
+        endContainer.querySelectorAll('br').forEach(br => br.replaceWith('\n'));
+        endContainer.querySelectorAll('img').forEach(img => {
+            const alt = img.getAttribute('alt') || '';
+            img.replaceWith(alt);
+        });
+        endContainer.querySelectorAll('.bold-star, .bold-content, .spoiler-star, .spoiler-content-preview').forEach(span => {
+            span.replaceWith(...span.childNodes);
+        });
+        endContainer.normalize();
+        const end = endContainer.textContent.length;
+        
+        return {
+            fullText,
+            start,
+            end,
+            selected: fullText.slice(start, end),
+            isCollapsed: false
+        };
     };
 
     // [NEW] Cursor Preservation Helpers
@@ -339,6 +473,172 @@ export default function MessageInput({
             }
         }
     };
+
+    // [NEW] Selection change handler for formatting toolbar
+    const handleSelectionChange = useCallback(() => {
+        const selection = window.getSelection();
+        
+        // FIX: Prevent flicker when clicking toolbar buttons
+        if (formatToolbarRef.current?.contains(document.activeElement)) {
+            return;
+        }
+        
+        if (!selection || selection.isCollapsed || !editorRef.current) {
+            setShowFormatToolbar(false);
+            return;
+        }
+        
+        const range = selection.getRangeAt(0);
+        if (!editorRef.current.contains(range.commonAncestorContainer)) {
+            setShowFormatToolbar(false);
+            return;
+        }
+        
+        // FIX: No formatting inside code blocks
+        const ancestor = range.commonAncestorContainer;
+        const element = ancestor.nodeType === Node.ELEMENT_NODE ? ancestor : ancestor.parentElement;
+        if (element?.closest?.('code, pre')) {
+            setShowFormatToolbar(false);
+            return;
+        }
+        
+        const rect = range.getBoundingClientRect();
+        const editorRect = editorRef.current.getBoundingClientRect();
+        
+        // [NEW] Better vertical offset (move it higher)
+        setToolbarPosition({
+            top: rect.top - editorRect.top - 58, 
+            left: rect.left - editorRect.left + (rect.width / 2)
+        });
+
+        // [FIX] Use plaintext-based boundary detection for accurate toolbar state
+        const ctx = getSelectionContext();
+        if (ctx) {
+            // Check 1: Inside formatted text (boundary expansion)
+            let boldActive = !!findFormatBounds(ctx.fullText, ctx.start, ctx.end, '*');
+            let spoilerActive = !!findFormatBounds(ctx.fullText, ctx.start, ctx.end, '||');
+            
+            // Check 2: Selection includes delimiters at boundaries
+            if (!boldActive && ctx.selected.startsWith('*') && ctx.selected.endsWith('*')) {
+                boldActive = true;
+            }
+            if (!spoilerActive && ctx.selected.startsWith('||') && ctx.selected.endsWith('||')) {
+                spoilerActive = true;
+            }
+            
+            setIsBoldActive(boldActive);
+            setIsSpoilerActive(spoilerActive);
+        } else {
+            setIsBoldActive(false);
+            setIsSpoilerActive(false);
+        }
+
+        
+        setShowFormatToolbar(true);
+    }, []);
+
+    useEffect(() => {
+        document.addEventListener('selectionchange', handleSelectionChange);
+        return () => document.removeEventListener('selectionchange', handleSelectionChange);
+    }, [handleSelectionChange]);
+
+    // [NEW] Toggle formatting using plaintext boundary detection (Telegram-grade fix)
+    const toggleFormat = (delimiter) => {
+        if (!editorRef.current) return;
+        
+        const ctx = getSelectionContext();
+        if (!ctx || ctx.isCollapsed) return;
+        
+        const len = delimiter.length;
+        
+        // Check 1: Is cursor INSIDE formatted text? (boundary expansion)
+        let bounds = findFormatBounds(ctx.fullText, ctx.start, ctx.end, delimiter);
+        
+        // Check 2: Does the selection ITSELF include delimiters at boundaries?
+        // e.g., user selected "||FDF||" directly
+        if (!bounds && ctx.selected.length >= len * 2) {
+            if (ctx.selected.startsWith(delimiter) && ctx.selected.endsWith(delimiter)) {
+                // The selection itself is the formatted block
+                bounds = {
+                    start: ctx.start,
+                    end: ctx.end,
+                    innerStart: ctx.start + len,
+                    innerEnd: ctx.end - len
+                };
+            }
+        }
+        
+        let newText;
+        let newSelectionStart;
+        let newSelectionEnd;
+        
+        if (bounds) {
+            // UNWRAP: Remove delimiters
+            const innerContent = ctx.fullText.slice(bounds.innerStart, bounds.innerEnd);
+            newText = 
+                ctx.fullText.slice(0, bounds.start) +
+                innerContent +
+                ctx.fullText.slice(bounds.end);
+            
+            // Selection moves to the unwrapped content
+            newSelectionStart = bounds.start;
+            newSelectionEnd = bounds.start + innerContent.length;
+        } else {
+            // WRAP: Add delimiters around selection
+            newText = 
+                ctx.fullText.slice(0, ctx.start) +
+                delimiter +
+                ctx.selected +
+                delimiter +
+                ctx.fullText.slice(ctx.end);
+            
+            // Selection is inside the new delimiters
+            newSelectionStart = ctx.start + delimiter.length;
+            newSelectionEnd = ctx.end + delimiter.length;
+        }
+        
+        // Convert newText back to HTML (with emoji images)
+        const newHtml = textToHtml(newText);
+        
+        // Apply to editor
+        editorRef.current.innerHTML = newHtml;
+        
+        // Trigger formatting preview
+        const formatted = applyLiveFormatting(editorRef.current.innerHTML);
+        editorRef.current.innerHTML = formatted;
+        setHtml(formatted);
+        
+        // Restore selection (approximate - select the content we just toggled)
+        // We need to recalculate position after formatting spans are added
+        requestAnimationFrame(() => {
+            if (!editorRef.current) return;
+            
+            // For unwrap: select the unwrapped text
+            // For wrap: select text inside (excluding delimiters in plaintext)
+            try {
+                const targetStart = bounds ? newSelectionStart : (ctx.start + delimiter.length);
+                const targetEnd = bounds ? newSelectionEnd : (ctx.end + delimiter.length);
+                
+                // Use setCaretOffset to position cursor at end of selection
+                setCaretOffset(editorRef.current, targetEnd);
+            } catch (e) {
+                // Fallback: just focus the editor
+                editorRef.current.focus();
+            }
+        });
+        
+        // Reset toolbar state
+        setShowFormatToolbar(false);
+        setIsBoldActive(false);
+        setIsSpoilerActive(false);
+        
+        // Trigger input event to sync state
+        const event = new Event('input', { bubbles: true });
+        editorRef.current.dispatchEvent(event);
+    };
+
+    const handleSpoilerFormat = () => toggleFormat('||');
+    const handleBoldFormat = () => toggleFormat('*');
 
 
     // Memoized closing functions for animations
@@ -630,8 +930,8 @@ export default function MessageInput({
     const handleChange = (evt) => {
         const newHtml = evt.target.value ?? evt.target.innerHTML;
         
-        // [NEW] Apply bold formatting preview
-        const formatted = applyBoldFormatting(newHtml);
+        // [NEW] Apply live formatting preview (Bold, Spoiler)
+        const formatted = applyLiveFormatting(newHtml);
         
         // If formatting changed the content, we need to save/restore caret
         if (formatted !== newHtml && editorRef.current) {
@@ -978,7 +1278,7 @@ export default function MessageInput({
                                 ) : (
                                     <div className="flex flex-col">
                                         <span className="text-sm font-semibold text-violet-600 dark:text-violet-300">{renderTextWithEmojis(replyTo.sender)}</span>
-                                        <span className="text-sm text-slate-600 dark:text-slate-300 break-words line-clamp-2 max-h-[3em]">{linkifyText(replyTo.text, '', 'text-violet-600 dark:text-violet-400 hover:underline')}</span>
+                                        <span className="text-sm text-slate-600 dark:text-slate-300 break-words line-clamp-2 max-h-[3em]">{linkifyText(replyTo.text, '', 'text-violet-600 dark:text-violet-400 hover:underline', { disableBigEmoji: true })}</span>
                                     </div>
                                 )}
                             </div>
@@ -1069,9 +1369,62 @@ export default function MessageInput({
                                 onKeyUp={saveSelection}
                                 onMouseUp={saveSelection}
                                 onKeyDown={handleKeyDown}
-                                className="w-full text-slate-800 dark:text-slate-100 pl-4 pr-2 py-3 focus:outline-none min-h-[48px] max-h-[150px] overflow-y-auto whitespace-pre-wrap break-words custom-scrollbar placeholder:text-slate-400 dark:placeholder:text-slate-500 transition-colors"
+                                className="editor-content w-full text-slate-800 dark:text-slate-100 pl-4 pr-2 py-3 focus:outline-none min-h-[48px] max-h-[150px] overflow-y-auto whitespace-pre-wrap break-words custom-scrollbar placeholder:text-slate-400 dark:placeholder:text-slate-500 transition-colors"
                                 tagName="div"
                             />
+                            
+                            {/* [NEW] Floating Format Toolbar */}
+                            {showFormatToolbar && (
+                                <div 
+                                    ref={formatToolbarRef}
+                                    className="absolute z-50 flex items-center gap-0.5 px-1.5 py-1 bg-slate-800 dark:bg-slate-900 rounded-lg shadow-xl border border-slate-700 animate-in fade-in zoom-in-95 duration-100"
+                                    style={{
+                                        top: toolbarPosition.top,
+                                        left: toolbarPosition.left,
+                                        transform: 'translateX(-50%)'
+                                    }}
+                                >
+                                    {/* Spoiler */}
+                                    <button
+                                        type="button"
+                                        onMouseDown={(e) => e.preventDefault()} // Keep selection
+                                        onClick={handleSpoilerFormat}
+                                        className={`p-1.5 rounded transition-colors ${isSpoilerActive ? 'bg-violet-500/20 text-white' : 'hover:bg-slate-700 text-slate-300 hover:text-white'}`}
+                                        title="Spoiler"
+                                    >
+                                        <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                            <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/>
+                                            <line x1="1" y1="1" x2="23" y2="23"/>
+                                        </svg>
+                                    </button>
+                                    
+                                    {/* Bold */}
+                                    <button
+                                        type="button"
+                                        onMouseDown={(e) => e.preventDefault()} // Keep selection
+                                        onClick={handleBoldFormat}
+                                        className={`p-1.5 rounded font-bold text-sm transition-colors ${isBoldActive ? 'bg-violet-500/20 text-white' : 'hover:bg-slate-700 text-slate-300 hover:text-white'}`}
+                                        title="Bold"
+                                    >
+                                        B
+                                    </button>
+                                    
+                                    {/* Divider */}
+                                    <div className="w-px h-4 bg-slate-600 mx-0.5" />
+                                    
+                                    {/* Link placeholder */}
+                                    <button
+                                        type="button"
+                                        className="p-1.5 rounded hover:bg-slate-700 text-slate-300 hover:text-white transition-colors"
+                                        title="Link"
+                                    >
+                                        <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                            <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>
+                                            <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>
+                                        </svg>
+                                    </button>
+                                </div>
+                            )}
                             
                             {!hasText && (
                                 <div className="absolute left-4 top-3 text-slate-400 dark:text-slate-500 pointer-events-none select-none transition-colors">
