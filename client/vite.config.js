@@ -4,6 +4,7 @@ import { VitePWA } from 'vite-plugin-pwa'
 
 // https://vitejs.dev/config/
 export default defineConfig({
+  base: '/No-Login-Chats/', // Fix for GitHub Pages subfolder
   plugins: [
     react(),
     VitePWA({
