@@ -3,8 +3,8 @@ export const BASE_URL = '/Telegram-Animated-Emojis';
 // Helper to strip variation selectors (VS16 - \uFE0F) for consistent matching
 const normalize = (str) => {
     if (!str) return '';
-    // Strip VS15/VS16 (\uFE0E, \uFE0F), skin tones (\uD83C\uDFFB-1F3FF), and ZWJ (\u200D)
-    return str.replace(/[\uFE0E\uFE0F\u200D\uD83C\uDFFB-\uD83C\uDFFF]/g, ''); 
+    // Strip VS15/VS16 (\uFE0E, \uFE0F), skin tones (\u{1F3FB}-\u{1F3FF}), and ZWJ (\u200D)
+    return str.replace(/[\uFE0E\uFE0F\u200D\u{1F3FB}-\u{1F3FF}]/gu, ''); 
 };
 
 // Map keys should be normalized (no VS16)
