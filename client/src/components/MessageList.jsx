@@ -532,6 +532,10 @@ export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone,
                                     )
                                 ))}
                             </div>
+                        ) : (isSpoilerOnlyEmojis(msg.content) && !msg.replyTo) ? (
+                            <div className="flex gap-1 flex-wrap justify-start">
+                                {linkifyText(msg.content, searchTerm, linkClass)}
+                            </div>
                         ) : msg.type === 'image' ? (
                             msg.is_view_once ? (
                                 <div className="flex flex-col mt-1 mb-1 max-w-[280px] sm:max-w-[320px] min-w-[120px]">
