@@ -2,6 +2,7 @@
 import { useState } from 'react';
 import emojiRegex from 'emoji-regex';
 import { linkToBigEmoji, isSingleEmoji, splitEmojis } from './animatedEmojiMap';
+import BigAnimatedEmoji from '../components/BigAnimatedEmoji';
 
 // Helper to check if text is only emojis (1-3)
 const isOnlyEmojis = (text) => {
@@ -52,17 +53,12 @@ const SpoilerText = ({ children, keyProp, rawContent, disableBigEmoji }) => {
                     {emojis.map((emoji, idx) => {
                         const animatedUrl = linkToBigEmoji(emoji);
                         return animatedUrl ? (
-                            <img
+                            <BigAnimatedEmoji
                                 key={idx}
-                                src={animatedUrl}
+                                url={animatedUrl}
                                 alt={emoji}
-                                className="select-none pointer-events-none"
-                                style={{
-                                    width: `${sizeConfig.imgSize}px`,
-                                    height: `${sizeConfig.imgSize}px`,
-                                }}
-                                draggable="false"
-                                loading="lazy"
+                                size={sizeConfig.imgSize}
+                                autoPlay={revealed}
                             />
                         ) : (
                             <span

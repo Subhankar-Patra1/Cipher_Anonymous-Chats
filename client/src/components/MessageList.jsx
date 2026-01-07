@@ -513,6 +513,7 @@ export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone,
                                             url={linkToBigEmoji(emoji)} 
                                             alt={emoji} 
                                             size={splitEmojis(msg.content).length > 1 ? 96 : 128}
+                                            autoPlay={true}
                                         />
                                     ) : (
                                         // Native big emoji for ones without animation

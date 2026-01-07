@@ -3,7 +3,7 @@ import React, { useState, useRef, useEffect } from 'react';
 // Global cache for static frames - persists across component mounts
 const frameCache = new Map();
 
-const BigAnimatedEmoji = ({ url, alt, size = 160 }) => {
+const BigAnimatedEmoji = ({ url, alt, size = 160, autoPlay = false }) => {
     const [error, setError] = useState(false);
     const [isPlaying, setIsPlaying] = useState(false);
     const [staticFrame, setStaticFrame] = useState(() => frameCache.get(url) || null);
@@ -11,6 +11,7 @@ const BigAnimatedEmoji = ({ url, alt, size = 160 }) => {
     const [animKey, setAnimKey] = useState(0);
     const imgRef = useRef(null);
     const timerRef = useRef(null);
+    const hasAutoPlayedRef = useRef(false);
 
     const ANIMATION_DURATION = 3000;
 
@@ -49,6 +50,14 @@ const BigAnimatedEmoji = ({ url, alt, size = 160 }) => {
         img.src = url;
     }, [url, size]);
 
+    // Handle autoPlay
+    useEffect(() => {
+        if (autoPlay && isReady && !hasAutoPlayedRef.current) {
+            setIsPlaying(true);
+            hasAutoPlayedRef.current = true;
+        }
+    }, [autoPlay, isReady]);
+
     // Stop animation after duration
     useEffect(() => {
         if (isPlaying) {
@@ -62,9 +71,11 @@ const BigAnimatedEmoji = ({ url, alt, size = 160 }) => {
     }, [isPlaying, animKey]);
 
     const handleClick = () => {
-        if (!isPlaying && isReady) {
+        if (isReady) {
             setAnimKey(prev => prev + 1);
             setIsPlaying(true);
+            // Reset autoPlay ref so it can be manually re-played if needed
+            // Actually, handleClick should just force play
         }
     };
 
