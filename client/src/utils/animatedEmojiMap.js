@@ -1,9 +1,4 @@
-const getBaseUrl = () => {
-    const base = import.meta.env?.BASE_URL || '/';
-    return (base.endsWith('/') ? base : base + '/') + 'Telegram-Animated-Emojis';
-};
-
-export const BASE_URL = getBaseUrl();
+export const BASE_URL = '/Telegram-Animated-Emojis';
 
 // Helper to strip variation selectors (VS16 - \uFE0F) for consistent matching
 const normalize = (str) => {

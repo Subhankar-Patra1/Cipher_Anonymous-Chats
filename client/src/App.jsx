@@ -25,13 +25,13 @@ const PublicRoute = ({ children }) => {
 };
 
 const AppContent = () => {
-    const { isUnlocking } = useAppLock(); 
+    const { isUnlocking } = useAppLock(); // [NEW] Get unlocking state
 
     return (
         <ChatLockProvider>
             <LockScreen />
             {isUnlocking && <LoadingScreen />} 
-            <Router basename={import.meta.env.BASE_URL}>
+            <Router>
                 <Routes>
                     <Route path="/auth" element={
                         <PublicRoute>
