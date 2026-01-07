@@ -516,17 +516,19 @@ export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone,
                                             autoPlay={true}
                                         />
                                     ) : (
-                                        // Native big emoji for ones without animation
-                                        <span 
+                                        // Apple emoji image for ones without animation
+                                        <img 
                                             key={idx}
-                                            className="select-none leading-none drop-shadow-md"
+                                            src={`https://cdn.jsdelivr.net/npm/emoji-datasource-apple/img/apple/64/${Array.from(emoji).map(c => c.codePointAt(0).toString(16)).filter(hex => hex !== 'fe0f').join('-')}.png`}
+                                            alt={emoji}
+                                            className="select-none drop-shadow-md object-contain"
                                             style={{ 
-                                                fontSize: splitEmojis(msg.content).length > 1 ? '60px' : '80px',
+                                                width: splitEmojis(msg.content).length > 1 ? '60px' : '80px',
+                                                height: splitEmojis(msg.content).length > 1 ? '60px' : '80px',
                                                 filter: 'drop-shadow(0 1px 2px rgba(0,0,0,0.15))'
                                             }}
-                                        >
-                                            {emoji}
-                                        </span>
+                                            draggable="false"
+                                        />
                                     )
                                 ))}
                             </div>

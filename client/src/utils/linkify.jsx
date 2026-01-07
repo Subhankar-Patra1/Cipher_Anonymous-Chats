@@ -61,16 +61,18 @@ const SpoilerText = ({ children, keyProp, rawContent, disableBigEmoji }) => {
                                 autoPlay={revealed}
                             />
                         ) : (
-                            <span
+                            <img
                                 key={idx}
-                                className="select-none leading-none"
+                                src={`https://cdn.jsdelivr.net/npm/emoji-datasource-apple/img/apple/64/${toHex(emoji)}.png`}
+                                alt={emoji}
+                                className="select-none object-contain"
                                 style={{
-                                    fontSize: sizeConfig.fontSize,
+                                    width: sizeConfig.imgSize + 'px',
+                                    height: sizeConfig.imgSize + 'px',
                                     filter: 'drop-shadow(0 1px 2px rgba(0,0,0,0.15))'
                                 }}
-                            >
-                                {emoji}
-                            </span>
+                                draggable="false"
+                            />
                         );
                     })}
                 </span>
