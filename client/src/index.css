@@ -801,15 +801,29 @@ html.landing-scroll {
     to { opacity: 1; transform: scale(1); }
   }
   @keyframes playerOut {
-    from { 
-      opacity: 1; 
-      transform: scale(1); 
-      max-height: 300px; 
-    }
-    to { 
-      opacity: 0; 
-      transform: scale(0.95); 
-      max-height: 80px; 
-    }
+    from { opacity: 1; transform: scale(1); }
+    to { opacity: 0; transform: scale(0.92); }
   }
 }
+
+/* Marquee Animation for System Ticker */
+@keyframes marquee {
+  0% { transform: translateX(0); }
+  100% { transform: translateX(-50%); }
+}
+
+.animate-marquee {
+  animation: marquee 90s linear infinite;
+  display: flex;
+  min-width: 200%;
+}
+
+@keyframes progress {
+  0% { width: 0%; }
+  100% { width: 100%; }
+}
+
+.animate-progress-bar {
+  animation: progress 1.6s ease-in-out forwards;
+}
+
