@@ -1,3 +1,4 @@
+import EncryptionShowcase from '../components/EncryptionShowcase';
 import { useEffect, useState, useRef } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 
@@ -346,48 +347,9 @@ const LandingPage = () => {
                     </div>
                 </section>
 
-                <section className="py-20 border-y border-accent-green/10 bg-black/40">
-                    <div className="container mx-auto px-4">
-                        <div className="mx-auto max-w-3xl rounded-lg border border-accent-green/30 bg-black p-1 shadow-2xl">
-                            <div className="flex items-center gap-2 bg-deep-charcoal px-4 py-2 border-b border-accent-green/20 rounded-t-lg">
-                                <div className="size-3 rounded-full bg-red-500"></div>
-                                <div className="size-3 rounded-full bg-yellow-500"></div>
-                                <div className="size-3 rounded-full bg-green-500"></div>
-                                <span className="ml-2 text-xs text-gray-400">guest@cipher-terminal:~</span>
-                            </div>
-                            <div ref={terminalContainerRef} className="h-64 overflow-y-auto p-4 font-mono text-sm" onClick={() => document.getElementById('terminal-input').focus()}>
-                                {terminalHistory.map((line, i) => (
-                                    <div key={i} className={`mb-1 ${
-                                        line.type === 'user' ? 'text-gray-100' :
-                                        line.type === 'error' ? 'text-red-400' :
-                                        line.type === 'success' ? 'text-accent-green' :
-                                        line.type === 'system' ? 'text-blue-400' :
-                                        'text-accent-purple'
-                                    }`}>
-                                        {line.content}
-                                    </div>
-                                ))}
-                            </div>
-                            <div className="flex items-center gap-2 border-t border-accent-green/20 bg-deep-charcoal/50 p-2">
-                                <span className="text-accent-green pl-2">&gt;</span>
-                                <form onSubmit={handleTerminalSubmit} className="w-full">
-                                    <input 
-                                        id="terminal-input"
-                                        type="text" 
-                                        value={terminalInput}
-                                        onChange={(e) => setTerminalInput(e.target.value)}
-                                        className="w-full bg-transparent border-none outline-none text-gray-100 font-mono text-sm focus:ring-0"
-                                        autoComplete="off"
+                {/* Encryption Showcase Section */}
+                <EncryptionShowcase />
 
-                                    />
-                                </form>
-                            </div>
-                        </div>
-                        <div className="mt-4 text-center">
-                            <p className="text-sm text-gray-500">Try commands: <span className="text-accent-green">/status</span>, <span className="text-accent-purple">/about</span>, <span className="text-accent-green">/join</span></p>
-                        </div>
-                    </div>
-                </section>
 
                 <section className="py-20 sm:py-24 lg:py-32" id="faq">
                     <div className="container mx-auto px-4">
@@ -553,6 +515,49 @@ const LandingPage = () => {
                                 <p className="text-gray-500 text-sm mb-4">Audit our protocols. Trust through transparency.</p>
                                 <a href="https://github.com/Subhankar-Patra1/Cipher_Anonymous-Chats.git" target="_blank" rel="noopener noreferrer" className="text-accent-green hover:text-glow-green font-mono text-lg">&lt; github.com/Cipher /&gt;</a>
                             </div>
+                        </div>
+                    </div>
+                </section>
+
+                <section className="py-20 border-y border-accent-green/10 bg-black/40">
+                    <div className="container mx-auto px-4">
+                        <div className="mx-auto max-w-3xl rounded-lg border border-accent-green/30 bg-black p-1 shadow-2xl">
+                            <div className="flex items-center gap-2 bg-deep-charcoal px-4 py-2 border-b border-accent-green/20 rounded-t-lg">
+                                <div className="size-3 rounded-full bg-red-500"></div>
+                                <div className="size-3 rounded-full bg-yellow-500"></div>
+                                <div className="size-3 rounded-full bg-green-500"></div>
+                                <span className="ml-2 text-xs text-gray-400">guest@cipher-terminal:~</span>
+                            </div>
+                            <div ref={terminalContainerRef} className="h-64 overflow-y-auto p-4 font-mono text-sm" onClick={() => document.getElementById('terminal-input').focus()}>
+                                {terminalHistory.map((line, i) => (
+                                    <div key={i} className={`mb-1 ${
+                                        line.type === 'user' ? 'text-gray-100' :
+                                        line.type === 'error' ? 'text-red-400' :
+                                        line.type === 'success' ? 'text-accent-green' :
+                                        line.type === 'system' ? 'text-blue-400' :
+                                        'text-accent-purple'
+                                    }`}>
+                                        {line.content}
+                                    </div>
+                                ))}
+                            </div>
+                            <div className="flex items-center gap-2 border-t border-accent-green/20 bg-deep-charcoal/50 p-2">
+                                <span className="text-accent-green pl-2">&gt;</span>
+                                <form onSubmit={handleTerminalSubmit} className="w-full">
+                                    <input 
+                                        id="terminal-input"
+                                        type="text" 
+                                        value={terminalInput}
+                                        onChange={(e) => setTerminalInput(e.target.value)}
+                                        className="w-full bg-transparent border-none outline-none text-gray-100 font-mono text-sm focus:ring-0"
+                                        autoComplete="off"
+
+                                    />
+                                </form>
+                            </div>
+                        </div>
+                        <div className="mt-4 text-center">
+                            <p className="text-sm text-gray-500">Try commands: <span className="text-accent-green">/status</span>, <span className="text-accent-purple">/about</span>, <span className="text-accent-green">/join</span></p>
                         </div>
                     </div>
                 </section>
