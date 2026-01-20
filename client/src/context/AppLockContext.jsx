@@ -1,138 +1,220 @@
-import { createContext, useContext, useState, useEffect, useRef } from 'react';
+import React, { createContext, useContext, useState, useEffect } from 'react';
 
 const AppLockContext = createContext();
 
 export const useAppLock = () => useContext(AppLockContext);
 
 export const AppLockProvider = ({ children }) => {
-    // [FIX] Default to LOCKED if passcode exists to ensure security on refresh
-    const [isLocked, setIsLocked] = useState(() => {
-        return !!localStorage.getItem('app_passcode');
+    const [isEnabled, setIsEnabled] = useState(() => {
+        return localStorage.getItem('app_lock_enabled') === 'true';
     });
     
-    const [hasPasscode, setHasPasscode] = useState(() => {
-        return !!localStorage.getItem('app_passcode');
+    // Default to locked if enabled, otherwise unlocked
+    const [isLocked, setIsLocked] = useState(() => {
+        return localStorage.getItem('app_lock_enabled') === 'true';
     });
 
-    const [autoLockDuration, setAutoLockDuration] = useState(null); // in minutes
-    const timerRef = useRef(null);
-    
-    // Sync state effects
+    const [isSupported, setIsSupported] = useState(false);
+
     useEffect(() => {
-        // Restore auto-lock duration
-        const storedDuration = localStorage.getItem('app_auto_lock_duration');
-        if (storedDuration) {
-            setAutoLockDuration(parseInt(storedDuration, 10));
+        // Check if WebAuthn is supported
+        if (window.PublicKeyCredential) {
+            PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable()
+                .then(available => {
+                    setIsSupported(available);
+                })
+                .catch(err => console.error("WebAuthn check failed", err));
         }
     }, []);
 
-    // Encapsulate lockApp to be used in timer
-    const lockApp = () => {
-        setIsLocked(true);
-        sessionStorage.setItem('app_is_locked', 'true');
-    };
-
-    // Auto-lock Timer Logic
-    useEffect(() => {
-        if (!hasPasscode || !autoLockDuration || isLocked) {
-            if (timerRef.current) clearTimeout(timerRef.current);
-            return;
+    const enableLock = async () => {
+        if (!isSupported) {
+            alert("Your device does not support biometric authentication or it is not set up.");
+            return false;
         }
 
-        const resetTimer = () => {
-            if (timerRef.current) clearTimeout(timerRef.current);
-            timerRef.current = setTimeout(() => {
-                lockApp();
-            }, autoLockDuration * 60 * 1000); 
-        };
-
-        // Activity listeners
-        const events = ['mousemove', 'mousedown', 'keypress', 'touchmove', 'scroll'];
-        const handleActivity = () => resetTimer();
-        
-        events.forEach(event => window.addEventListener(event, handleActivity));
-        resetTimer(); // Init
-
-        return () => {
-            if (timerRef.current) clearTimeout(timerRef.current);
-            events.forEach(event => window.removeEventListener(event, handleActivity));
-        };
-    }, [hasPasscode, autoLockDuration, isLocked]);
-
-    const hashPasscode = async (passcode) => {
-        const msgBuffer = new TextEncoder().encode(passcode);
-        const hashBuffer = await crypto.subtle.digest('SHA-256', msgBuffer);
-        const hashArray = Array.from(new Uint8Array(hashBuffer));
-        return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
-    };
-
-    const setPasscode = async (passcode) => {
-        const hash = await hashPasscode(passcode);
-        localStorage.setItem('app_passcode', hash);
-        setHasPasscode(true);
-    };
-
-    const setAutoLock = (minutes) => {
-        if (minutes === null) {
-            localStorage.removeItem('app_auto_lock_duration');
-            setAutoLockDuration(null);
-        } else {
-            localStorage.setItem('app_auto_lock_duration', minutes);
-            setAutoLockDuration(minutes);
+        try {
+            const success = await authenticateUser("Enable App Lock");
+            if (success) {
+                setIsEnabled(true);
+                localStorage.setItem('app_lock_enabled', 'true');
+                return true;
+            }
+        } catch (err) {
+            console.error("Authentication failed", err);
+            alert("Authentication failed. Please try again.");
         }
+        return false;
+    };
+
+    const disableLock = async () => {
+        try {
+            const success = await authenticateUser("Disable App Lock");
+            if (success) {
+                setIsEnabled(false);
+                setIsLocked(false);
+                localStorage.removeItem('app_lock_enabled');
+                return true;
+            }
+        } catch (err) {
+            console.error("Authentication failed", err);
+        }
+        return false;
+    };
+
+    const [passcode, _setPasscode] = useState(() => localStorage.getItem('app_passcode'));
+    const hasPasscode = !!passcode;
+    
+    const [autoLockDuration, setAutoLock] = useState(() => {
+        const val = localStorage.getItem('auto_lock_duration');
+        return val ? parseInt(val) : null;
+    });
+
+    const setPasscode = (code) => {
+        localStorage.setItem('app_passcode', code);
+        _setPasscode(code);
+        setIsEnabled(true); // Auto-enable when set
+        localStorage.setItem('app_lock_enabled', 'true');
     };
 
     const removePasscode = () => {
         localStorage.removeItem('app_passcode');
-        localStorage.removeItem('app_auto_lock_duration');
-        sessionStorage.removeItem('app_is_locked');
-        setHasPasscode(false);
+        _setPasscode(null);
+        setIsEnabled(false);
         setIsLocked(false);
-        setAutoLockDuration(null);
+        localStorage.removeItem('app_lock_enabled');
+    };
+    
+    const verifyPasscode = (inputCode) => {
+        return inputCode === passcode;
+    };
+    
+    const updateAutoLock = (duration) => {
+        if (duration) {
+            localStorage.setItem('auto_lock_duration', duration);
+        } else {
+            localStorage.removeItem('auto_lock_duration');
+        }
+        setAutoLock(duration);
     };
 
-    const [isUnlocking, setIsUnlocking] = useState(false); // [NEW] Transition state
-
-    const unlockApp = async (inputPasscode) => {
-        const storedHash = localStorage.getItem('app_passcode');
-        if (!storedHash) return true; // No passcode set
-        
-        const inputHash = await hashPasscode(inputPasscode);
-        
-        if (inputHash === storedHash) {
-            setIsLocked(false);
-            sessionStorage.removeItem('app_is_locked');
-            
-            // [NEW] Trigger loading transition
-            setIsUnlocking(true);
-            setTimeout(() => {
-                setIsUnlocking(false);
-            }, 2500); // Show loading screen for 2.5s for smooth entry
-            
+    const unlock = async (method = 'biometric') => {
+        if (method === 'passcode') {
+            setIsLocked(false); // [FIX] Actually unlock the app
             return true;
+        } 
+        
+        try {
+            const success = await authenticateUser("Unlock Cipher");
+            if (success) {
+                setIsLocked(false);
+                return true;
+            }
+        } catch (err) {
+            console.error("Unlock failed", err);
         }
         return false;
     };
-    
-    const verifyPasscode = async (inputPasscode) => {
-        const storedHash = localStorage.getItem('app_passcode');
-        if (!storedHash) return false;
-        const inputHash = await hashPasscode(inputPasscode);
-        return inputHash === storedHash;
+
+    const lockApp = () => {
+        if (hasPasscode) {
+            setIsLocked(true);
+        }
     };
+
+    // Helper: Trigger WebAuthn challenge
+    const authenticateUser = async (reason) => {
+        // We use a dummy challenge just to trigger the "User Verification" (PIN/Bio)
+        // We are NOT registering a credential with a server here (Client-side Check Only)
+        // Note: Some browsers strictly require a registered credential for get(), 
+        // but 'create' with a dummy ID usually triggers the prompt on most platforms (Windows Hello/Android).
+        // A robust implementation would register a real credential, but for a local lock, we can often rely on "User Presence".
+        
+        // Better approach for LOCAL lock without server:
+        // Use `navigator.credentials.create` with `authenticatorSelection: { userVerification: 'required' }`
+        // This forces the OS to verify the user.
+        
+        const challenge = new Uint8Array(32);
+        window.crypto.getRandomValues(challenge);
+
+        const userID = 'user_' + Date.now();
+        const idBuffer = new TextEncoder().encode(userID);
+
+        const publicKey = {
+            challenge: challenge,
+            rp: {
+                name: "Cipher App Lock",
+                id: window.location.hostname // Must match current domain
+            },
+            user: {
+                id: idBuffer,
+                name: "cipher_user",
+                displayName: "Cipher User"
+            },
+            pubKeyCredParams: [{ alg: -7, type: "public-key" }],
+            authenticatorSelection: {
+                authenticatorAttachment: "platform", // Force TouchID/FaceID/Hello
+                userVerification: "required" // Require PIN/Bio
+            },
+            timeout: 60000,
+            attestation: "none"
+        };
+
+        try {
+            // We use 'create' because 'get' usually requires a previously registered allowList.
+            // Creating a NEW credential verifies user identity locally via the OS prompt.
+            await navigator.credentials.create({ publicKey });
+            return true;
+        } catch (err) {
+            // User cancelled or failed
+            console.warn("WebAuthn prompt", err);
+            return false;
+        }
+    };
+
+    // Auto-lock on visibility change (backgrounding)
+    useEffect(() => {
+        let backgroundStart = 0;
+
+        const handleVisibilityChange = () => {
+            if (document.hidden) {
+                // App went background
+                if (isEnabled && !isLocked) {
+                    backgroundStart = Date.now();
+                }
+            } else {
+                // App came foreground
+                if (isEnabled && !isLocked && backgroundStart > 0) {
+                    const elapsed = Date.now() - backgroundStart;
+                    // Lock if backgrounded for more than 1 minute (60000ms)
+                    if (elapsed > 60000) {
+                        setIsLocked(true);
+                    }
+                    backgroundStart = 0; // Reset
+                }
+            }
+        };
+
+        document.addEventListener('visibilitychange', handleVisibilityChange);
+        return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
+    }, [isEnabled, isLocked]);
 
     return (
         <AppLockContext.Provider value={{ 
+            isEnabled, 
             isLocked, 
-            isUnlocking, // [NEW]
-            hasPasscode, 
+            isSupported, 
+            enableLock, 
+            disableLock, 
+            unlock, 
+            lockApp,
+            // Passcode Logic
+            hasPasscode,
+            setPasscode,
+            removePasscode,
             autoLockDuration,
-            setPasscode, 
-            setAutoLock,
-            removePasscode, 
-            lockApp, 
-            unlockApp,
-            verifyPasscode 
+            setAutoLock: updateAutoLock,
+            verifyPasscode
         }}>
             {children}
         </AppLockContext.Provider>

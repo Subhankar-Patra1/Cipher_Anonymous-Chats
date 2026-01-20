@@ -16,17 +16,42 @@ export default function Auth() {
 
     // Validation States
     const [usernameStatus, setUsernameStatus] = useState('idle'); // idle, checking, available, taken
+    const [usernameError, setUsernameError] = useState(''); // Specific format error
     const [passwordValid, setPasswordValid] = useState(false);
+
     const [showPassword, setShowPassword] = useState(false);
+    // [NEW] Track focus for username requirements visibility
+    const [isUsernameFocused, setIsUsernameFocused] = useState(false);
 
     // Debounce Username Check
     // Debounce Username Check
     useEffect(() => {
         if (view !== 'signup' || !formData.username || formData.username === '@') {
             setUsernameStatus('idle');
+            setUsernameError('');
             return;
         }
 
+        // 1. Check Format Rules
+        const rawUsername = formData.username.substring(1); // Remove @
+        if (rawUsername.length < 3) {
+            setUsernameStatus('idle'); // Don't check server
+            setUsernameError('Must be at least 3 characters');
+            return;
+        }
+        if (rawUsername.length > 30) {
+            setUsernameStatus('idle'); 
+            setUsernameError('Must be max 30 characters');
+            return;
+        }
+        if (rawUsername.startsWith('_') || rawUsername.endsWith('_')) {
+            setUsernameStatus('idle');
+            setUsernameError('Cannot start or end with underscore');
+            return;
+        }
+
+        // Format OK
+        setUsernameError('');
         setUsernameStatus('checking');
         const timer = setTimeout(async () => {
             try {
@@ -65,6 +90,10 @@ export default function Auth() {
         setIsSubmitting(true);
 
         if (view === 'signup') {
+            if (usernameError) {
+                setIsSubmitting(false);
+                return setError(usernameError);
+            }
             if (usernameStatus === 'taken') {
                 setIsSubmitting(false);
                 return setError('Username is already taken');
@@ -354,7 +383,7 @@ export default function Auth() {
                                         <input 
                                             type="text" 
                                             className="w-full bg-slate-900/50 text-white rounded-xl pl-10 pr-4 py-3 focus:outline-none focus:ring-2 focus:ring-violet-500/50 border border-slate-800 focus:border-violet-500/50 transition-all placeholder:text-slate-600"
-                                            placeholder="John Doe"
+                                            placeholder="Shadow"
                                             value={formData.displayName}
                                             onChange={e => setFormData({...formData, displayName: e.target.value})}
                                             required
@@ -375,12 +404,17 @@ export default function Auth() {
                                             view === 'signup' && usernameStatus === 'taken' ? 'border-red-500/50 focus:border-red-500 focus:ring-red-500/20' :
                                             'border-slate-800 focus:border-violet-500/50 focus:ring-violet-500/50'
                                         }`}
-                                        placeholder="@johndoe"
+                                        placeholder="@shadow"
                                         value={formData.username}
                                         onChange={e => {
-                                            const value = e.target.value.replace(/@/g, '');
+                                            // [NEW] Strict Input Filtering
+                                            let value = e.target.value.replace(/@/g, '');
+                                            // Allow only a-z, A-Z, 0-9, _
+                                            value = value.replace(/[^a-zA-Z0-9_]/g, '');
                                             setFormData({...formData, username: value ? '@' + value : '@'});
                                         }}
+                                        onFocus={() => setIsUsernameFocused(true)}
+                                        onBlur={() => setIsUsernameFocused(false)}
                                         required
                                     />
                                     <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 text-lg">person</span>
@@ -397,12 +431,31 @@ export default function Auth() {
                                 {view === 'signup' && usernameStatus === 'taken' && (
                                     <p className="text-xs text-red-400">Username is already taken.</p>
                                 )}
-                                {view === 'signup' && (
-                                    <p className="text-[10px] text-slate-500 mt-1 flex items-center gap-1">
-                                        <span className="material-symbols-outlined text-[10px]">info</span>
-                                        Username cannot be changed, but Display Name can.
-                                    </p>
+                                {view === 'signup' && usernameError && (
+                                    <p className="text-xs text-red-400">{usernameError}</p>
                                 )}
+                                    {view === 'signup' && (
+                                        <div className={`transition-all duration-300 ease-in-out overflow-hidden ${
+                                            isUsernameFocused ? 'max-h-[300px] opacity-100 mt-3' : 'max-h-0 opacity-0 mt-0'
+                                        }`}>
+                                            <div className="bg-slate-900/50 p-4 rounded-xl border border-slate-800/50">
+                                                {[
+                                                    { label: 'Must be at least 3 characters long and can have a maximum length of 30 characters.', valid: formData.username.length > 3 && formData.username.length <= 31 }, // accounts for @
+                                                    { label: 'Can only contain alphabets, numbers, and underscores.', valid: /^[a-zA-Z0-9_@]*$/.test(formData.username) },
+                                                    { label: 'Your username cannot start or end with a underscore, or contain special characters.', valid: !formData.username.substring(1).startsWith('_') && !formData.username.substring(1).endsWith('_') && formData.username.length > 1 }
+                                                ].map((rule, i) => (
+                                                    <div key={i} className="flex items-start gap-3 text-xs transition-colors duration-200 mb-2 last:mb-0">
+                                                        <div className={`mt-2 min-w-[4px] h-1 w-1 rounded-full shrink-0 ${
+                                                            rule.valid ? 'bg-green-400' : 'bg-slate-500'
+                                                        }`} />
+                                                        <span className={`${rule.valid ? 'text-green-400' : 'text-slate-400'} leading-relaxed`}>
+                                                            {rule.label}
+                                                        </span>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    )}
                             </div>
 
                             {/* Recovery Code Field */}

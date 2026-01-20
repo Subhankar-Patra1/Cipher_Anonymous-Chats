@@ -9,13 +9,16 @@ import { renderTextWithEmojis } from '../utils/emojiRenderer';
 import AvatarEditorModal from './AvatarEditorModal';
 import GroupPermissionsView from './GroupPermissionsView';
 import GroupParticipantsView from './GroupParticipantsView';
-import SharedMedia from './SharedMedia'; // [NEW]
+import SharedMedia from './SharedMedia'; 
 import AvatarViewerModal from './AvatarViewerModal';
 import GroupOwnershipTransferView from './GroupOwnershipTransferView';
-import ChatColorPicker from './ChatColorPicker'; // [NEW]
+import ChatColorPicker from './ChatColorPicker'; 
+import StarredMessagesModal from './StarredMessagesModal'; // [NEW]
+import { useConfirm } from '../context/ConfirmationContext';
 
-export default function GroupInfoModal({ room, onClose, onLeave, onKick, socket, onGoToMessage }) {
+export default function GroupInfoModal({ room, onClose, onLeave, onKick, socket, onGoToMessage, hasMessages }) {
     const { token, user: currentUser } = useAuth();
+    const confirm = useConfirm();
     const [view, setView] = useState('main'); // 'main', 'permissions', 'participants'
     
     // Core Data
@@ -59,6 +62,14 @@ export default function GroupInfoModal({ room, onClose, onLeave, onKick, socket,
     // UI Helpers
     const [copySuccess, setCopySuccess] = useState('');
     const [isTransferring, setIsTransferring] = useState(false);
+    
+    // [NEW] Starred Messages State
+    const [showStarredMessages, setShowStarredMessages] = useState(false);
+    
+    // [NEW] Clear Chat Confirmation State
+    const [isClearModalOpen, setIsClearModalOpen] = useState(false);
+    const [deleteMediaInfo, setDeleteMediaInfo] = useState(false);
+    const [mediaRefreshKey, setMediaRefreshKey] = useState(0); // [NEW] Force media refetch
 
     const handleTransferOwnership = async (newOwnerId) => {
         setIsTransferring(true);
@@ -83,15 +94,20 @@ export default function GroupInfoModal({ room, onClose, onLeave, onKick, socket,
         }
     };
 
-    const handleLeaveClick = () => {
+    const handleLeaveClick = async () => {
         // If owner and has other members, require transfer
         if (isOwner && members.length > 1) {
             setView('transfer_ownership');
             return;
         }
 
-        // Standard leave with confirm
-        if (confirm('Are you sure you want to leave this group?')) {
+        const confirmed = await confirm({
+            title: 'Leave Group',
+            message: 'Are you sure you want to leave this group?',
+            type: 'danger',
+            confirmText: 'Leave'
+        });
+        if (confirmed) {
             onLeave();
         }
     };
@@ -435,7 +451,13 @@ export default function GroupInfoModal({ room, onClose, onLeave, onKick, socket,
     };
 
     const handleKick = async (userId) => {
-        if (!confirm('Remove this member?')) return;
+        const confirmed = await confirm({
+            title: 'Remove Member',
+            message: 'Are you sure you want to remove this member?',
+            type: 'danger',
+            confirmText: 'Remove'
+        });
+        if (!confirmed) return;
         try {
             const res = await fetch(`${import.meta.env.VITE_API_URL}/api/rooms/${room.id}/members/${userId}`, {
                 method: 'DELETE',
@@ -507,10 +529,28 @@ export default function GroupInfoModal({ room, onClose, onLeave, onKick, socket,
     
     // ... existing helpers ...
 
+    // ... existing helpers ...
+
     const handleAvatarSuccess = (data) => {
         setLocalAvatar(data.avatar_url);
         setLocalAvatarThumb(data.avatar_thumb_url);
     };
+
+    // [NEW] Helper for Starred Option
+    const renderStarredOption = () => (
+        <button 
+            onClick={() => setShowStarredMessages(true)}
+            className="w-full p-4 flex items-center justify-between text-left hover:bg-gray-50 dark:hover:bg-slate-800 transition-colors"
+        >
+            <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-full bg-yellow-100 dark:bg-yellow-900/30 text-yellow-600 dark:text-yellow-400 flex items-center justify-center">
+                    <span className="material-symbols-outlined">star</span>
+                </div>
+                <span className="font-medium text-slate-700 dark:text-slate-200">Starred Messages</span>
+            </div>
+            <span className="material-symbols-outlined text-slate-400">chevron_right</span>
+        </button>
+    );
 
     // Sub-view rendering
     if (view === 'permissions') {
@@ -588,7 +628,80 @@ export default function GroupInfoModal({ room, onClose, onLeave, onKick, socket,
                 aspect={1}
             />
 
+            {/* [NEW] Starred Messages Modal */}
+            {showStarredMessages && (
+                <StarredMessagesModal 
+                    roomId={room.id} 
+                    onClose={() => setShowStarredMessages(false)}
+                    onGoToMessage={(_, msgId) => { // Ignored roomId, take msgId
+                        setShowStarredMessages(false);
+                        onClose(); // Close group info too
+                        onGoToMessage(msgId);
+                    }}
+                />
+            )}
+
+            {/* [NEW] Clear Chat Confirmation Modal */}
+            {isClearModalOpen && (
+                <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm animate-fade-in">
+                    <div className="bg-white dark:bg-slate-900 rounded-2xl w-full max-w-sm border border-slate-200 dark:border-slate-800 shadow-2xl p-6 animate-scale-up">
+                        <h3 className="text-xl font-bold text-slate-800 dark:text-white mb-2">Clear Messages?</h3>
+                        <p className="text-slate-600 dark:text-slate-400 text-sm mb-6">
+                            This will clear all messages in this chat for you.
+                        </p>
+
+                        <label className="flex items-center gap-3 p-3 rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50 cursor-pointer mb-6 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors">
+                            <input 
+                                type="checkbox" 
+                                checked={deleteMediaInfo} 
+                                onChange={(e) => setDeleteMediaInfo(e.target.checked)}
+                                className="w-5 h-5 rounded border-gray-300 text-violet-600 focus:ring-violet-500"
+                            />
+                            <div className="flex flex-col">
+                                <span className="font-medium text-slate-700 dark:text-slate-200 text-sm">Also delete media</span>
+                                <span className="text-xs text-slate-500 dark:text-slate-500">Remove photos and files from Shared Media</span>
+                            </div>
+                        </label>
+
+                        <div className="flex gap-3 justify-end">
+                            <button 
+                                onClick={() => setIsClearModalOpen(false)}
+                                className="px-4 py-2 rounded-lg text-slate-600 dark:text-slate-300 font-bold hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+                            >
+                                Cancel
+                            </button>
+                            <button 
+                                onClick={async () => {
+                                    try {
+                                        const res = await fetch(`${import.meta.env.VITE_API_URL}/api/rooms/${room.id}/clear`, {
+                                            method: 'POST',
+                                            headers: { 
+                                                'Content-Type': 'application/json',
+                                                Authorization: `Bearer ${token}` 
+                                            },
+                                            body: JSON.stringify({ deleteMedia: deleteMediaInfo }) // [NEW] Pass flag
+                                        });
+                                        if (res.ok) {
+                                            // Handle success
+                                            setIsClearModalOpen(false);
+                                            setMediaRefreshKey(k => k + 1); // [NEW] Force SharedMedia refetch
+                                            onClose();
+                                        }
+                                    } catch (err) {
+                                        console.error(err);
+                                    }
+                                }}
+                                className="px-4 py-2 rounded-lg bg-red-500 hover:bg-red-600 text-white font-bold transition-colors shadow-lg shadow-red-500/20"
+                            >
+                                Clear Chat
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
             <div className="bg-white dark:bg-slate-900 w-full h-full md:h-auto md:max-h-[90vh] md:max-w-2xl md:rounded-2xl border-0 md:border md:border-slate-200 md:dark:border-slate-800 shadow-2xl flex flex-col animate-modal-scale transition-colors overflow-hidden">
+
                 {/* Header */}
                 <div className="p-6 border-b border-slate-200/50 dark:border-slate-800/50 flex justify-between items-center bg-gray-50/50 dark:bg-slate-900/50 transition-colors">
                     <div className="flex items-center gap-4">
@@ -909,11 +1022,27 @@ export default function GroupInfoModal({ room, onClose, onLeave, onKick, socket,
                         </div>
                     </div>
                     
+                    {/* [NEW] Starred Messages Button */}
+                    <div className="px-4 pt-2">
+                        <button 
+                            onClick={() => setShowStarredMessages(true)}
+                            className="w-full flex items-center gap-3 p-3 rounded-lg hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors text-slate-700 dark:text-slate-200"
+                        >
+                            <div className="w-10 h-10 rounded-full bg-yellow-100 dark:bg-yellow-900/30 flex items-center justify-center text-yellow-600 dark:text-yellow-400">
+                                <span className="material-symbols-outlined">star</span>
+                            </div>
+                            <div className="flex-1 text-left">
+                                <h3 className="font-medium">Starred Messages</h3>
+                            </div>
+                            <span className="material-symbols-outlined text-slate-400">chevron_right</span>
+                        </button>
+                    </div>
+
                     {/* Shared Media */}
                     <div className="border-b border-slate-200/50 dark:border-slate-800/50 transition-colors">
                          <h3 className="text-slate-500 font-bold text-xs uppercase px-6 pt-6 mb-2 tracking-wider">Shared Content</h3>
                          <div className="px-4 pb-6">
-                            <SharedMedia roomId={room.id} onGoToMessage={onGoToMessage} />
+                            <SharedMedia roomId={room.id} onGoToMessage={onGoToMessage} socket={socket} refreshKey={mediaRefreshKey} />
                          </div>
                     </div>
                     
@@ -1007,23 +1136,16 @@ export default function GroupInfoModal({ room, onClose, onLeave, onKick, socket,
                         <div className="space-y-3">
                             {/* Clear Messages - Visible to everyone */}
                             <button
-                                onClick={async () => {
-                                    if (!confirm('Clear all messages in this chat? This will only affect you.')) return;
-                                    try {
-                                        const res = await fetch(`${import.meta.env.VITE_API_URL}/api/rooms/${room.id}/clear`, {
-                                            method: 'POST',
-                                            headers: { Authorization: `Bearer ${token}` }
-                                        });
-                                        if (res.ok) {
-                                            // Handle success (maybe show toast? or just close)
-                                            alert('Chat history cleared.');
-                                            onClose();
-                                        }
-                                    } catch (err) {
-                                        console.error(err);
-                                    }
+                                onClick={() => {
+                                    if (!hasMessages) return;
+                                    setIsClearModalOpen(true);
                                 }}
-                                className="w-full flex items-center gap-3 text-amber-500 hover:text-amber-600 dark:text-amber-400 dark:hover:text-amber-300 transition-colors p-2 rounded-lg hover:bg-amber-50 dark:hover:bg-amber-500/10 text-left"
+                                disabled={!hasMessages}
+                                className={`w-full flex items-center gap-3 transition-colors p-2 rounded-lg text-left ${
+                                    hasMessages 
+                                    ? 'text-amber-500 hover:text-amber-600 dark:text-amber-400 dark:hover:text-amber-300 hover:bg-amber-50 dark:hover:bg-amber-500/10' 
+                                    : 'text-slate-400 dark:text-slate-600 cursor-not-allowed opacity-50'
+                                }`}
                             >
                                 <span className="material-symbols-outlined">cleaning_services</span>
                                 <div className="flex flex-col">
@@ -1048,7 +1170,13 @@ export default function GroupInfoModal({ room, onClose, onLeave, onKick, socket,
                             {isOwner && (
                                 <button
                                     onClick={async () => {
-                                        if (!confirm('Are you certain you want to DELETE this group? This cannot be undone and will remove it for EVERYONE.')) return;
+                                        const confirmed = await confirm({
+                                            title: 'Delete Group',
+                                            message: 'Are you certain you want to DELETE this group? This cannot be undone and will remove it for EVERYONE.',
+                                            type: 'danger',
+                                            confirmText: 'Delete'
+                                        });
+                                        if (!confirmed) return;
                                         // Specific confirm logic could be more robust (e.g. type name), but strict confirm is okay for now.
                                         try {
                                             const res = await fetch(`${import.meta.env.VITE_API_URL}/api/rooms/${room.id}/destroy`, {

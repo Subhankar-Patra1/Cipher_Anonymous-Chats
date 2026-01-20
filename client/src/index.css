@@ -6,11 +6,18 @@
 
 @layer base {
   html, body {
-    height: auto !important;
-    overflow-y: auto !important;
+    height: 100%;
+    overflow: hidden; /* Default: No scrollbar for App/Dashboard */
     width: 100%;
     margin: 0;
     padding: 0;
+  }
+
+  /* Allow scrolling only when on landing page */
+  html.landing-scroll,
+  html.landing-scroll body {
+    height: auto !important;
+    overflow-y: auto !important;
   }
   body {
     @apply font-sans bg-gray-50 text-slate-900 min-h-screen;
@@ -423,6 +430,23 @@ html.landing-scroll {
     transform-origin: bottom center;
   }
 
+  /* Emoji Picker Growth Animation */
+  .animate-grow-in {
+    animation: growIn 0.2s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  }
+  .animate-shrink-out {
+    animation: shrinkOut 0.15s ease-in forwards;
+  }
+
+  @keyframes growIn {
+    from { opacity: 0; transform: scale(0.5); }
+    to { opacity: 1; transform: scale(1); }
+  }
+  @keyframes shrinkOut {
+    from { opacity: 1; transform: scale(1); }
+    to { opacity: 0; transform: scale(0.5); }
+  }
+
   @keyframes bornIn {
     from { opacity: 0; transform: translate(var(--menu-tx, -50%), 20px) scale(0.5); }
     to { opacity: 1; transform: translate(var(--menu-tx, -50%), 0) scale(1); }
@@ -430,6 +454,44 @@ html.landing-scroll {
   @keyframes bornOut {
     from { opacity: 1; transform: translate(var(--menu-tx, -50%), 0) scale(1); }
     to { opacity: 0; transform: translate(var(--menu-tx, -50%), 20px) scale(0.5); }
+  }
+
+  @keyframes shrinkOut {
+    from { opacity: 1; transform: scale(1); }
+    to { opacity: 0; transform: scale(0.5); }
+  }
+
+  /* Reaction Menu (Bar) Animations */
+  .animate-menu-in {
+    animation: menuGrowIn 0.3s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+  }
+  .animate-menu-out {
+    animation: menuShrinkOut 0.2s ease-in forwards;
+  }
+
+  @keyframes menuGrowIn {
+    from { 
+      opacity: 0; 
+      transform: scale(0.3);
+      filter: blur(4px);
+    }
+    to { 
+      opacity: 1; 
+      transform: scale(1);
+      filter: blur(0);
+    }
+  }
+
+  @keyframes menuShrinkOut {
+    from { 
+      opacity: 1; 
+      transform: scale(1);
+    }
+    to { 
+      opacity: 0; 
+      transform: scale(0.3);
+      filter: blur(4px);
+    }
   }
 
   /* Staggered Item Animations */
@@ -865,5 +927,44 @@ html.landing-scroll {
 
 .animate-progress-bar {
   animation: progress 1.6s ease-in-out forwards;
+}
+
+/* Force hide scroll, overrides landing-scroll */
+html.locked-no-scroll,
+html.locked-no-scroll body {
+    overflow: hidden !important;
+}
+
+
+/* Big Text Name Styles */
+/* Big Text Name Styles - SVG approach */
+.big-text-container {
+  width: 100%;
+  max-width: 100%;
+}
+
+.big-text-svg {
+  width: 100%;
+  height: auto;
+  max-height: 200px;
+  font-family: inherit;
+  font-weight: 700;
+}
+
+/* The Outline layer */
+.big-text-outline-svg {
+  font-size: 100px;
+  fill: transparent;
+  stroke: #4ade80;
+  stroke-width: 1.5px;
+  paint-order: stroke fill;
+  filter: drop-shadow(0 0 2px #4ade80) drop-shadow(0 0 10px rgba(74, 222, 128, 0.4));
+}
+
+/* The Fill layer - SVG mask applied via React */
+.big-text-fill-svg {
+  font-size: 100px;
+  fill: rgba(74, 222, 128, 0.3); /* Subtle glare */
+  stroke: none;
 }
 

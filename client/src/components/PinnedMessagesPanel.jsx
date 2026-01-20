@@ -6,7 +6,7 @@ import { renderTextWithEmojis } from '../utils/emojiRenderer';
  * PinnedMessagesPanel - WhatsApp-style pinned message header bar
  * Shows a single pinned message preview with dropdown for multiple pins
  */
-export default function PinnedMessagesPanel({ roomId, onGoToMessage, onUnpin, socket }) {
+export default function PinnedMessagesPanel({ roomId, onGoToMessage, onUnpin, socket, decryptMessage }) {
     const { token, user } = useAuth();
     const [pinnedMessages, setPinnedMessages] = useState([]);
     const [showDropdown, setShowDropdown] = useState(false);
@@ -17,6 +17,18 @@ export default function PinnedMessagesPanel({ roomId, onGoToMessage, onUnpin, so
     useEffect(() => {
         if (!roomId) return;
         
+        const cacheKey = `pinned_msgs_${roomId}`;
+
+        // 1. Load from cache immediately
+        const cached = localStorage.getItem(cacheKey);
+        if (cached) {
+            try {
+                const parsed = JSON.parse(cached);
+                setPinnedMessages(parsed);
+                setLoading(false); 
+            } catch (e) { console.error('Cache parse error', e); }
+        }
+
         const fetchPinned = async () => {
             try {
                 const res = await fetch(
@@ -25,7 +37,25 @@ export default function PinnedMessagesPanel({ roomId, onGoToMessage, onUnpin, so
                 );
                 if (res.ok) {
                     const data = await res.json();
-                    setPinnedMessages(data);
+                    
+                    let finalData = data;
+                    // [NEW] Decrypt messages
+                    if (decryptMessage) {
+                        const decrypted = await Promise.all(
+                            data.map(async (msg) => {
+                                try {
+                                    return await decryptMessage(msg);
+                                } catch (e) {
+                                    console.error('Pinned msg decryption failed', e);
+                                    return msg;
+                                }
+                            })
+                        );
+                        finalData = decrypted;
+                    }
+                    
+                    setPinnedMessages(finalData);
+                    localStorage.setItem(cacheKey, JSON.stringify(finalData));
                 }
             } catch (err) {
                 console.error('Failed to fetch pinned messages:', err);
@@ -48,7 +78,15 @@ export default function PinnedMessagesPanel({ roomId, onGoToMessage, onUnpin, so
                     headers: { Authorization: `Bearer ${token}` }
                 })
                 .then(res => res.json())
-                .then(data => setPinnedMessages(data))
+                .then(async data => {
+                     // [NEW] Decrypt on socket update too
+                     if (decryptMessage) {
+                         const decrypted = await Promise.all(data.map(m => decryptMessage(m)));
+                         setPinnedMessages(decrypted);
+                     } else {
+                         setPinnedMessages(data);
+                     }
+                })
                 .catch(console.error);
             }
         };
@@ -62,9 +100,19 @@ export default function PinnedMessagesPanel({ roomId, onGoToMessage, onUnpin, so
         socket.on('message_pinned', handlePinned);
         socket.on('message_unpinned', handleUnpinned);
 
+        // [NEW] Clear pinned messages when chat is cleared
+        const handleChatCleared = (data) => {
+            if (String(data.roomId) === String(roomId)) {
+                setPinnedMessages([]);
+                localStorage.removeItem(`pinned_msgs_${roomId}`);
+            }
+        };
+        socket.on('chat:cleared', handleChatCleared);
+
         return () => {
             socket.off('message_pinned', handlePinned);
             socket.off('message_unpinned', handleUnpinned);
+            socket.off('chat:cleared', handleChatCleared);
         };
     }, [socket, roomId, token]);
 

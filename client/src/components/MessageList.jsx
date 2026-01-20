@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState, useLayoutEffect } from 'react';
 import { linkifyText } from '../utils/linkify';
 import UnreadDivider from './UnreadDivider';
 import { useAuth } from '../context/AuthContext';
@@ -17,12 +17,33 @@ import ImageViewerModal from './ImageViewerModal';
 import LocationMessage from './LocationMessage';
 import PollMessage from './PollMessage';
 import PollIcon from './icons/PollIcon';
+import ViewOnceIcon from './icons/ViewOnceIcon';
 import { NoMessages } from './EmptyState';
 import { renderMusicPreviews, hasMusicLinks } from '../utils/musicLinkDetector';
 import MessageInfoModal from './MessageInfoModal';
 import BigAnimatedEmoji from './BigAnimatedEmoji'; // [NEW]
 import { linkToBigEmoji, isSingleEmoji, splitEmojis } from '../utils/animatedEmojiMap'; // [NEW]
 import emojiRegex from 'emoji-regex'; // [NEW] For spoiler emoji detection
+import ReactionPicker, { REACTION_MAP } from './ReactionPicker'; // [NEW]
+import ReactionDetailsModal from './ReactionDetailsModal'; // [NEW]
+import { Emoji, EmojiStyle } from 'emoji-picker-react';
+import db, { updateLocalMessage } from '../utils/db';
+
+// Helper to get unified code from any emoji
+const getUnifiedFromEmoji = (emoji) => {
+    // Check presest map first
+    if (REACTION_MAP[emoji]) return REACTION_MAP[emoji];
+    
+    // Convert to unified code (simple version)
+    // NOTE: This handles simple emojis. Complex sequences might need more robust logic or a library.
+    // However, emoji-picker-react usually provides unified on click, but we store the CHAR in DB.
+    // For now, we try to convert code point to hex.
+    try {
+        return emoji.codePointAt(0).toString(16);
+    } catch (e) {
+        return null;
+    }
+};
 
 // Helper to detect if message is ONLY a spoiler containing 1-3 emojis
 const isSpoilerOnlyEmojis = (content) => {
@@ -120,13 +141,15 @@ const getContrastColor = (hexColor) => {
     return yiq >= 128 ? 'text-slate-900' : 'text-white';
 };
 
-export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone, onRetry, onMarkHeard, onEdit, onImageLoad, onRegenerate, onPin, searchTerm, scrollToMessage, onImageClick, isSelectionMode, isSelected, onToggleSelection, onEnableSelectionMode, bubbleColor, onBottomInView, onViewInfo }) => { // [MODIFIED] Added bubbleColor, onBottomInView, onViewInfo
+export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone, onRetry, onRetryDecryption, onMarkHeard, onEdit, onImageLoad, onRegenerate, onPin, onStar, onUnstar, searchTerm, scrollToMessage, onImageClick, isSelectionMode, isSelected, onToggleSelection, onEnableSelectionMode, bubbleColor, onBottomInView, onViewInfo, isRestoreAnimation, animationDelay, onReact, onUnreact, onViewReactions, hasSkippedSync }) => { // [MODIFIED] Added hasSkippedSync
  // [MODIFIED] Added onImageClick
     const [showMenu, setShowMenu] = useState(false);
     const [menuClosing, setMenuClosing] = useState(false); // [NEW] For close animation
     const [showFeedback, setShowFeedback] = useState(false); // [NEW] Feedback state
     const [viewingMessageInfo, setViewingMessageInfo] = useState(null); // [NEW] State for MessageInfoModal
+    const [showReactionPicker, setShowReactionPicker] = useState(false); // [NEW]
     const menuRef = useRef(null);
+    const reactionButtonRef = useRef(null); // [NEW] Add ref for reaction button
     const { user, token } = useAuth(); 
     const isAudio = msg.type === 'audio';
     const [imgLoaded, setImgLoaded] = useState(false);
@@ -139,6 +162,50 @@ export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone,
             return false;
         }
     });
+
+    // [NEW] Listen for external download events (e.g., from SharedMedia)
+    useEffect(() => {
+        const handleExternalDownload = (e) => {
+            if (e.detail && String(e.detail.messageId) === String(msg.id)) {
+                setIsDownloaded(true);
+            }
+        };
+        window.addEventListener('media:downloaded', handleExternalDownload);
+        return () => window.removeEventListener('media:downloaded', handleExternalDownload);
+    }, [msg.id]);
+
+    const [isDownloading, setIsDownloading] = useState(false);
+
+    const handleFileIconClick = (e) => {
+        e.stopPropagation();
+        if (isMe || isDownloaded || isDownloading) return;
+
+        setIsDownloading(true);
+        // Simulate network delay
+        setTimeout(() => {
+            markAsDownloaded(); // This updates localStorage and isDownloaded state
+            setIsDownloading(false);
+            
+            // Dispatch event to sync with shared media if needed (though shared media reads from localStorage on mount/update)
+            // But we should notify SharedMedia too if it's open.
+            window.dispatchEvent(new CustomEvent('media:downloaded', { detail: { messageId: String(msg.id) } }));
+        }, 1500);
+    };
+
+    const reactions = msg.reactions || [];
+    const myReaction = reactions.find(r => parseInt(r.userId) === parseInt(user?.id))?.reaction;
+    
+    // Group reactions for display
+    const reactionGroups = reactions.reduce((acc, r) => {
+        const found = acc.find(g => g.emoji === r.reaction);
+        if (found) {
+            found.count++;
+            if (parseInt(r.userId) === parseInt(user?.id)) found.isMe = true;
+        } else {
+            acc.push({ emoji: r.reaction, count: 1, isMe: parseInt(r.userId) === parseInt(user?.id) });
+        }
+        return acc;
+    }, []);
 
     const linkClass = isMe 
         ? "text-white hover:text-slate-200 underline break-words decoration-violet-400 decoration-1 hover:decoration-2"
@@ -238,6 +305,59 @@ export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone,
         ? ((msg.viewed_by?.length || 0) >= ((msg.room_member_count || 2) - 1))
         : (msg.viewed_by?.includes(user?.id));
 
+    // [NEW] Retry Decryption UI
+    if (msg.content === '🔒 Waiting for key...' || msg.content === '🔒 Decryption Failed') {
+        // [NEW] Hide messages if user skipped sync (user doesn't want to see "Waiting for key" all over)
+        if (hasSkippedSync) return null;
+
+        const isRetrying = msg.isDecryptionRetrying;
+        return (
+            <div 
+                id={`msg-${msg.id}`}
+                className={`flex ${isMe ? 'justify-end' : 'justify-start'} group max-w-full my-1`}
+            >
+                <div className={`
+                    max-w-[75%] rounded-2xl flex items-center gap-3
+                    ${isMe 
+                        ? `bg-violet-600 text-white ${(msg.type === 'image' || msg.type === 'video' || msg.type === 'gif') ? 'rounded-xl' : 'rounded-2xl'} rounded-tr-sm` 
+                        : 'bg-white dark:bg-slate-800 text-slate-800 dark:text-gray-100 rounded-tl-sm border border-slate-200 dark:border-slate-700 shadow-sm'
+                    }
+                    ${(msg.type === 'image' || msg.type === 'video' || msg.type === 'gif') ? 'p-[2px]' : 'px-3 py-2'}
+                `}>
+                    <div className="flex flex-col">
+                        <span className="text-sm font-medium opacity-90">
+                           Encrypted Message
+                        </span>
+                        <span className="text-xs opacity-75">
+                            {msg.content === '🔒 Decryption Failed' ? 'Decryption failed' : 'Waiting for key...'}
+                        </span>
+                    </div>
+                    
+                    <button
+                        onClick={(e) => {
+                            e.stopPropagation();
+                            if (!isRetrying && onRetryDecryption) onRetryDecryption(msg.id);
+                        }}
+                        disabled={isRetrying}
+                        className={`
+                            p-1.5 rounded-full transition-colors flex items-center justify-center
+                            ${isMe 
+                                ? 'hover:bg-white/20 text-white' 
+                                : 'hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-500 dark:text-slate-400'
+                            }
+                        `}
+                        title="Retry Decryption"
+                    >
+                        <span className={`material-symbols-outlined text-[18px] ${isRetrying ? 'animate-spin' : ''}`}>
+                            refresh
+                        </span>
+                        {/* {isRetrying && <span className="ml-1 text-xs">Retrying...</span>} */}
+                    </button>
+                </div>
+            </div>
+        );
+    }
+    
     if (msg.is_deleted_for_everyone) {
         return (
             <div 
@@ -271,7 +391,12 @@ export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone,
             className={`
                 flex ${isMe ? 'justify-end' : 'justify-start'} group ${isSelectionMode ? 'w-[calc(100%+2rem)] sm:w-[calc(100%+3rem)]' : 'max-w-full'} ${showMenu ? 'z-[100] relative' : ''}
                 ${isSelectionMode ? 'cursor-pointer hover:bg-black/5 dark:hover:bg-white/5 transition-colors -mx-4 px-4 sm:-mx-6 sm:px-6 py-0.5' : ''}
+                ${isRestoreAnimation ? 'animate-in fade-in slide-in-from-bottom-8 duration-700 fill-mode-backwards' : ''}
             `}
+            style={{
+                ...(isMe && bubbleColor ? { backgroundColor: bubbleColor, borderColor: 'transparent' } : {}),
+                ...(isRestoreAnimation ? { animationDelay } : {})
+            }}
             onClick={(e) => {
                 if (isSelectionMode) {
                     e.stopPropagation();
@@ -329,6 +454,7 @@ export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone,
 
                 
                 <div className="relative group">
+                    <div className="relative w-fit max-w-full">
                     <div className={`
                         message-bubble
                         ${(msg.type === 'image' || msg.type === 'gif' || msg.type === 'location' || ((linkToBigEmoji(msg.content) || isSingleEmoji(msg.content) || isSpoilerOnlyEmojis(msg.content)) && !msg.replyTo)) ? 'p-1' : 'px-4 py-3'}
@@ -426,7 +552,7 @@ export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone,
                                     </div>
                                 ) : (
                                     <div className="text-xs opacity-80 line-clamp-2">
-                                        {linkifyText(msg.replyTo.text, '', isMe ? 'text-white/90 underline break-all' : 'text-violet-600 dark:text-violet-300 underline break-all', { disableBigEmoji: true })}
+                                        {linkifyText(msg.replyTo.plaintext_content || msg.replyTo.text, '', isMe ? 'text-white/90 underline break-all' : 'text-violet-600 dark:text-violet-300 underline break-all', { disableBigEmoji: true })}
                                     </div>
                                 )}
                             </div>
@@ -434,7 +560,7 @@ export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone,
 
                         {isAudio ? (
                             // ... (Audio rendering logic same)
-                             <div className="pr-6 pt-1 pb-1 min-w-[200px]">
+                             <div className="pr-6 pt-1 pb-1 min-w-[200px] relative">
                                 {msg.uploadStatus === 'uploading' ? (
                                     <div className="flex items-center gap-3 py-1">
                                          <div className="w-8 h-8 rounded-full bg-slate-100/10 flex items-center justify-center">
@@ -467,6 +593,16 @@ export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone,
                                         onMarkHeard={() => onMarkHeard(msg.id)}
                                     />
                                 )}
+                                {/* Overlay Status Icon for Audio */}
+                                {isMe && (
+                                    <div className="absolute bottom-1 right-1 flex items-center justify-center p-0.5 rounded-full bg-black/30 backdrop-blur-[1px] z-20">
+                                        {msg.status === 'sending' && <span className="material-symbols-outlined text-[10px] text-white">access_time</span>}
+                                        {msg.status === 'error' && <span className="material-symbols-outlined text-[12px] text-red-400">error</span>}
+                                        {msg.status === 'sent' && <span className="material-symbols-outlined text-[14px] text-white">check</span>}
+                                        {msg.status === 'delivered' && <span className="material-symbols-outlined text-[14px] text-white">done_all</span>}
+                                        {msg.status === 'seen' && <span className="material-symbols-outlined text-[14px] text-blue-400 font-bold filled">done_all</span>}
+                                    </div>
+                                )}
                             </div>
                         ) : msg.type === 'gif' ? (
                             <>
@@ -493,15 +629,26 @@ export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone,
                                         title="Open full size"
                                     />
                                 )}
-                                <div className="absolute bottom-1 right-1 bg-black/50 text-white text-[9px] px-1 rounded uppercase font-bold tracking-wider pointer-events-none">
-                                    GIF
+                                    <div className="absolute bottom-1 right-1 bg-black/50 text-white text-[9px] px-1 rounded uppercase font-bold tracking-wider pointer-events-none">
+                                        GIF
+                                    </div>
+                                    
+                                    {/* Overlay Status Icon for GIF */}
+                                    {isMe && (
+                                        <div className="absolute bottom-1 right-[38px] flex items-center justify-center p-0.5 rounded-full bg-black/30 backdrop-blur-[1px] z-20">
+                                            {msg.status === 'sending' && <span className="material-symbols-outlined text-[10px] text-white">access_time</span>}
+                                            {msg.status === 'error' && <span className="material-symbols-outlined text-[12px] text-red-400">error</span>}
+                                            {msg.status === 'sent' && <span className="material-symbols-outlined text-[14px] text-white">check</span>}
+                                            {msg.status === 'delivered' && <span className="material-symbols-outlined text-[14px] text-white">done_all</span>}
+                                            {msg.status === 'seen' && <span className="material-symbols-outlined text-[14px] text-blue-400 font-bold filled">done_all</span>}
+                                        </div>
+                                    )}
                                 </div>
-                            </div>
-                            {msg.content && msg.content !== 'GIF' && (
-                                <p className="text-sm mt-1 whitespace-pre-wrap break-words">
-                                    {linkifyText(msg.content, searchTerm, linkClass)}
-                                </p>
-                            )}
+                                {msg.content && msg.content !== 'GIF' && (
+                                    <p className="text-sm mt-1 whitespace-pre-wrap break-words">
+                                        {linkifyText(msg.content, searchTerm, linkClass)}
+                                    </p>
+                                )}
                             </>
                         ) : ((linkToBigEmoji(msg.content) || isSingleEmoji(msg.content)) && !msg.replyTo) ? (
                             // Big emoji display - render each emoji separately
@@ -600,17 +747,11 @@ export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone,
                                             )
                                             /* 4. OPENED (Sender/Receiver) */
                                             : (isViewOnceOpened) ? (
-                                                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" className="text-slate-500 dark:text-slate-300">
-                                                    <path d="M12 22A10 10 0 0 1 12 2" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-                                                    <path d="M12 2A10 10 0 0 1 12 22" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeDasharray="2 4" />
-                                                </svg>
+                                                <ViewOnceIcon isOpened={true} className="w-6 h-6 text-slate-500 dark:text-slate-300" />
                                             ) 
                                             /* 5. UNOPENED / READY (1 Icon) */
                                             : (
-                                                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" className="text-indigo-600 dark:text-indigo-400">
-                                                     <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2" strokeDasharray="5 3" strokeLinecap="round" />
-                                                     <path d="M10.5 9L12 7.5V16.5" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
-                                                </svg>
+                                                <ViewOnceIcon isOpened={false} className="w-6 h-6 text-indigo-600 dark:text-indigo-400" />
                                             )}
                                         </div>
                                         
@@ -630,6 +771,19 @@ export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone,
                                                 </span>
                                             )}
                                         </div>
+                                        
+                                        {/* Overlay Status Icon for View Once */}
+                                        {isMe && !isViewOnceOpened && (
+                                            <div className="absolute top-1/2 -translate-y-1/2 right-3 flex items-center justify-center">
+                                                {msg.status === 'sending' && <span className="material-symbols-outlined text-[10px] text-slate-400">access_time</span>}
+                                                {msg.status === 'error' && <span className="material-symbols-outlined text-[12px] text-red-400">error</span>}
+                                                {/* We don't show checks here because the 'Opened' state is the main indicator for View Once */}
+                                                {/* But checking Whatsapp style: they show ticks until opened. */}
+                                                {msg.status === 'sent' && <span className="material-symbols-outlined text-[14px] text-slate-400">check</span>}
+                                                {msg.status === 'delivered' && <span className="material-symbols-outlined text-[14px] text-slate-400">done_all</span>}
+                                                {msg.status === 'seen' && <span className="material-symbols-outlined text-[14px] text-blue-400 font-bold filled">done_all</span>}
+                                            </div>
+                                        )}
                                     </div>
                                     
                                      {msg.caption && !msg.is_view_once && (
@@ -710,6 +864,17 @@ export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone,
                                                 )}
                                             </div>
                                         )}
+
+                                        {/* Overlay Status Icon for Grid */}
+                                        {isMe && (
+                                            <div className="absolute bottom-1 right-1 flex items-center justify-center p-0.5 rounded-full bg-black/30 backdrop-blur-[1px] z-20">
+                                                {msg.status === 'sending' && <span className="material-symbols-outlined text-[10px] text-white">access_time</span>}
+                                                {msg.status === 'error' && <span className="material-symbols-outlined text-[12px] text-red-400">error</span>}
+                                                {msg.status === 'sent' && <span className="material-symbols-outlined text-[14px] text-white">check</span>}
+                                                {msg.status === 'delivered' && <span className="material-symbols-outlined text-[14px] text-white">done_all</span>}
+                                                {msg.status === 'seen' && <span className="material-symbols-outlined text-[14px] text-blue-400 font-bold filled">done_all</span>}
+                                            </div>
+                                        )}
                                     </div>
                                     
                                     {/* Caption for Grid */}
@@ -723,9 +888,9 @@ export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone,
                                     )}
                                 </div>
                             ) : (
-                            <div className="flex flex-col mt-1 mb-1 max-w-[280px] sm:max-w-[320px] min-w-[120px]">
+                            <div className="flex flex-col max-w-[280px] sm:max-w-[320px] min-w-[120px]">
                                 <div 
-                                    className="relative group/image bg-slate-200 dark:bg-slate-700 rounded-[6px] overflow-hidden transition-all duration-200"
+                                    className={`relative group/image bg-slate-200 dark:bg-slate-700 rounded-[10px] ${isMe ? 'rounded-tr-[2px]' : 'rounded-tl-[2px]'} overflow-hidden transition-all duration-200`}
                                     style={(() => {
                                         const originalW = msg.image_width || msg.attachments?.[0]?.width;
                                         const originalH = msg.image_height || msg.attachments?.[0]?.height;
@@ -836,6 +1001,17 @@ export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone,
                                             <span className="material-symbols-outlined text-[18px]">download</span>
                                         </button>
                                     )}
+                                    {/* Overlay Status Icon */}
+                                    {isMe && (
+                                        <div className="absolute bottom-1 right-1 flex items-center justify-center p-0.5 rounded-full bg-black/30 backdrop-blur-[1px] z-20">
+                                            {msg.status === 'sending' && <span className="material-symbols-outlined text-[10px] text-white">access_time</span>}
+                                            {msg.status === 'error' && <span className="material-symbols-outlined text-[12px] text-red-400">error</span>}
+                                            {msg.status === 'sent' && <span className="material-symbols-outlined text-[14px] text-white">check</span>}
+                                            {msg.status === 'delivered' && <span className="material-symbols-outlined text-[14px] text-white">done_all</span>}
+                                            {msg.status === 'seen' && <span className="material-symbols-outlined text-[14px] text-blue-400 font-bold filled">done_all</span>}
+                                        </div>
+                                    )}
+
                                     {msg.status === 'sending' && (
                                         <div className="absolute inset-0 bg-black/40 backdrop-blur-[2px] flex flex-col items-center justify-center transition-all duration-300 z-10">
                                             {(msg.uploadProgress || 0) < 1 ? (
@@ -880,36 +1056,97 @@ export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone,
                                     )}
                                 </div>
                             ))) : msg.type === 'file' ? (
-                                <div className="flex flex-col mt-1 mb-1 min-w-[200px] max-w-[300px]">
+                                <div className="flex flex-col mt-1 mb-1 min-w-[200px] max-w-[300px] relative pb-0">
                                     <div 
                                         className="flex items-center gap-3"
                                     >
-                                        <div className={`
-                                            w-10 h-10 rounded-lg flex items-center justify-center shrink-0
-                                            ${isMe ? 'bg-white/20 text-white' : 'bg-slate-200 dark:bg-slate-600 text-slate-500 dark:text-slate-300'}
-                                        `}>
-                                            <span className="material-symbols-outlined text-[24px]">
-                                                {msg.file_extension === 'pdf' ? 'picture_as_pdf' :
-                                                 ['doc', 'docx'].includes(msg.file_extension) ? 'description' :
-                                                 ['xls', 'xlsx', 'csv'].includes(msg.file_extension) ? 'table_view' :
-                                                 ['ppt', 'pptx'].includes(msg.file_extension) ? 'slideshow' :
-                                                 ['zip', 'rar'].includes(msg.file_extension) ? 'folder_zip' :
-                                                 'draft'
-                                                }
-                                            </span>
-                                        </div>
+                                        <div 
+                                        onClick={(e) => {
+                                            e.stopPropagation();
+                                            if (!isMe && !isDownloaded && !msg.isDownloadingLocal) {
+                                                // Trigger local fake download
+                                                // We'll use a temp state on the msg object or a local state logic?
+                                                // Better to use a local state. We need to add 'isDownloading' state to MessageItem first.
+                                                // Assuming we can't easily add state in this replace block without changing the whole component, 
+                                                // but wait, I can modify the component start to add state.
+                                                // Actually, let's just use the ref or assume I added the state. 
+                                                // For now, let's just call a handler I'll define or inline it if I can access setters.
+                                                // I need to add the state first. Using a separate replace for that.
+                                                // This replacement is just for the render.
+                                                // Wait, I should add the state and handler in a previous or separate step if I can't do it all at once.
+                                                // But I can try to do it all if I target a larger block.
+                                                // Let's stick to targeting the download implementation.
+                                                
+                                                // Just calling the handler I will add.
+                                                handleFileIconClick(e);
+                                            }
+                                        }}
+                                        className={`
+                                            w-10 h-10 rounded-xl flex items-center justify-center shrink-0 relative
+                                            ${isMe ? 'bg-white/20 text-white' : 'bg-slate-200 dark:bg-slate-700 text-slate-500 dark:text-slate-400'}
+                                            ${!isMe && !isDownloaded ? 'cursor-pointer hover:bg-slate-300 dark:hover:bg-slate-600 transition-colors' : ''}
+                                        `}
+                                    >
+                                        <span className="material-symbols-outlined text-[24px]">
+                                            {isDownloading ? ( // Need to add isDownloading state
+                                                <div className="w-5 h-5 border-2 border-current border-t-transparent rounded-full animate-spin" />
+                                            ) : (
+                                                !isMe && !isDownloaded ? 'download' : (
+                                                    msg.file_extension === 'pdf' ? 'picture_as_pdf' :
+                                                    ['doc', 'docx'].includes(msg.file_extension) ? 'description' :
+                                                    ['xls', 'xlsx', 'csv'].includes(msg.file_extension) ? 'table_view' :
+                                                    ['ppt', 'pptx'].includes(msg.file_extension) ? 'slideshow' :
+                                                    ['zip', 'rar'].includes(msg.file_extension) ? 'folder_zip' :
+                                                    'draft'
+                                                )
+                                            )}
+                                        </span>
+                                    </div>
                                         
-                                        <div className="flex flex-col min-w-0 flex-1">
-                                            <span className={`text-sm font-medium truncate ${isMe ? 'text-white' : 'text-slate-700 dark:text-slate-200'}`}>
-                                                {msg.file_name}
-                                            </span>
-                                            <div className="flex items-center justify-between mt-0.5">
-                                                <span className={`text-[10px] ${isMe ? 'text-violet-200' : 'text-slate-400'}`}>
+                                        <div className="flex flex-1 items-center justify-between min-w-0 gap-2">
+                                            <div className="flex flex-col justify-center gap-0 min-w-0 flex-1">
+                                                <span className={`text-sm font-medium truncate ${isMe ? 'text-white' : 'text-slate-700 dark:text-slate-200'}`}>
+                                                    {msg.file_name}
+                                                </span>
+                                                <span className={`text-[10px] mt-0.5 ${isMe ? 'text-violet-200' : 'text-slate-400'}`}>
                                                     {formatBytes(msg.file_size)} • {msg.file_extension?.toUpperCase()}
                                                 </span>
-                                                {msg.status === 'sending' ? (
-                                                    <span className="w-3 h-3 border-2 border-current border-t-transparent rounded-full animate-spin opacity-70" />
-                                                ) : (
+                                            </div>
+
+                                            <div className="flex items-center gap-2 mb-3 shrink-0">
+                                                {isDownloaded && ['pdf', 'jpg', 'jpeg', 'png', 'gif', 'webp', 'mp4', 'webm', 'mp3', 'wav', 'txt'].includes((msg.file_extension || "").toLowerCase().replace('.', '')) && msg.status !== 'sending' && (
+                                                    <button
+                                                        onClick={async (e) => {
+                                                            e.stopPropagation();
+                                                            try {
+                                                                const win = window.open('', '_blank');
+                                                                if (win) win.document.write('Loading...');
+                                                                
+                                                                const response = await fetch(msg.file_url);
+                                                                const blob = await response.blob();
+                                                                const objectUrl = URL.createObjectURL(blob);
+                                                                
+                                                                if (win) win.location.href = objectUrl;
+                                                                else window.open(objectUrl, '_blank');
+                                                                
+                                                                setTimeout(() => URL.revokeObjectURL(objectUrl), 60000);
+                                                            } catch (err) {
+                                                                console.error("Failed to open file:", err);
+                                                                window.open(msg.file_url, '_blank');
+                                                            }
+                                                        }}
+                                                        className={`
+                                                            text-[9px] font-bold px-1.5 py-0.5 rounded transition-colors uppercase tracking-wider h-6 flex items-center
+                                                            ${isMe 
+                                                                ? 'bg-white/20 hover:bg-white/30 text-white' 
+                                                                : 'bg-violet-100 hover:bg-violet-200 text-violet-600 dark:bg-violet-900/40 dark:hover:bg-violet-900/60 dark:text-violet-300'}
+                                                        `}
+                                                    >
+                                                        OPEN
+                                                    </button>
+                                                )}
+                                                
+                                                {msg.status !== 'sending' && (
                                                     <a 
                                                         href={msg.file_url} 
                                                         download={msg.file_name} 
@@ -923,7 +1160,10 @@ export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone,
                                                             }
                                                         `}
                                                         title="Download"
-                                                        onClick={(e) => e.stopPropagation()} 
+                                                        onClick={(e) => { 
+                                                            e.stopPropagation(); 
+                                                            markAsDownloaded(); 
+                                                        }} 
                                                     >
                                                         <span className="material-symbols-outlined text-[20px]">download</span>
                                                     </a>
@@ -936,44 +1176,80 @@ export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone,
                                             {linkifyText(msg.caption, searchTerm, linkClass)}
                                         </p>
                                     )}
+                                    {/* Overlay Status Icon for File */}
+                                    {isMe && (
+                                        <div className="absolute -bottom-1 -right-1 flex items-center justify-center z-20 drop-shadow-md">
+                                            {msg.status === 'sending' && <span className="material-symbols-outlined text-[10px] text-violet-200/80">access_time</span>}
+                                            {msg.status === 'error' && <span className="material-symbols-outlined text-[12px] text-red-300">error</span>}
+                                            {msg.status === 'sent' && <span className="material-symbols-outlined text-[14px] text-violet-200/90">check</span>}
+                                            {msg.status === 'delivered' && <span className="material-symbols-outlined text-[14px] text-violet-200/90">done_all</span>}
+                                            {msg.status === 'seen' && <span className="material-symbols-outlined text-[14px] text-blue-400 font-bold filled">done_all</span>}
+                                        </div>
+                                    )}
+
+
                                 </div>
                             ) : msg.type === 'location' ? (
-                                <LocationMessage 
-                                    latitude={parseFloat(msg.latitude)}
-                                    longitude={parseFloat(msg.longitude)}
-                                    address={msg.address}
-                                    isMe={isMe}
-                                />
+                                <div className="relative">
+                                    <LocationMessage 
+                                        latitude={parseFloat(msg.latitude)}
+                                        longitude={parseFloat(msg.longitude)}
+                                        address={msg.address}
+                                        isMe={isMe}
+                                    />
+                                    {/* Overlay Status Icon for Location */}
+                                    {isMe && (
+                                        <div className="absolute bottom-1 right-1 flex items-center justify-center p-0.5 rounded-full bg-black/30 backdrop-blur-[1px] z-20">
+                                            {msg.status === 'sending' && <span className="material-symbols-outlined text-[10px] text-white">access_time</span>}
+                                            {msg.status === 'error' && <span className="material-symbols-outlined text-[12px] text-red-400">error</span>}
+                                            {msg.status === 'sent' && <span className="material-symbols-outlined text-[14px] text-white">check</span>}
+                                            {msg.status === 'delivered' && <span className="material-symbols-outlined text-[14px] text-white">done_all</span>}
+                                            {msg.status === 'seen' && <span className="material-symbols-outlined text-[14px] text-blue-400 font-bold filled">done_all</span>}
+                                        </div>
+                                    )}
+                                </div>
                             ) : msg.type === 'poll' && msg.poll ? (
-                                <PollMessage 
-                                    poll={msg.poll}
-                                    onVote={async (pollId, optionIds) => {
-                                        const token = localStorage.getItem('token');
-                                        const res = await fetch(
-                                            `${import.meta.env.VITE_API_URL}/api/polls/${pollId}/vote`,
-                                            {
-                                                method: 'POST',
-                                                headers: {
-                                                    'Content-Type': 'application/json',
-                                                    Authorization: `Bearer ${token}`
-                                                },
-                                                body: JSON.stringify({ optionIds })
-                                            }
-                                        );
-                                        if (!res.ok) throw new Error('Vote failed');
-                                    }}
-                                    onClose={async (pollId) => {
-                                        const token = localStorage.getItem('token');
-                                        await fetch(
-                                            `${import.meta.env.VITE_API_URL}/api/polls/${pollId}/close`,
-                                            {
-                                                method: 'POST',
-                                                headers: { Authorization: `Bearer ${token}` }
-                                            }
-                                        );
-                                    }}
-                                    isMe={isMe}
-                                />
+                                <div className="relative">
+                                    <PollMessage 
+                                        poll={msg.poll}
+                                        onVote={async (pollId, optionIds) => {
+                                            const token = localStorage.getItem('token');
+                                            const res = await fetch(
+                                                `${import.meta.env.VITE_API_URL}/api/polls/${pollId}/vote`,
+                                                {
+                                                    method: 'POST',
+                                                    headers: {
+                                                        'Content-Type': 'application/json',
+                                                        Authorization: `Bearer ${token}`
+                                                    },
+                                                    body: JSON.stringify({ optionIds })
+                                                }
+                                            );
+                                            if (!res.ok) throw new Error('Vote failed');
+                                        }}
+                                        onClose={async (pollId) => {
+                                            const token = localStorage.getItem('token');
+                                            await fetch(
+                                                `${import.meta.env.VITE_API_URL}/api/polls/${pollId}/close`,
+                                                {
+                                                    method: 'POST',
+                                                    headers: { Authorization: `Bearer ${token}` }
+                                                }
+                                            );
+                                        }}
+                                        isMe={isMe}
+                                    />
+                                    {/* Overlay Status Icon for Poll */}
+                                    {isMe && (
+                                        <div className="absolute bottom-1 right-1 flex items-center justify-center p-0.5 rounded-full bg-black/30 backdrop-blur-[1px] z-20">
+                                            {msg.status === 'sending' && <span className="material-symbols-outlined text-[10px] text-white">access_time</span>}
+                                            {msg.status === 'error' && <span className="material-symbols-outlined text-[12px] text-red-400">error</span>}
+                                            {msg.status === 'sent' && <span className="material-symbols-outlined text-[14px] text-white">check</span>}
+                                            {msg.status === 'delivered' && <span className="material-symbols-outlined text-[14px] text-white">done_all</span>}
+                                            {msg.status === 'seen' && <span className="material-symbols-outlined text-[14px] text-blue-400 font-bold filled">done_all</span>}
+                                        </div>
+                                    )}
+                                </div>
                             ) : (
                             <div className={`pr-2 ${!isMe && isAi ? 'markdown-content' : 'pr-6'}`}>
                                 {isAi && !isMe ? (
@@ -1010,7 +1286,7 @@ export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone,
                         </>
                         )}
                         
-                        {isMe && (
+                        {isMe && !['image', 'gif', 'file', 'audio', 'location', 'poll'].includes(msg.type) && (
                             <div className={`absolute flex items-center gap-1 ${
                                 (isSpoilerOnlyEmojis(msg.content) && !msg.replyTo)
                                     ? 'bottom-3 right-3 text-white drop-shadow-[0_1px_2px_rgba(0,0,0,0.8)]'
@@ -1018,7 +1294,7 @@ export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone,
                                         ? 'bottom-1 right-0 bg-black/30 backdrop-blur-[2px] rounded-full px-1.5 py-0.5 text-white/90 shadow-sm'
                                         : 'bottom-0.5 right-1.5 text-violet-200/80 drop-shadow-md'
                             }`}>
-                                {msg.status === 'sending' && msg.type !== 'image' && <span className="material-symbols-outlined text-[10px] animate-spin">progress_activity</span>}
+                                {msg.status === 'sending' && <span className="material-symbols-outlined text-[10px]">access_time</span>}
                                 {msg.status === 'error' && (
                                     <button 
                                         onClick={(e) => { e.stopPropagation(); onRetry && onRetry(msg); }}
@@ -1030,16 +1306,54 @@ export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone,
                                 )}
                                 {msg.status === 'sent' && <span className="material-symbols-outlined text-[14px]">check</span>}
                                 {msg.status === 'delivered' && <span className="material-symbols-outlined text-[14px] text-slate-300 dark:text-slate-400">done_all</span>}
-                                {msg.status === 'seen' && <span className="material-symbols-outlined text-[14px] text-white font-bold filled">done_all</span>}
+                                {msg.status === 'seen' && <span className="material-symbols-outlined text-[14px] text-blue-400 font-bold filled">done_all</span>}
                             </div>
                         )}
                     </div>
 
                 <div className={`
                     absolute top-1/2 -translate-y-1/2
-                    ${isMe ? 'right-full mr-2' : 'left-full ml-2'}
-                    z-10
+                    ${isMe ? 'right-full mr-2 flex-row-reverse' : 'left-full ml-2'}
+                    z-10 flex items-center gap-1
                 `}>
+                    {/* [NEW] Reaction Picker Toggle */}
+                    {(!msg.isStreaming && !msg.isSkeleton && !msg.is_deleted_for_everyone && msg.type !== 'system') && !isSelectionMode && (
+                        <div className="relative">
+                            <button
+                                ref={reactionButtonRef}
+                                type="button"
+                                className={`
+                                    ${showReactionPicker ? 'opacity-100 text-violet-500 bg-slate-100 dark:bg-slate-800/50' : 'opacity-0 group-hover:opacity-100'}
+                                    transition-opacity duration-150
+                                    text-slate-400 dark:text-slate-300 hover:text-violet-500 dark:hover:text-violet-400
+                                    w-7 h-7 flex items-center justify-center rounded-full
+                                `}
+                                onClick={() => setShowReactionPicker(!showReactionPicker)}
+                                title="Add reaction"
+                            >
+                                <span className="material-symbols-outlined text-[18px]">add_reaction</span>
+                            </button>
+
+                            {showReactionPicker && (
+                                <ReactionPicker
+                                    className=""
+                                    origin={isMe ? 'bottom-right' : 'bottom-left'}
+                                    triggerRef={reactionButtonRef}
+                                    currentReaction={myReaction}
+                                    onSelect={(emoji) => {
+                                        onReact(msg.id, emoji);
+                                    }}
+                                    onRemove={() => {
+                                        onUnreact(msg.id);
+                                    }}
+                                    onClose={() => {
+                                        setShowReactionPicker(false);
+                                    }}
+                                />
+                            )}
+                        </div>
+                    )}
+
                     {(!msg.isStreaming && !msg.isSkeleton) && 
                       // Conditionally hide menu for Images/ViewOnce if:
                       // 1. Sender: Still sending
@@ -1048,401 +1362,486 @@ export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone,
                           (isMe && msg.status === 'sending') || 
                           (!isMe && !msg.is_view_once && !(msg.attachments && msg.attachments.length > 1) && (!isDownloaded || !imgLoaded))
                       )) && !isSelectionMode && (
-                        <button
-                            type="button"
-                            className={`
-                                ${showMenu ? 'opacity-100 text-slate-800 dark:text-white bg-slate-100 dark:bg-slate-800/50' : 'opacity-0 group-hover:opacity-100'}
-                                transition-opacity duration-150
-                                text-slate-400 dark:text-slate-300 hover:text-slate-600 dark:hover:text-white
-                                w-7 h-7 flex items-center justify-center rounded-full
-                            `}
-                            onClick={toggleMenu}
-                        >
-                            ⋯
-                        </button>
-                    )}
+                        <div className="relative">
+                            <button
+                                type="button"
+                                className={`
+                                    ${showMenu ? 'opacity-100 text-slate-800 dark:text-white bg-slate-100 dark:bg-slate-800/50' : 'opacity-0 group-hover:opacity-100'}
+                                    transition-opacity duration-150
+                                    text-slate-400 dark:text-slate-300 hover:text-slate-600 dark:hover:text-white
+                                    w-7 h-7 flex items-center justify-center rounded-full
+                                `}
+                                onClick={toggleMenu}
+                            >
+                                <span className="material-symbols-outlined text-[18px]">more_horiz</span>
+                            </button>
 
-                    {showMenu && (
-                        <div
-                            ref={menuRef}
-                            className={`
-                                absolute top-[calc(100%+2px)]
-                                ${isMe ? 'right-0' : 'left-0'}
-                                w-48
-                                rounded-2xl
-                                bg-white dark:bg-slate-900
-                                border border-slate-200 dark:border-slate-700/70
-                                shadow-2xl shadow-black/20 dark:shadow-black/60
-                                py-1
-                                z-[9999]
-                                transition-all duration-[180ms] ease-out
-                                ${menuClosing 
-                                    ? 'opacity-0 scale-95' 
-                                    : 'opacity-100 scale-100 animate-[menuBornIn_180ms_ease-out]'}
-                            `}
-                            style={{ transformOrigin: isMe ? 'top right' : 'top left' }}
-                        >
-                            {isAi && onRegenerate && (
-                                <button 
-                                    className="w-full flex items-center gap-2 px-3 py-2.5 text-left text-sm text-slate-700 dark:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 first:rounded-t-2xl last:rounded-b-2xl transition-colors"
-                                    onClick={(e) => {
-                                        e.stopPropagation();
-                                        onRegenerate(msg.id);
-                                        setShowMenu(false);
-                                    }}
+                            {showMenu && (
+                                <div
+                                    ref={menuRef}
+                                    className={`
+                                        absolute top-[calc(100%+8px)]
+                                        ${isMe ? 'right-0' : 'left-0'}
+                                        w-48
+                                        rounded-2xl
+                                        bg-white dark:bg-slate-900
+                                        border border-slate-200 dark:border-slate-700/70
+                                        shadow-2xl shadow-black/20 dark:shadow-black/60
+                                        py-1
+                                        z-[9999]
+                                        transition-all duration-[180ms] ease-out
+                                        ${menuClosing 
+                                            ? 'opacity-0 scale-95' 
+                                            : 'opacity-100 scale-100 animate-[menuBornIn_180ms_ease-out]'}
+                                    `}
+                                    style={{ transformOrigin: isMe ? 'top right' : 'top left' }}
                                 >
-                                    <span className="material-symbols-outlined text-base">refresh</span>
-                                    <span>Regenerate Response</span>
-                                </button>
-                            )}
+                                    {isAi && onRegenerate && (
+                                        <button 
+                                            className="w-full flex items-center gap-2 px-3 py-2.5 text-left text-sm text-slate-700 dark:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 first:rounded-t-2xl last:rounded-b-2xl transition-colors"
+                                            onClick={(e) => {
+                                                e.stopPropagation();
+                                                onRegenerate(msg.id);
+                                                closeMenu();
+                                            }}
+                                        >
+                                            <span className="material-symbols-outlined text-base">refresh</span>
+                                            <span>Regenerate Response</span>
+                                        </button>
+                                    )}
 
-                            {isAi ? (
-                                <>
-                                    <button 
-                                        className="w-full flex items-center gap-2 px-3 py-2.5 text-left text-sm text-slate-700 dark:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors first:rounded-t-2xl last:rounded-b-2xl"
-                                        onClick={(e) => {
-                                            e.stopPropagation();
-                                            navigator.clipboard.writeText(msg.content);
-                                            setShowMenu(false);
-                                        }}
-                                    >
-                                        <span className="material-symbols-outlined text-base">content_copy</span>
-                                        <span>Copy Text</span>
-                                    </button>
-                                    <button 
-                                        className="w-full flex items-center gap-2 px-3 py-2.5 text-left text-sm text-slate-700 dark:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors first:rounded-t-2xl last:rounded-b-2xl"
-                                        onClick={(e) => {
-                                            e.stopPropagation();
-                                            // Handle good feedback
-                                            setShowMenu(false);
-                                            setShowFeedback(true);
-                                            setTimeout(() => setShowFeedback(false), 2000);
-                                        }}
-                                    >
-                                        <span className="material-symbols-outlined text-base">thumb_up</span>
-                                        <span>Good response</span>
-                                    </button>
-                                    <button 
-                                        className="w-full flex items-center gap-2 px-3 py-2.5 text-left text-sm text-slate-700 dark:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors first:rounded-t-2xl last:rounded-b-2xl"
-                                        onClick={(e) => {
-                                            e.stopPropagation();
-                                            // Handle bad feedback
-                                            setShowMenu(false);
-                                            setShowFeedback(true);
-                                            setTimeout(() => setShowFeedback(false), 2000);
-                                        }}
-                                    >
-                                        <span className="material-symbols-outlined text-base">thumb_down</span>
-                                        <span>Bad response</span>
-                                    </button>
-                                </>
-                            ) : (
-                                !onRegenerate && (
-                                <button 
-                                    className="w-full flex items-center gap-2 px-3 py-2.5 text-left text-sm text-slate-700 dark:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors first:rounded-t-2xl last:rounded-b-2xl"
-                                    onClick={(e) => {
-                                        e.stopPropagation();
-                                        const raw = msg.content || "";
-                                        const normalized = raw.replace(/\s+/g, " ").trim();
-                                        const maxLen = 120;
-                                        const snippet = normalized.length > maxLen ? normalized.slice(0, maxLen) + "…" : normalized;
-                                        onReply({
-                                            id: msg.id,
-                                            sender: msg.display_name || msg.username,
-                                            text: snippet,
-                                            type: msg.type,
-                                            file_name: msg.file_name,
-                                            caption: msg.caption,
-                                            audio_duration_ms: msg.audio_duration_ms,
-                                            is_view_once: msg.is_view_once,
-                                            poll_question: msg.poll?.question,
-                                            latitude: msg.latitude,
-                                            longitude: msg.longitude,
-                                            address: msg.address,
-                                            attachments: msg.attachments // [NEW] Pass attachments
-                                        });
-                                        setShowMenu(false);
-                                    }}
-                                >
-                                    <span className="material-symbols-outlined text-base">reply</span>
-                                    <span>Reply</span>
-                                </button>
-                                )
-                            )}
-
-                            {/* [NEW] Edit Option */}
-                            {isMe && !isAudio && msg.type !== 'gif' && msg.type !== 'file' && msg.type !== 'location' && msg.type !== 'poll' && !msg.is_deleted_for_everyone && (msg.type !== 'image' || msg.caption) && (
-                                <button 
-                                    className="w-full flex items-center gap-2 px-3 py-2.5 text-left text-sm text-slate-700 dark:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors first:rounded-t-2xl last:rounded-b-2xl"
-                                    onClick={(e) => {
-                                        e.stopPropagation();
-                                        onEdit(msg);
-                                        setShowMenu(false);
-                                    }}
-                                >
-                                    <span className="material-symbols-outlined text-base">edit</span>
-                                    <span>Edit</span>
-                                </button>
-                            )}
-
-                            {isAudio && msg.status !== 'error' ? (
-                                <button 
-                                    className="w-full flex items-center gap-2 px-3 py-2.5 text-left text-sm text-slate-700 dark:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors first:rounded-t-2xl last:rounded-b-2xl"
-                                    onClick={handleDownload}
-                                >
-                                    <span className="material-symbols-outlined text-base">download</span>
-                                    <span>Download</span>
-                                </button>
-                            ) : null}
-
-                            {msg.type === 'gif' && (
-                                <button 
-                                    className="w-full flex items-center gap-2 px-3 py-2.5 text-left text-sm text-slate-700 dark:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors first:rounded-t-2xl last:rounded-b-2xl"
-                                    onClick={(e) => {
-                                        e.stopPropagation();
-                                        navigator.clipboard.writeText(msg.gif_url);
-                                        setShowMenu(false);
-                                    }}
-                                >
-                                    <span className="material-symbols-outlined text-base">link</span>
-                                    <span>Copy Link</span>
-                                </button>
-                            )}
-
-                            {msg.type !== 'audio' && msg.type !== 'gif' && msg.type !== 'file' && msg.type !== 'location' && msg.type !== 'poll' && !isAi && !msg.is_view_once && (
-                                // Check if this is a multi-image message
-                                (msg.attachments && msg.attachments.length > 1) ? (
-                                    // Download All button for multi-image messages
-                                    <button 
-                                        className="w-full flex items-center gap-2 px-3 py-2.5 text-left text-sm text-slate-700 dark:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors first:rounded-t-2xl last:rounded-b-2xl"
-                                        onClick={async (e) => {
-                                            e.stopPropagation();
-                                            
-                                            // Helper to trigger fallback download (all images to Downloads folder)
-                                            const fallbackDownload = async () => {
-                                                // Fetch all images as blobs first
-                                                const blobs = await Promise.all(
-                                                    msg.attachments.map(async (att) => {
-                                                        const response = await fetch(att.url, {
-                                                            mode: 'cors',
-                                                            credentials: 'omit',
-                                                            cache: 'no-cache'
-                                                        });
-                                                        return response.blob();
-                                                    })
-                                                );
-                                                
-                                                // Download all at once
-                                                blobs.forEach((blob, i) => {
-                                                    const blobUrl = URL.createObjectURL(blob);
-                                                    const extension = blob.type.includes('png') ? 'png' : 
-                                                                     blob.type.includes('gif') ? 'gif' : 
-                                                                     blob.type.includes('webp') ? 'webp' : 'jpg';
-                                                    
-                                                    const link = document.createElement('a');
-                                                    link.href = blobUrl;
-                                                    link.download = `image_${i + 1}.${extension}`;
-                                                    link.click();
-                                                    
-                                                    // Cleanup after a short delay
-                                                    setTimeout(() => URL.revokeObjectURL(blobUrl), 1000);
+                                    {isAi ? (
+                                        <>
+                                            <button 
+                                                className="w-full flex items-center gap-2 px-3 py-2.5 text-left text-sm text-slate-700 dark:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors first:rounded-t-2xl last:rounded-b-2xl"
+                                                onClick={(e) => {
+                                                    e.stopPropagation();
+                                                    navigator.clipboard.writeText(msg.content);
+                                                    closeMenu();
+                                                }}
+                                            >
+                                                <span className="material-symbols-outlined text-base">content_copy</span>
+                                                <span>Copy Text</span>
+                                            </button>
+                                            <button 
+                                                className="w-full flex items-center gap-2 px-3 py-2.5 text-left text-sm text-slate-700 dark:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors first:rounded-t-2xl last:rounded-b-2xl"
+                                                onClick={(e) => {
+                                                    e.stopPropagation();
+                                                    closeMenu();
+                                                    setShowFeedback(true);
+                                                    setTimeout(() => setShowFeedback(false), 2000);
+                                                }}
+                                            >
+                                                <span className="material-symbols-outlined text-base">thumb_up</span>
+                                                <span>Good response</span>
+                                            </button>
+                                            <button 
+                                                className="w-full flex items-center gap-2 px-3 py-2.5 text-left text-sm text-slate-700 dark:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors first:rounded-t-2xl last:rounded-b-2xl"
+                                                onClick={(e) => {
+                                                    e.stopPropagation();
+                                                    closeMenu();
+                                                    setShowFeedback(true);
+                                                    setTimeout(() => setShowFeedback(false), 2000);
+                                                }}
+                                            >
+                                                <span className="material-symbols-outlined text-base">thumb_down</span>
+                                                <span>Bad response</span>
+                                            </button>
+                                        </>
+                                    ) : (
+                                        !onRegenerate && (
+                                        <button 
+                                            className="w-full flex items-center gap-2 px-3 py-2.5 text-left text-sm text-slate-700 dark:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors first:rounded-t-2xl last:rounded-b-2xl"
+                                            onClick={(e) => {
+                                                e.stopPropagation();
+                                                const raw = msg.content || "";
+                                                const normalized = raw.replace(/\s+/g, " ").trim();
+                                                const maxLen = 120;
+                                                const snippet = normalized.length > maxLen ? normalized.slice(0, maxLen) + "…" : normalized;
+                                                onReply({
+                                                    id: msg.id,
+                                                    sender: msg.display_name || msg.username,
+                                                    text: snippet,
+                                                    type: msg.type,
+                                                    file_name: msg.file_name,
+                                                    caption: msg.caption,
+                                                    audio_duration_ms: msg.audio_duration_ms,
+                                                    is_view_once: msg.is_view_once,
+                                                    poll_question: msg.poll?.question,
+                                                    latitude: msg.latitude,
+                                                    longitude: msg.longitude,
+                                                    address: msg.address,
+                                                    attachments: msg.attachments // [NEW] Pass attachments
                                                 });
-                                            };
-                                            
-                                            try {
-                                                // Try to use File System Access API (folder picker)
-                                                if (typeof window.showDirectoryPicker === 'function') {
-                                                    try {
-                                                        const dirHandle = await window.showDirectoryPicker({
-                                                            mode: 'readwrite',
-                                                            startIn: 'pictures'
-                                                        });
+                                                closeMenu();
+                                            }}
+                                        >
+                                            <span className="material-symbols-outlined text-base">reply</span>
+                                            <span>Reply</span>
+                                        </button>
+                                        )
+                                    )}
+
+                                    {/* [NEW] Edit Option */}
+                                    {isMe && !isAudio && msg.type !== 'gif' && msg.type !== 'file' && msg.type !== 'location' && msg.type !== 'poll' && !msg.is_deleted_for_everyone && (msg.type !== 'image' || msg.caption) && (
+                                        <button 
+                                            className="w-full flex items-center gap-2 px-3 py-2.5 text-left text-sm text-slate-700 dark:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors first:rounded-t-2xl last:rounded-b-2xl"
+                                            onClick={(e) => {
+                                                e.stopPropagation();
+                                                onEdit(msg);
+                                                closeMenu();
+                                            }}
+                                        >
+                                            <span className="material-symbols-outlined text-base">edit</span>
+                                            <span>Edit</span>
+                                        </button>
+                                    )}
+
+                                    {isAudio && msg.status !== 'error' ? (
+                                        <button 
+                                            className="w-full flex items-center gap-2 px-3 py-2.5 text-left text-sm text-slate-700 dark:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors first:rounded-t-2xl last:rounded-b-2xl"
+                                            onClick={handleDownload}
+                                        >
+                                            <span className="material-symbols-outlined text-base">download</span>
+                                            <span>Download</span>
+                                        </button>
+                                    ) : null}
+
+                                    {msg.type === 'gif' && (
+                                        <button 
+                                            className="w-full flex items-center gap-2 px-3 py-2.5 text-left text-sm text-slate-700 dark:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors first:rounded-t-2xl last:rounded-b-2xl"
+                                            onClick={(e) => {
+                                                e.stopPropagation();
+                                                navigator.clipboard.writeText(msg.gif_url);
+                                                closeMenu();
+                                            }}
+                                        >
+                                            <span className="material-symbols-outlined text-base">link</span>
+                                            <span>Copy Link</span>
+                                        </button>
+                                    )}
+
+                                    {msg.type !== 'audio' && msg.type !== 'gif' && msg.type !== 'file' && msg.type !== 'location' && msg.type !== 'poll' && !isAi && !msg.is_view_once && (
+                                        // Check if this is a multi-image message
+                                        (msg.attachments && msg.attachments.length > 1) ? (
+                                            // Download All button for multi-image messages
+                                            <button 
+                                                className="w-full flex items-center gap-2 px-3 py-2.5 text-left text-sm text-slate-700 dark:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors first:rounded-t-2xl last:rounded-b-2xl"
+                                                onClick={async (e) => {
+                                                    e.stopPropagation();
+                                                    
+                                                    // Helper to trigger fallback download (all images to Downloads folder)
+                                                    const fallbackDownload = async () => {
+                                                        // Fetch all images as blobs first
+                                                        const blobs = await Promise.all(
+                                                            msg.attachments.map(async (att) => {
+                                                                const response = await fetch(att.url, {
+                                                                    mode: 'cors',
+                                                                    credentials: 'omit',
+                                                                    cache: 'no-cache'
+                                                                });
+                                                                return response.blob();
+                                                            })
+                                                        );
                                                         
-                                                        // Download all images to the selected folder
-                                                        for (let i = 0; i < msg.attachments.length; i++) {
-                                                            const att = msg.attachments[i];
+                                                        // Download all at once
+                                                        blobs.forEach((blob, i) => {
+                                                            const blobUrl = URL.createObjectURL(blob);
+                                                            const extension = blob.type.includes('png') ? 'png' : 
+                                                                            blob.type.includes('gif') ? 'gif' : 
+                                                                            blob.type.includes('webp') ? 'webp' : 'jpg';
                                                             
-                                                            const response = await fetch(att.url, {
+                                                            const link = document.createElement('a');
+                                                            link.href = blobUrl;
+                                                            link.download = `image_${i + 1}.${extension}`;
+                                                            link.click();
+                                                            
+                                                            // Cleanup after a short delay
+                                                            setTimeout(() => URL.revokeObjectURL(blobUrl), 1000);
+                                                        });
+                                                    };
+                                                    
+                                                    try {
+                                                        // Try to use File System Access API (folder picker)
+                                                        if (typeof window.showDirectoryPicker === 'function') {
+                                                            try {
+                                                                const dirHandle = await window.showDirectoryPicker({
+                                                                    mode: 'readwrite',
+                                                                    startIn: 'pictures'
+                                                                });
+                                                                
+                                                                // Download all images to the selected folder
+                                                                for (let i = 0; i < msg.attachments.length; i++) {
+                                                                    const att = msg.attachments[i];
+                                                                    
+                                                                    const response = await fetch(att.url, {
+                                                                        mode: 'cors',
+                                                                        credentials: 'omit',
+                                                                        cache: 'no-cache'
+                                                                    });
+                                                                    const blob = await response.blob();
+                                                                    
+                                                                    const extension = blob.type.includes('png') ? 'png' : 
+                                                                                    blob.type.includes('gif') ? 'gif' : 
+                                                                                    blob.type.includes('webp') ? 'webp' : 'jpg';
+                                                                    const filename = `image_${i + 1}.${extension}`;
+                                                                    
+                                                                    const fileHandle = await dirHandle.getFileHandle(filename, { create: true });
+                                                                    const writable = await fileHandle.createWritable();
+                                                                    await writable.write(blob);
+                                                                    await writable.close();
+                                                                }
+                                                                
+                                                                alert(`Successfully downloaded ${msg.attachments.length} images!`);
+                                                            } catch (apiErr) {
+                                                                // User cancelled or API failed - use fallback
+                                                                if (apiErr.name !== 'AbortError') {
+                                                                    console.log('File System API failed, using fallback:', apiErr.message);
+                                                                    await fallbackDownload();
+                                                                }
+                                                            }
+                                                        } else {
+                                                            // API not available, use fallback
+                                                            await fallbackDownload();
+                                                        }
+                                                    } catch (err) {
+                                                        console.error('Failed to download images:', err);
+                                                        alert('Failed to download images. ' + err.message);
+                                                    }
+                                                    closeMenu();
+                                                }}
+                                            >
+                                                <span className="material-symbols-outlined text-base">download</span>
+                                                <span>Download All</span>
+                                            </button>
+                                        ) : (
+                                            // Copy button for single image or text messages
+                                            !msg.is_view_once && (
+                                            <button 
+                                                className="w-full flex items-center gap-2 px-3 py-2.5 text-left text-sm text-slate-700 dark:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors first:rounded-t-2xl last:rounded-b-2xl"
+                                                onClick={async (e) => {
+                                                    e.stopPropagation();
+                                                    if (msg.type === 'image') {
+                                                        try {
+                                                            const response = await fetch(msg.image_url, {
                                                                 mode: 'cors',
                                                                 credentials: 'omit',
                                                                 cache: 'no-cache'
                                                             });
-                                                            const blob = await response.blob();
+                                                            const originalBlob = await response.blob();
                                                             
-                                                            const extension = blob.type.includes('png') ? 'png' : 
-                                                                             blob.type.includes('gif') ? 'gif' : 
-                                                                             blob.type.includes('webp') ? 'webp' : 'jpg';
-                                                            const filename = `image_${i + 1}.${extension}`;
+                                                            const imageBitmap = await createImageBitmap(originalBlob);
                                                             
-                                                            const fileHandle = await dirHandle.getFileHandle(filename, { create: true });
-                                                            const writable = await fileHandle.createWritable();
-                                                            await writable.write(blob);
-                                                            await writable.close();
+                                                            const canvas = document.createElement('canvas');
+                                                            canvas.width = imageBitmap.width;
+                                                            canvas.height = imageBitmap.height;
+                                                            const ctx = canvas.getContext('2d');
+                                                            ctx.drawImage(imageBitmap, 0, 0);
+                                                            
+                                                            const pngBlob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
+                                                            
+                                                            await navigator.clipboard.write([
+                                                                new ClipboardItem({
+                                                                    'image/png': pngBlob
+                                                                })
+                                                            ]);
+                                                        } catch (err) {
+                                                            console.error('Failed to copy image:', err);
+                                                            alert('Failed to copy image. ' + err.message);
                                                         }
-                                                        
-                                                        alert(`Successfully downloaded ${msg.attachments.length} images!`);
-                                                    } catch (apiErr) {
-                                                        // User cancelled or API failed - use fallback
-                                                        if (apiErr.name !== 'AbortError') {
-                                                            console.log('File System API failed, using fallback:', apiErr.message);
-                                                            await fallbackDownload();
-                                                        }
+                                                    } else {
+                                                        navigator.clipboard.writeText(msg.content);
                                                     }
+                                                    closeMenu();
+                                                }}
+                                            >
+                                                <span className="material-symbols-outlined text-base">content_copy</span>
+                                                <span>{msg.type === 'image' ? 'Copy' : 'Copy Text'}</span>
+                                            </button>
+                                            )
+                                        )
+                                    )}
+
+                                    {/* [NEW] Star/Unstar Option */}
+                                    {!isAi && !msg.is_deleted_for_everyone && !msg.is_view_once && (
+                                        <button 
+                                            className="w-full flex items-center gap-2 px-3 py-2.5 text-left text-sm text-slate-700 dark:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors first:rounded-t-2xl last:rounded-b-2xl"
+                                            onClick={(e) => {
+                                                e.stopPropagation();
+                                                if (msg.is_starred) {
+                                                    onUnstar(msg.id);
                                                 } else {
-                                                    // API not available, use fallback
-                                                    await fallbackDownload();
+                                                    onStar(msg.id);
                                                 }
-                                            } catch (err) {
-                                                console.error('Failed to download images:', err);
-                                                alert('Failed to download images. ' + err.message);
-                                            }
-                                            setShowMenu(false);
-                                        }}
-                                    >
-                                        <span className="material-symbols-outlined text-base">download</span>
-                                        <span>Download All</span>
-                                    </button>
-                                ) : (
-                                    // Copy button for single image or text messages
-                                    !msg.is_view_once && (
-                                    <button 
+                                                closeMenu();
+                                            }}
+                                        >
+                                            <span className="material-symbols-outlined text-base filled">
+                                                {msg.is_starred ? 'star' : 'star_border'}
+                                            </span>
+                                            <span>{msg.is_starred ? 'Unstar' : 'Star'}</span>
+                                        </button>
+                                    )}
+
+                                    {/* [NEW] Pin/Unpin Option */}
+                                    {!isAi && onPin && !msg.is_deleted_for_everyone && !msg.is_view_once && (
+                                        <button 
+                                            className="w-full flex items-center gap-2 px-3 py-2.5 text-left text-sm text-slate-700 dark:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors first:rounded-t-2xl last:rounded-b-2xl"
+                                            onClick={(e) => {
+                                                e.stopPropagation();
+                                                onPin(msg);
+                                                closeMenu();
+                                            }}
+                                        >
+                                            <span className="material-symbols-outlined text-base">{msg.is_pinned ? 'keep_off' : 'push_pin'}</span>
+                                            <span>{msg.is_pinned ? 'Unpin' : 'Pin'}</span>
+                                        </button>
+                                    )}
+                                    
+                                    {!isAi && (
+                                        <button
+                                            className="w-full flex items-center gap-2 px-3 py-2.5 text-left text-sm text-red-500 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors first:rounded-t-2xl last:rounded-b-2xl"
+                                            onClick={(e) => {
+                                                e.stopPropagation();
+                                                handleDeleteForMe();
+                                                closeMenu();
+                                            }}
+                                        >
+                                            <span className="material-symbols-outlined text-base">delete</span>
+                                            <span>Delete for me</span>
+                                        </button>
+                                    )}
+
+                                    {isAi && (
+                                        <button
+                                            className="w-full flex items-center gap-2 px-3 py-2.5 text-left text-sm text-red-500 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors first:rounded-t-2xl last:rounded-b-2xl"
+                                            onClick={(e) => {
+                                                e.stopPropagation();
+                                                handleDeleteForMe();
+                                                closeMenu();
+                                            }}
+                                        >
+                                            <span className="material-symbols-outlined text-base">delete</span>
+                                            <span>Delete</span>
+                                        </button>
+                                    )}
+
+                                    {msg.user_id === user.id && !isAi && (
+                                        <button
+                                            className="w-full flex items-center gap-2 px-3 py-2.5 text-left text-sm text-red-600 dark:text-red-500 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors first:rounded-t-2xl last:rounded-b-2xl"
+                                            onClick={(e) => {
+                                                e.stopPropagation();
+                                                onDeleteForEveryone(msg);
+                                                closeMenu();
+                                            }}
+                                        >
+                                            <span className="material-symbols-outlined text-base">delete_forever</span>
+                                            <span>Delete for everyone</span>
+                                        </button>
+                                    )}
+
+                                    {/* [NEW] Message Info */}
+                                    {!msg.is_deleted_for_everyone && msg.type !== 'system' && (isMe || msg.room_type === 'group' || (msg.room_type === 'direct' && isMe)) && (
+                                        <button
+                                            className="w-full flex items-center gap-2 px-3 py-2.5 text-left text-sm text-slate-700 dark:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors first:rounded-t-2xl last:rounded-b-2xl"
+                                            onClick={(e) => {
+                                                e.stopPropagation();
+                                                onViewInfo(msg.id);
+                                                closeMenu();
+                                            }}
+                                        >
+                                            <span className="material-symbols-outlined text-base">info</span>
+                                            <span>Message info</span>
+                                        </button>
+                                    )}
+                                    
+                                    {/* [NEW] Select Option */}
+                                    <button
                                         className="w-full flex items-center gap-2 px-3 py-2.5 text-left text-sm text-slate-700 dark:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors first:rounded-t-2xl last:rounded-b-2xl"
-                                        onClick={async (e) => {
+                                        onClick={(e) => {
                                             e.stopPropagation();
-                                            if (msg.type === 'image') {
-                                                try {
-                                                    const response = await fetch(msg.image_url, {
-                                                        mode: 'cors',
-                                                        credentials: 'omit',
-                                                        cache: 'no-cache'
-                                                    });
-                                                    const originalBlob = await response.blob();
-                                                    
-                                                    const imageBitmap = await createImageBitmap(originalBlob);
-                                                    
-                                                    const canvas = document.createElement('canvas');
-                                                    canvas.width = imageBitmap.width;
-                                                    canvas.height = imageBitmap.height;
-                                                    const ctx = canvas.getContext('2d');
-                                                    ctx.drawImage(imageBitmap, 0, 0);
-                                                    
-                                                    const pngBlob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
-                                                    
-                                                    await navigator.clipboard.write([
-                                                        new ClipboardItem({
-                                                            'image/png': pngBlob
-                                                        })
-                                                    ]);
-                                                } catch (err) {
-                                                    console.error('Failed to copy image:', err);
-                                                    alert('Failed to copy image. ' + err.message);
-                                                }
-                                            } else {
-                                                navigator.clipboard.writeText(msg.content);
-                                            }
-                                            setShowMenu(false);
+                                            onEnableSelectionMode(msg.id);
+                                            closeMenu();
                                         }}
                                     >
-                                        <span className="material-symbols-outlined text-base">content_copy</span>
-                                        <span>{msg.type === 'image' ? 'Copy' : 'Copy Text'}</span>
+                                        <span className="material-symbols-outlined text-base">check_circle</span>
+                                        <span>Select</span>
                                     </button>
-                                    )
-                                )
+                                </div>
                             )}
-
-                            {/* [NEW] Pin/Unpin Option */}
-                            {!isAi && onPin && !msg.is_deleted_for_everyone && !msg.is_view_once && (
-                                <button 
-                                    className="w-full flex items-center gap-2 px-3 py-2.5 text-left text-sm text-slate-700 dark:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors first:rounded-t-2xl last:rounded-b-2xl"
-                                    onClick={(e) => {
-                                        e.stopPropagation();
-                                        onPin(msg);
-                                        setShowMenu(false);
-                                    }}
-                                >
-                                    <span className="material-symbols-outlined text-base">{msg.is_pinned ? 'keep_off' : 'push_pin'}</span>
-                                    <span>{msg.is_pinned ? 'Unpin' : 'Pin'}</span>
-                                </button>
-                            )}
-                            
-                             {!isAi && (
-                                <button
-                                    className="w-full flex items-center gap-2 px-3 py-2.5 text-left text-sm text-red-500 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors first:rounded-t-2xl last:rounded-b-2xl"
-                                    onClick={(e) => {
-                                        e.stopPropagation();
-                                        handleDeleteForMe();
-                                    }}
-                                >
-                                    <span className="material-symbols-outlined text-base">delete</span>
-                                    <span>Delete for me</span>
-                                </button>
-                             )}
-
-                             {isAi && (
-                                <button
-                                    className="w-full flex items-center gap-2 px-3 py-2.5 text-left text-sm text-red-500 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors first:rounded-t-2xl last:rounded-b-2xl"
-                                    onClick={(e) => {
-                                        e.stopPropagation();
-                                        handleDeleteForMe();
-                                    }}
-                                >
-                                    <span className="material-symbols-outlined text-base">delete</span>
-                                    <span>Delete</span>
-                                </button>
-                             )}
-
-                            {msg.user_id === user.id && !isAi && (
-                                <button
-                                    className="w-full flex items-center gap-2 px-3 py-2.5 text-left text-sm text-red-600 dark:text-red-500 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors first:rounded-t-2xl last:rounded-b-2xl"
-                                    onClick={(e) => {
-                                        e.stopPropagation();
-                                        onDeleteForEveryone(msg);
-                                        setShowMenu(false);
-                                    }}
-                                >
-                                    <span className="material-symbols-outlined text-base">delete_forever</span>
-                                    <span>Delete for everyone</span>
-                                </button>
-                            )}
-
-                             {/* [NEW] Message Info */}
-                             {!msg.is_deleted_for_everyone && msg.type !== 'system' && (isMe || msg.room_type === 'group' || (msg.room_type === 'direct' && isMe)) && (
-                                <button
-                                    className="w-full flex items-center gap-2 px-3 py-2.5 text-left text-sm text-slate-700 dark:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors first:rounded-t-2xl last:rounded-b-2xl"
-                                    onClick={(e) => {
-                                        e.stopPropagation();
-                                        onViewInfo(msg.id);
-                                        setShowMenu(false);
-                                    }}
-                                >
-                                    <span className="material-symbols-outlined text-base">info</span>
-                                    <span>Message info</span>
-                                </button>
-                             )}
-                            
-                            {/* [NEW] Select Option */}
-                            <button
-                                className="w-full flex items-center gap-2 px-3 py-2.5 text-left text-sm text-slate-700 dark:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors first:rounded-t-2xl last:rounded-b-2xl"
-                                onClick={(e) => {
-                                    e.stopPropagation();
-                                    onEnableSelectionMode(msg.id);
-                                    setShowMenu(false);
-                                }}
-                            >
-                                <span className="material-symbols-outlined text-base">check_circle</span>
-                                <span>Select</span>
-                            </button>
                         </div>
                     )}
                 </div>
                 </div>
                 
+                {/* [NEW] Combined Reaction Bubble */}
+                {reactionGroups.length > 0 && (
+                    <div className={`flex flex-wrap gap-1 mt-1 animate-in fade-in zoom-in-95 duration-200 ${isMe ? 'justify-end' : 'justify-start'}`}>
+                        <button
+                            onClick={(e) => {
+                                e.stopPropagation();
+                                
+                                const isGroup = msg.room_member_count > 2;
+                                const allMembersReacted = reactions.length >= msg.room_member_count;
+                                const hasMultipleEmojis = reactionGroups.length > 1;
+                                const hasMultiplePeople = reactions.length > 1;
+
+                                // If many people or types, show details. 
+                                // In DM, if both reacted, show details.
+                                if (hasMultipleEmojis || hasMultiplePeople || (isGroup && allMembersReacted)) {
+                                    onViewReactions(msg, e.currentTarget.getBoundingClientRect());
+                                } else {
+                                    // Single reaction (1 type, 1 person)
+                                    const group = reactionGroups[0];
+                                    if (group.isMe) {
+                                        onUnreact(msg.id);
+                                    } else {
+                                        onReact(msg.id, group.emoji);
+                                    }
+                                }
+                            }}
+                            className={`
+                                flex items-center gap-1.5 rounded-full text-sm transition-all shadow-sm active:scale-90 px-2.5 py-1
+                                ${reactionGroups.some(g => g.isMe) 
+                                    ? 'bg-violet-100 dark:bg-violet-900/40 text-violet-700 dark:text-violet-200 border border-violet-200 dark:border-violet-700' 
+                                    : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700 hover:border-slate-300 dark:hover:border-slate-600'
+                                }
+                            `}
+                        >
+                            <div className="flex items-center gap-1">
+                                {reactionGroups.map((group, i) => (
+                                    <span 
+                                        key={group.emoji} 
+                                        className="scale-110 flex items-center justify-center"
+                                        style={{ zIndex: reactionGroups.length - i }}
+                                    >
+                                        <Emoji 
+                                            unified={getUnifiedFromEmoji(group.emoji)} 
+                                            emojiStyle={EmojiStyle.APPLE} 
+                                            size={16} 
+                                        />
+                                    </span>
+                                ))}
+                            </div>
+                            {reactions.length > 1 && (
+                                <span className="font-bold text-xs opacity-80 ml-0.5">{reactions.length}</span>
+                            )}
+                        </button>
+                    </div>
+                )}
+
+
+                </div>
+                
                 
                 <div className={`text-[10px] mt-1 px-1 flex items-center justify-end gap-1 select-none transition-opacity ${
-                    (msg.status === 'sending' || msg.is_pinned) 
+                    (msg.status === 'sending' || msg.is_pinned || msg.is_starred) 
                         ? 'opacity-100 text-slate-600 dark:text-slate-300' 
                         : `opacity-0 group-hover:opacity-100 ${isMe ? 'text-slate-600 dark:text-slate-400' : 'text-slate-600 dark:text-slate-400'}`
                 }`}>
+                    {msg.is_starred && (
+                        <span className="material-symbols-outlined text-[12px] filled text-amber-500 mr-0.5" title="Starred">star</span>
+                    )}
                     {msg.is_pinned && (
                         <span className="material-symbols-outlined text-[12px] -rotate-45" title="Pinned">keep</span>
                     )}
@@ -1457,13 +1856,13 @@ export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone,
 
 export default function MessageList({ 
     messages, 
-    setMessages, 
     currentUser, 
     roomId, 
     socket, 
     onReply, 
     onDelete, 
     onRetry, 
+    onRetryDecryption, 
     onEdit, 
     onRegenerate, 
     onPin, 
@@ -1478,7 +1877,13 @@ export default function MessageList({
     onToggleSelectionMode,
     lastReadMessageId, // [NEW]
     onBottomInView, // [NEW]
-    chatPreferences // [NEW]
+    chatPreferences, // [NEW]
+    onStar, // [NEW]
+    onUnstar, // [NEW]
+    onReact, // [NEW]
+    onUnreact, // [NEW]
+    isRestoreAnimation, // [NEW]
+    hasSkippedSync // [NEW]
 }) { // [MODIFIED] Added props // [MODIFIED] Added onPin
     const { token } = useAuth();
     const [confirmDeleteMessage, setConfirmDeleteMessage] = useState(null);
@@ -1486,11 +1891,22 @@ export default function MessageList({
     // [NEW] Viewer State
     const [viewingImage, setViewingImage] = useState(null);
     const [viewingMessageInfo, setViewingMessageInfo] = useState(null); // [NEW] Info Modal State
+    const [reactionMenu, setReactionMenu] = useState(null); // [NEW] { messageId, anchorRect }
 
     const [showScrollButton, setShowScrollButton] = useState(false);
     const scrollRef = useRef(null);
     const bottomRef = useRef(null);
     const shouldScrollToBottom = useRef(true);
+    
+    // [NEW] Smart Scroll - Scroll to divider on initial load (with timing fix for async Dexie)
+    const hasInitialScrolledRef = useRef(false);
+    const [newMessageCount, setNewMessageCount] = useState(0); // [NEW] Live message counter when scrolled up
+    
+    // Reset scroll flag and new message count when switching rooms
+    useEffect(() => {
+        hasInitialScrolledRef.current = false;
+        setNewMessageCount(0);
+    }, [roomId]);
     
     // [NEW] Pagination Refs
     const prevScrollHeightRef = useRef(0);
@@ -1528,10 +1944,8 @@ export default function MessageList({
     }, [messages]);
 
     const handleMarkHeard = async (messageId) => {
-        // Optimistic update
-        setMessages(prev => prev.map(m => 
-            m.id === messageId ? { ...m, audio_heard: true } : m
-        ));
+        // [DEXIE] Optimistic update
+        await updateLocalMessage(messageId, { audio_heard: true });
 
         // API call
         try {
@@ -1551,14 +1965,8 @@ export default function MessageList({
         // 1) Close modal
         setConfirmDeleteMessage(null);
 
-        // 2) Optimistically update local messages array
-        setMessages(prev =>
-            prev.map(m =>
-                m.id === msgId
-                    ? { ...m, is_deleted_for_everyone: true, content: "" }
-                    : m
-            )
-        );
+        // 2) [DEXIE] Optimistically update local message status
+        await updateLocalMessage(msgId, { is_deleted_for_everyone: true, content: "" });
 
         try {
             // 3) Call API in the background
@@ -1592,11 +2000,10 @@ export default function MessageList({
                  startIndex: 0
             });
 
-            // Optimistically update local state to "Opened"
-            setMessages(prev => prev.map(m => m.id === msg.id ? { 
-                ...m, 
-                viewed_by: [...(m.viewed_by || []), currentUser.id] 
-            } : m));
+            // [DEXIE] Optimistically update local state to "Opened"
+            await updateLocalMessage(msg.id, { 
+                viewed_by: [...(msg.viewed_by || []), currentUser.id] 
+            });
 
             // Call API in background to mark as viewed (burn it)
             // We don't wait for this to show the image.
@@ -1637,7 +2044,7 @@ export default function MessageList({
     useEffect(() => {
         if (!socket || !messages.length) return;
         const unseenIds = messages
-            .filter(m => !m.isMe && m.status !== 'seen' && m.user_id !== currentUser.id && m.type !== 'system')
+            .filter(m => !m.isMe && m.status !== 'seen' && String(m.user_id) !== String(currentUser.id) && m.type !== 'system')
             .map(m => m.id);
 
         if (unseenIds.length > 0) {
@@ -1665,54 +2072,63 @@ export default function MessageList({
         return () => observer.disconnect();
     }, [onBottomInView]);
 
+    // [NEW] Synchronous Initial Scroll - Prevents "Flash"
+    useLayoutEffect(() => {
+        if (hasInitialScrolledRef.current || messages.length === 0) return;
+
+        // Ensure DOM is ready (useLayoutEffect runs after DOM mutation)
+        const dividerElement = document.getElementById('unread-divider');
+        if (dividerElement) {
+            dividerElement.scrollIntoView({ block: 'center', behavior: 'auto' });
+        } else {
+            // Instant jump to bottom
+            const div = scrollRef.current;
+            if (div) {
+                 div.scrollTop = div.scrollHeight;
+            }
+        }
+        
+        hasInitialScrolledRef.current = true;
+        shouldScrollToBottom.current = false;
+    }, [messages]);
+
+    // [NEW] Handle Updates (New Messages)
     useEffect(() => {
         const div = scrollRef.current;
         if (!div) return;
         
         const lastMsg = messages[messages.length - 1];
-        // [FIX] Force scroll if the last message is from me (sent just now)
-        // AND if it's actually a NEW message at the bottom (id changed).
         const isLastMsgMine = lastMsg && lastMsg.user_id === currentUser.id;
         const isNewMessageNodes = lastMsg && lastMsg.id !== prevLastMsgIdRef.current;
 
-        // Update ref for next render
+        // Increment new message count
+        if (isNewMessageNodes && !isLastMsgMine && showScrollButton) {
+            setNewMessageCount(prev => prev + 1);
+        }
+
+        // Update ref
         if (lastMsg) {
              prevLastMsgIdRef.current = lastMsg.id;
         }
 
-        if (shouldScrollToBottom.current || (isLastMsgMine && isNewMessageNodes)) {
-            if (messages.length > 0) {
-                // [FIX] Use setTimeout to ensure DOM is fully painted/layout is done before scrolling
-                const behavior = shouldScrollToBottom.current ? 'auto' : 'smooth';
-                setTimeout(() => {
-                    bottomRef.current?.scrollIntoView({ behavior });
-                }, 100);
-                shouldScrollToBottom.current = false;
-            }
-        } else {
-            // If receiving others' messages, only scroll if we were already at bottom
-            // OR if it's a new message from someone else (we want to see it if we are at bottom)
-            // But if we are loading history (msg added to top), lastMsg.id logic above handles it?
-            // Actually, if we load history, lastMsg.id DOES NOT change (it's still the same latest message).
-            // So isNewMessageNodes would be FALSE.
-            // So we wouldn't enter the FIRST block.
-            
-            // What about this block?
-            // "If receiving others' messages..."
-            // If we load history, we fall through to here.
-            // We only scroll if isNearBottom.
-            // Loading history moves us AWAY from bottom (content added to top pushes us down relative to scrollStart).
-            // But wait, the useLayoutEffect handles the prepending scroll adjustment.
-            
-            const isNearBottom = div.scrollHeight - div.scrollTop - div.clientHeight < 200; // Increased threshold
-            if (isNearBottom && isNewMessageNodes) {
-                 // Only scroll if it's a NEW message. 
-                 // If we just loaded history, lastMsg is the same, so isNewMessageNodes is False.
-                 // So we won't auto-scroll to bottom. Perfect.
-                bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+        if (hasInitialScrolledRef.current) {
+            // Standard update logic
+            if (shouldScrollToBottom.current || (isLastMsgMine && isNewMessageNodes)) {
+                if (messages.length > 0) {
+                     // For updates, smooth scroll is fine, but 'auto' is snappier for self-sent
+                     const behavior = shouldScrollToBottom.current ? 'auto' : 'smooth';
+                     bottomRef.current?.scrollIntoView({ behavior });
+                     shouldScrollToBottom.current = false;
+                }
+            } else {
+                // If receiving others' messages, only scroll if we were already at bottom
+                const isNearBottom = div.scrollHeight - div.scrollTop - div.clientHeight < 200;
+                if (isNearBottom && isNewMessageNodes) {
+                    bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+                }
             }
         }
-    }, [messages, currentUser.id]);
+    }, [messages, currentUser.id, showScrollButton]);
 
     const handleImageLoad = () => {
         // When an image loads, if we should be at bottom (e.g. initial load) OR if we were already near bottom, scroll down.
@@ -1791,6 +2207,11 @@ export default function MessageList({
         const distanceToBottom = div.scrollHeight - div.scrollTop - div.clientHeight;
         setShowScrollButton(distanceToBottom > 100);
         
+        // [NEW] Reset new message count when user manually scrolls to bottom
+        if (distanceToBottom < 50) {
+            setNewMessageCount(0);
+        }
+        
         if (distanceToBottom < 100) {
             setUnreadMentionId(null);
         }
@@ -1805,6 +2226,7 @@ export default function MessageList({
         bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
         setShowScrollButton(false);
         setUnreadMentionId(null);
+        setNewMessageCount(0); // [NEW] Clear counter when clicking scroll button
     };
 
     const scrollToMessage = (id) => {
@@ -1914,7 +2336,23 @@ export default function MessageList({
                 )}
 
                 {hasMessages && (
-                visibleMessages.map((msg, index) => {
+                    <>
+                    {hasSkippedSync && messages.some(msg => msg.content === '🔒 Waiting for key...' || msg.content === '🔒 Decryption Failed') && (
+                        <div className="flex justify-center my-6 animate-in fade-in slide-in-from-top-4 duration-700">
+                            <div className="bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800/50 rounded-2xl p-4 max-w-sm shadow-sm flex flex-col items-center text-center gap-2">
+                                <div className="w-10 h-10 rounded-full bg-amber-100 dark:bg-amber-800/30 flex items-center justify-center text-amber-600 dark:text-amber-400">
+                                    <span className="material-symbols-outlined">history_toggle_off</span>
+                                </div>
+                                <div>
+                                    <h3 className="text-sm font-bold text-amber-900 dark:text-amber-200">History Hidden</h3>
+                                    <p className="text-xs text-amber-700 dark:text-amber-400 leading-relaxed">
+                                        Previous messages are hidden because encryption keys are missing. Restore them anytime in Settings.
+                                    </p>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+                    {visibleMessages.map((msg, index) => {
                     // [FIX] AI messages might have same user_id but are NOT 'me' for display purposes
                     const isAi = msg.user_id === 'ai-assistant' || msg.author_name === 'Assistant' || (msg.meta && msg.meta.ai) || msg.isStreaming;
                     const isMe = msg.user_id == currentUser.id && !isAi;
@@ -1958,9 +2396,10 @@ export default function MessageList({
                         }
  
                          return (
-                            <React.Fragment key={msg.id || index}>
+                            <React.Fragment key={msg.localId || msg.id || index}>
                                 {(unreadCount > 0 && msg.id === firstUnreadMsgId) || (exitingDivider && msg.id === exitingDivider.id) ? (
                                      <UnreadDivider 
+                                        id="unread-divider"
                                         count={unreadCount > 0 ? unreadCount : (exitingDivider?.count || 0)} 
                                         isExiting={!firstUnreadMsgId && !!exitingDivider}
                                      />
@@ -1995,9 +2434,10 @@ export default function MessageList({
                     }
 
                     return (
-                        <React.Fragment key={msg.id || index}>
+                        <React.Fragment key={msg.localId || msg.id || index}>
                             {(unreadCount > 0 && msg.id === firstUnreadMsgId) || (exitingDivider && msg.id === exitingDivider.id) ? (
                                     <UnreadDivider 
+                                       id="unread-divider"
                                        count={unreadCount > 0 ? unreadCount : (exitingDivider?.count || 0)} 
                                        isExiting={!firstUnreadMsgId && !!exitingDivider}
                                     />
@@ -2010,6 +2450,7 @@ export default function MessageList({
                             onDelete={onDelete}
                             onDeleteForEveryone={(msg) => setConfirmDeleteMessage(msg)}
                             onRetry={onRetry}
+                            onRetryDecryption={onRetryDecryption}
                             onMarkHeard={handleMarkHeard}
                             onEdit={onEdit} 
                             onImageLoad={handleImageLoad}
@@ -2025,12 +2466,22 @@ export default function MessageList({
                             onEnableSelectionMode={onToggleSelectionMode}
                             isInMultiSelect={isSelectionMode} // Assuming Prop adjustment if needed, else strict pass
                             bubbleColor={chatPreferences?.bubbleColor} // [NEW]
-                            onViewInfo={(id) => setViewingMessageInfo(id)} // [NEW] Info Modal
+                            onViewInfo={(id) => setViewingMessageInfo(msg)} // [NEW] Info Modal - Pass Full Object
                             onBottomInView={onBottomInView} // [NEW]
+                            onStar={onStar}
+                            onUnstar={onUnstar}
+                            // [NEW] Animation Props
+                            isRestoreAnimation={isRestoreAnimation}
+                            animationDelay={`${index * 50}ms`}
+                            onReact={onReact}
+                            onUnreact={onUnreact}
+                            onViewReactions={(m, rect) => setReactionMenu({ messageId: m.id, anchorRect: rect })} // [NEW]
+                            hasSkippedSync={hasSkippedSync}
                         />
                         </React.Fragment>
                     );
-                })
+                })}
+                </>
                 )}
 
                 <div ref={bottomRef} />
@@ -2059,14 +2510,22 @@ export default function MessageList({
             <button
                 onClick={scrollToBottom}
                 className={`
-                    absolute bottom-5 right-5 w-10 h-10 rounded-full bg-white/80 dark:bg-slate-900/80 backdrop-blur-sm 
+                    absolute bottom-5 right-5 rounded-full bg-white/80 dark:bg-slate-900/80 backdrop-blur-sm 
                     border border-slate-200 dark:border-slate-700 shadow-lg shadow-black/10 dark:shadow-black/50 text-slate-600 dark:text-slate-200 
                     flex items-center justify-center z-20 transition-all duration-300 ease-in-out
                     hover:bg-white dark:hover:bg-slate-800 hover:text-slate-900 dark:hover:text-white hover:scale-110 active:scale-95
                     ${showScrollButton ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-4 pointer-events-none'}
+                    ${newMessageCount > 0 ? 'px-3 py-2 gap-1.5' : 'w-10 h-10'}
                 `}
             >
-                <span className="material-symbols-outlined text-xl">arrow_downward</span>
+                {newMessageCount > 0 ? (
+                    <>
+                        <span className="material-symbols-outlined text-lg">arrow_downward</span>
+                        <span className="text-xs font-bold">{newMessageCount}</span>
+                    </>
+                ) : (
+                    <span className="material-symbols-outlined text-xl">arrow_downward</span>
+                )}
             </button>
             {confirmDeleteMessage && (
                 <div className="
@@ -2107,8 +2566,19 @@ export default function MessageList({
             {/* [NEW] Message Info Modal */}
             {viewingMessageInfo && (
                 <MessageInfoModal 
-                    messageId={viewingMessageInfo} 
-                    onClose={() => setViewingMessageInfo(null)} 
+                    message={viewingMessageInfo} 
+                    onClose={() => setViewingMessageInfo(null)}
+                    socket={socket} // [NEW] Pass socket for real-time updates
+                />
+            )}
+
+            {/* [NEW] Reaction Details Modal (Floating Menu) */}
+            {reactionMenu && (
+                <ReactionDetailsModal 
+                    reactions={messages.find(m => m.id === reactionMenu.messageId)?.reactions || []}
+                    anchorRect={reactionMenu.anchorRect}
+                    onClose={() => setReactionMenu(null)}
+                    onRemoveReaction={() => onUnreact(reactionMenu.messageId)}
                 />
             )}
         </div>

@@ -796,15 +796,7 @@ export default function MessageInput({
         const tempDiv = document.createElement('div');
         tempDiv.innerHTML = content;
         
-        // [NEW] Encode Mentions
-        const mentions = tempDiv.querySelectorAll('span[data-mention]');
-        mentions.forEach(span => {
-            const id = span.getAttribute('data-mention');
-            const name = span.textContent.replace('@', ''); // Assuming textContent is "@Name"
-            const encoded = `@[${name}](user:${id})`;
-            span.replaceWith(document.createTextNode(encoded));
-        });
-
+        // 1. First, replace all emoji images with their alt characters (fundamental for mentions)
         const images = tempDiv.getElementsByTagName('img');
         while (images.length > 0) {
             const img = images[0];
@@ -812,6 +804,19 @@ export default function MessageInput({
             const textNode = document.createTextNode(alt);
             img.parentNode.replaceChild(textNode, img);
         }
+
+        // [NEW] Encode Mentions & Extract Mention User IDs
+        const mentions = tempDiv.querySelectorAll('span[data-mention]');
+        const mention_user_ids = [];
+        mentions.forEach(span => {
+            const id = span.getAttribute('data-mention');
+            if (id && !mention_user_ids.includes(parseInt(id))) {
+                mention_user_ids.push(parseInt(id));
+            }
+            const name = span.textContent.replace('@', ''); // Now correctly contains emoji chars
+            const encoded = `@[${name}](user:${id})`;
+            span.replaceWith(document.createTextNode(encoded));
+        });
 
         const brs = tempDiv.getElementsByTagName('br');
         while (brs.length > 0) {
@@ -827,7 +832,7 @@ export default function MessageInput({
         // Handle GIF send
         if (pendingGif) {
             // Send GIF with plainText as caption (if any)
-            onSendGif(pendingGif, plainText); 
+            onSendGif(pendingGif, plainText, mention_user_ids); 
             
             // Cleanup
             setPendingGif(null);
@@ -847,12 +852,17 @@ export default function MessageInput({
                 // Handle edit submission
                 const originalText = editingMessage.type === 'image' ? (editingMessage.caption || '') : editingMessage.content;
                 if (plainText !== originalText) {
-                    onEditMessage(editingMessage.id, plainText);
+                    onEditMessage(editingMessage.id, plainText, mention_user_ids);
                 } else {
                     onCancelEdit();
                 }
+                setShowEmoji(false);
+                setHtml('');
+                if (editorRef.current) editorRef.current.innerHTML = "";
             } else {
-                onSend(plainText);
+                onSend(plainText, mention_user_ids);
+                setHtml('');
+                if (editorRef.current) editorRef.current.innerHTML = "";
             }
             
             // [NEW] Clear draft for this room
@@ -988,8 +998,8 @@ export default function MessageInput({
         if (!editingMessage && onTypingStart && onTypingStop) {
              const now = Date.now();
              
-             // Emit start if not throttled
-             if (now - lastTypingTime.current > 2000) {
+             // Emit start if not throttled (reduced to 500ms to match quick stop timeout)
+             if (now - lastTypingTime.current > 500) {
                  onTypingStart();
                  lastTypingTime.current = now;
              }
@@ -997,10 +1007,10 @@ export default function MessageInput({
              // Reset stop timeout
              if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
              
-             // Stop after 3 seconds of inactivity
+             // Stop after 800ms of inactivity for quick indicator removal
              typingTimeoutRef.current = setTimeout(() => {
                  onTypingStop();
-             }, 3000);
+             }, 800);
         }
     };
 

@@ -1,5 +1,6 @@
 import { createContext, useState, useEffect, useContext } from 'react';
 import LoadingScreen from '../components/LoadingScreen';
+import { cryptoManager } from '../lib/crypto/CryptoManager';
 
 const AuthContext = createContext(null);
 
@@ -7,6 +8,37 @@ export const AuthProvider = ({ children }) => {
     const [user, setUser] = useState(null);
     const [token, setToken] = useState(localStorage.getItem('token'));
     const [loading, setLoading] = useState(true);
+
+    const initializeCrypto = async (authToken) => {
+        try {
+            console.log('[Auth] Initializing Crypto Manager...');
+            const newIdentity = await cryptoManager.init();
+            
+            // [CRITICAL FIX] Always register/update device with server
+            // Previously we only registered NEW identities, but if a device exists
+            // locally but isn't in the server DB, it would never get registered
+            const deviceId = cryptoManager.deviceId;
+            const publicKey = await cryptoManager.getPublicKey();
+            const signingPublicKey = await cryptoManager.getSigningPublicKey();
+            
+            if (deviceId && publicKey) {
+                console.log('[Auth] Registering/updating device identity...', deviceId);
+                const res = await fetch(`${import.meta.env.VITE_API_URL}/api/auth/device`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${authToken}`
+                    },
+                    body: JSON.stringify({ deviceId, publicKey, signingPublicKey })
+                });
+                console.log('[Auth] Device registration response:', res.status);
+            } else {
+                console.error('[Auth] Missing device info for registration');
+            }
+        } catch (e) {
+            console.error('[Auth] Crypto init failed', e);
+        }
+    };
 
     useEffect(() => {
         if (token) {
@@ -18,13 +50,10 @@ export const AuthProvider = ({ children }) => {
                 if (res.ok) return res.json();
                 throw new Error('Invalid token');
             })
-            .then(data => {
+            .then(async data => {
                 setUser(data.user);
-                // Artificial delay to show the nice loading screen if it was too fast?
-                // Or just let it be natural. User mentioned "loading bar completes".
-                // Our LoadingScreen simulates progress.
-                // Let's settle for at least 800ms to avoid flicker?
-                // But generally users want speed. Let's just set loading false.
+                // Initialize crypto in background after user load
+                await initializeCrypto(token);
                 setLoading(false);
             })
             .catch(() => {
@@ -36,10 +65,11 @@ export const AuthProvider = ({ children }) => {
         }
     }, [token]);
 
-    const login = (newToken, newUser) => {
+    const login = async (newToken, newUser) => {
         localStorage.setItem('token', newToken);
         setToken(newToken);
         setUser(newUser);
+        await initializeCrypto(newToken);
     };
 
     const updateUser = (updates) => {

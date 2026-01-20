@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import { usePresence } from '../context/PresenceContext';
 import { useAppLock } from '../context/AppLockContext';
 import { useChatLock } from '../context/ChatLockContext';
@@ -13,10 +13,264 @@ import { renderTextWithEmojis } from '../utils/emojiRenderer';
 import SidebarContextMenu from './SidebarContextMenu';
 import { ChatListSkeleton } from './SkeletonLoaders';
 import PollIcon from './icons/PollIcon';
-import emptySidebarGif from '../assets/empty_sidebar.gif'; // [NEW]
+import ViewOnceIcon from './icons/ViewOnceIcon';
+import emptySidebarGif from '../assets/empty_sidebar.gif';
+import { cryptoManager } from '../lib/crypto/CryptoManager';
+import db from '../utils/db';
 
+// [NEW] E2EE Preview Component - Uses cached plaintext (WhatsApp-style)
+const LastMessagePreview = ({ room, user, hasSkippedSync }) => {
+    // [NEW] Local state for plaintext if not in room object
+    const [localPlaintext, setLocalPlaintext] = useState(room.last_message_plaintext || null);
 
-export default function Sidebar({ rooms, activeRoom, onSelectRoom, loadingRoomId, isLoading, onCreateRoom, onJoinRoom, user, onLogout, onRefresh, onRoomLocked }) {
+    useEffect(() => {
+        // Sync with room prop
+        if (room.last_message_plaintext) {
+            setLocalPlaintext(room.last_message_plaintext);
+        } else if (room.last_message_id) {
+            // Background fetch from IndexedDB if UI state is missing it
+            db.messages.where('id').equals(String(room.last_message_id)).first().then(msg => {
+                if (msg?.plaintext_content) {
+                    setLocalPlaintext(msg.plaintext_content);
+                }
+            });
+        }
+    }, [room.last_message_id, room.last_message_plaintext]);
+
+    const content = localPlaintext || room.last_message_plaintext || room.last_message_content || '';
+
+    // [NEW] Helper to render preview with mentions highlighted
+    const renderPreviewRaw = (rawContent) => {
+        if (!rawContent || rawContent === 'Waiting for key...' || rawContent === 'Decryption Error') {
+            if (hasSkippedSync && rawContent) return 'History hidden';
+            
+            // [FIX] Better fallbacks for E2EE messages on reload
+            if (!rawContent && room.last_message_id) {
+                if (room.last_message_ciphertext) return '🔒 Encrypted Message';
+                if (room.last_message_type === 'image') return 'Photo';
+                if (room.last_message_type === 'file') return 'File';
+                return 'Message';
+            }
+            return rawContent || 'No messages here';
+        }
+        
+        // [NEW] Mask spoilers with dots (no reveal in sidebar - Telegram behavior)
+        rawContent = rawContent.replace(/\|\|.*?\|\|/g, '•••••');
+        
+        // Split by mention pattern: @[Name](user:ID)
+        const parts = rawContent.split(/(@\[.*?\]\(user:\d+\))/g);
+        
+        return parts.map((part, i) => {
+            const match = part.match(/@\[(.*?)\]\(user:(\d+)\)/);
+            if (match) {
+                const name = match[1];
+                const id = match[2];
+                // Check if it's me
+                const isMe = String(id) === String(user.id);
+                
+                return (
+                    <span 
+                        key={i} 
+                        className={isMe ? "text-violet-600 dark:text-violet-400 font-bold" : "font-semibold text-slate-700 dark:text-slate-300"}
+                    >
+                        @{renderTextWithEmojis(name)}
+                    </span>
+                );
+            }
+            // Regular text: render with emojis AND strip markdown
+            const stripped = part
+                .replace(/\*\*(.*?)\*\*/g, '$1') // Bold **
+                .replace(/\*(.*?)\*/g, '$1')     // Italic *
+                .replace(/__(.*?)__/g, '$1')     // Bold __
+                .replace(/_(.*?)_/g, '$1')       // Italic _
+                .replace(/`([^`]+)`/g, '$1')     // Code `
+                .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1') // Link [text](url)
+                .replace(/^#+\s+/g, '');         // Heading #
+
+            return renderTextWithEmojis(stripped);
+        });
+    };
+
+    // [NEW] Background healer for old messages without plaintext
+    useEffect(() => {
+        // If we have ciphertext but no plaintext, trigger background healing
+        if (!room.last_message_plaintext && room.last_message_ciphertext && room.last_message_id) {
+            import('../utils/dbHealer').then(({ healMessage }) => {
+                healMessage(room.id, room.last_message_id);
+            });
+        }
+    }, [room.last_message_id, room.last_message_plaintext, room.last_message_ciphertext, room.id]);
+
+    // [NEW] Reaction Summary
+    const reactionSummary = useMemo(() => {
+        let r = room.last_message_reactions;
+        if (!r) return null;
+        if (typeof r === 'string') {
+            try { r = JSON.parse(r); } catch { return null; }
+        }
+        if (!Array.isArray(r) || r.length === 0) return null;
+        
+        // Use most recent (last in array usually, based on aggregation?)
+        // Aggregation order is undefined without order by. 
+        // We'll just take the first one for now as a "sample".
+        const sample = r[0];
+        return (
+            <span className="ml-1.5 inline-flex items-center justify-center bg-slate-200 dark:bg-slate-700/80 rounded-full px-1 h-[15px] min-w-[15px] text-[9px] text-slate-600 dark:text-slate-300 shrink-0 border border-white dark:border-slate-800">
+                <span className="-translate-y-[0.5px] flex items-center justify-center">
+                    {renderTextWithEmojis(sample.reaction, '1.1em')}
+                </span>
+                {r.length > 1 && <span className="ml-0.5 font-bold">{r.length}</span>}
+            </span>
+        );
+    }, [room.last_message_reactions, user.id]);
+
+    // [NEW] Check for reactions to adjust prefix
+    const hasReactions = useMemo(() => {
+        let r = room.last_message_reactions;
+        if (!r) return false;
+        if (typeof r === 'string') { try { r = JSON.parse(r); } catch { return false; } }
+        return Array.isArray(r) && r.length > 0;
+    }, [room.last_message_reactions]);
+
+    // [NEW] Decrypted reaction preview state
+    const [reactionPreview, setReactionPreview] = useState(null);
+    
+    // Decrypt reaction message content when needed
+    useEffect(() => {
+        if (!room.latest_reaction) {
+            setReactionPreview(null);
+            return;
+        }
+        
+        const lr = room.latest_reaction;
+        
+        // For non-encrypted messages, set preview immediately
+        if (lr.message_type === 'image') { setReactionPreview('Photo'); return; }
+        if (lr.message_type === 'audio') { setReactionPreview('Voice message'); return; }
+        if (lr.message_type === 'file') { setReactionPreview('File'); return; }
+        if (lr.message_type === 'gif') { setReactionPreview('GIF'); return; }
+        if (lr.message_type === 'location') { setReactionPreview('Location'); return; }
+        if (lr.message_type === 'poll') { setReactionPreview('Poll'); return; }
+        
+        if (lr.message_content) {
+            const text = lr.message_content.replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim();
+            setReactionPreview(text.length > 30 ? `"${text.slice(0, 30)}..."` : `"${text}"`);
+            return;
+        }
+        
+        // For encrypted messages, decrypt
+        if (lr.message_ciphertext && lr.message_iv) {
+            (async () => {
+                try {
+                    const keyData = await cryptoManager.getRoomKey(String(room.id), lr.message_key_version);
+                    const salt = lr.message_temp_id || lr.message_id;
+                    const decryptedText = await cryptoManager.decryptMessage(
+                        lr.message_ciphertext,
+                        lr.message_iv,
+                        salt,
+                        keyData?.key || null,
+                        null,
+                        String(room.id),
+                        lr.message_key_version
+                    );
+                    if (decryptedText) {
+                        const text = decryptedText.replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim();
+                        setReactionPreview(text.length > 30 ? `"${text.slice(0, 30)}..."` : `"${text}"`);
+                    } else {
+                        setReactionPreview('a message');
+                    }
+                } catch (e) {
+                    setReactionPreview('a message');
+                }
+            })();
+        } else {
+            setReactionPreview('a message');
+        }
+    }, [room.latest_reaction, room.id]);
+    
+    const reactionNotification = useMemo(() => {
+        // [NEW] First check for latest_reaction (reactions on ANY message, not just last)
+        if (room.latest_reaction && reactionPreview) {
+            const lr = room.latest_reaction;
+            const isMe = String(lr.user_id) === String(user.id);
+            const reactorName = isMe ? 'You' : renderTextWithEmojis(lr.display_name || 'Someone');
+            const emoji = lr.emoji;
+            
+            return (
+                <span className="flex items-center gap-1 text-slate-500 dark:text-slate-400">
+                    <span className={isMe ? "" : "font-medium text-slate-600 dark:text-slate-300"}>{reactorName}</span>
+                    <span>reacted</span>
+                    <span className="text-base flex items-center">{renderTextWithEmojis(emoji, '1.2em')}</span>
+                    <span className="truncate">to: {reactionPreview}</span>
+                </span>
+            );
+        }
+        
+        // Fallback: Check last_message_reactions for reactions on the last message
+        let r = room.last_message_reactions;
+        if (!r) return null;
+        if (typeof r === 'string') { try { r = JSON.parse(r); } catch { return null; } }
+        if (!Array.isArray(r) || r.length === 0) return null;
+
+        const latest = r[0];
+        const isMe = String(latest.userId) === String(user.id);
+        const reactorName = isMe ? 'You' : renderTextWithEmojis(latest.display_name || 'Someone');
+        const emoji = latest.reaction;
+        
+        // Preview text for "to: ..."
+        let preview = '';
+        if (room.last_message_is_deleted) preview = "Deleted message";
+        else if (room.last_message_type === 'image') {
+            const isOpened = room.last_message_is_view_once && room.last_message_viewed_by && room.last_message_viewed_by.length > 0;
+            preview = isOpened ? "Opened" : "Photo";
+        }
+        else if (room.last_message_type === 'video') preview = "Video";
+        else if (room.last_message_type === 'file') preview = room.last_message_file_name || "Document";
+        else if (room.last_message_type === 'audio') preview = "Voice message";
+        else if (room.last_message_type === 'gif') preview = "GIF";
+        else if (room.last_message_type === 'poll') preview = room.last_message_poll_question || "Poll";
+        else preview = renderPreviewRaw(content);
+
+        // Check if this is a view-once photo
+        const isViewOnceImage = room.last_message_type === 'image' && room.last_message_is_view_once;
+        const isLastMessageMe = String(room.last_message_sender_id) === String(user.id);
+        const viewedCount = room.last_message_viewed_by?.length || 0;
+        const memberCount = room.member_count || 2;
+        const isOpened = isViewOnceImage && (isLastMessageMe 
+            ? (viewedCount >= (memberCount - 1))
+            : (room.last_message_viewed_by?.includes(user.id)));
+
+        return (
+            <span className="flex items-center gap-1 text-slate-500 dark:text-slate-400">
+                <span className={isMe ? "" : "font-medium text-slate-600 dark:text-slate-300"}>{reactorName}</span>
+                <span>reacted</span>
+                <span className="text-base flex items-center">{renderTextWithEmojis(emoji, '1.2em')}</span>
+                <span className="ml-0.5 flex items-center gap-1.5">
+                    to: "{isViewOnceImage && <ViewOnceIcon className="w-3.5 h-3.5" isOpened={isOpened} />}{preview}"
+                </span>
+            </span>
+        );
+    }, [room.latest_reaction, reactionPreview, room.last_message_id, room.last_message_reactions, room.last_message_type, room.last_message_is_deleted, room.last_message_file_name, room.last_message_poll_question, content, user.id]);
+
+    // If there's a reaction notification, show it instead of the message content
+    if (reactionNotification) {
+        return (
+            <span className="flex items-center min-w-0">
+                <span className="truncate py-0.5 leading-normal">{reactionNotification}</span>
+            </span>
+        );
+    }
+
+    return (
+        <span className="flex items-center min-w-0">
+            <span className="truncate py-0.5 leading-normal">{renderPreviewRaw(content)}</span>
+            {reactionSummary}
+        </span>
+    );
+};
+
+export default function Sidebar({ rooms, activeRoom, onSelectRoom, loadingRoomId, isLoading, onCreateRoom, onJoinRoom, user, onLogout, onRefresh, onRoomLocked, onGoToMessage, hasSkippedSync, typingByRoom }) { // [MODIFIED] Added typingByRoom
+
     const { presenceMap, fetchStatuses } = usePresence();
     const { hasPasscode, lockApp } = useAppLock();
     const { isRoomLocked, requestUnlock, cancelUnlock } = useChatLock();
@@ -141,7 +395,7 @@ export default function Sidebar({ rooms, activeRoom, onSelectRoom, loadingRoomId
                         key={i} 
                         className={isMe ? "text-violet-600 dark:text-violet-400 font-bold" : "font-semibold text-slate-700 dark:text-slate-300"}
                     >
-                        @{name}
+                        @{renderTextWithEmojis(name)}
                     </span>
                 );
             }
@@ -465,19 +719,22 @@ export default function Sidebar({ rooms, activeRoom, onSelectRoom, loadingRoomId
                                 {room.type === 'group' && !room.last_message_content && !room.last_message_type && !drafts[room.id] ? (
                                     <span className="text-[10px] text-slate-500 font-mono">#{room.code}</span>
                                 ) : drafts[room.id] ? (() => {
-                                    // Process draft: extract emoji alt text and mask spoilers
+                                    // Process draft:
                                     let draftText = drafts[room.id];
-                                    // Replace img tags with their alt text (emoji characters)
+                                    // 1. Replace emoji img tags with their alt text
                                     draftText = draftText.replace(/<img[^>]*alt="([^"]*)"[^>]*>/gi, '$1');
-                                    // Strip remaining HTML tags
+                                    // 2. Strip remaining HTML tags
                                     draftText = draftText.replace(/<[^>]*>/g, '');
-                                    // Mask spoilers with dots
+                                    // 3. Decode common entities (like &nbsp;)
+                                    draftText = draftText.replace(/&nbsp;/g, ' ');
+                                    // 4. Mask spoilers
                                     draftText = draftText.replace(/\|\|.*?\|\|/g, '•••••');
+                                    
                                     return (
                                         <div className="text-xs truncate flex items-center gap-1">
-                                            <span className="text-orange-500 dark:text-orange-400 font-medium">Draft:</span>
-                                            <span className="text-slate-500 dark:text-slate-400 truncate">
-                                                {draftText.slice(0, 30)}
+                                            <span className="text-orange-500 dark:text-orange-400 font-medium shrink-0">Draft:</span>
+                                            <span className="text-slate-500 dark:text-slate-400 truncate py-0.5 leading-normal">
+                                                {renderTextWithEmojis(draftText.slice(0, 60), '1.1em')}
                                             </span>
                                         </div>
                                     );
@@ -493,135 +750,303 @@ export default function Sidebar({ rooms, activeRoom, onSelectRoom, loadingRoomId
                                         <span className="material-symbols-outlined text-[16px] shrink-0">block</span>
                                         <span className="truncate pr-1">You blocked this user</span>
                                     </div>
+                                ) : typingByRoom[room.id] && typingByRoom[room.id].length > 0 ? (
+                                    <div className="text-[12px] text-violet-600 dark:text-violet-400 font-medium flex items-center gap-1.5 animate-pulse-slow">
+                                        <div className="flex gap-0.5 items-center bg-violet-100 dark:bg-violet-900/30 px-1.5 py-0.5 rounded-full">
+                                            <div className="w-1 h-1 rounded-full bg-current animate-bounce" style={{ animationDelay: '0ms' }} />
+                                            <div className="w-1 h-1 rounded-full bg-current animate-bounce" style={{ animationDelay: '150ms' }} />
+                                            <div className="w-1 h-1 rounded-full bg-current animate-bounce" style={{ animationDelay: '300ms' }} />
+                                        </div>
+                                        <span className="truncate">
+                                            {room.type === 'direct' ? 'typing...' : (
+                                                typingByRoom[room.id].length === 1 ? (
+                                                    <>{renderTextWithEmojis(typingByRoom[room.id][0].name)} is typing...</>
+                                                ) : (
+                                                    <>{typingByRoom[room.id].length} people are typing...</>
+                                                )
+                                            )}
+                                        </span>
+                                    </div>
                                 ) : (
                                     <div className="text-xs text-slate-500 dark:text-slate-400 flex items-center gap-1 min-w-0">
-                                        {room.last_message_sender_id === user.id && room.type !== 'ai' && !room.last_message_is_deleted && (
+                                        {String(room.last_message_sender_id) === String(user.id) && room.type !== 'ai' && !room.last_message_is_deleted && !['image', 'file', 'video', 'audio', 'location', 'gif', 'poll'].includes(room.last_message_type) && (
                                             <span className={`material-symbols-outlined text-[16px] shrink-0 ${
                                                 room.last_message_status === 'seen' ? 'text-blue-500' :
-                                                room.last_message_status === 'delivered' ? 'text-slate-400' :
                                                 'text-slate-400'
                                             }`}>
-                                                {room.last_message_status === 'sent' ? 'check' : 'done_all'}
+                                                {room.last_message_status === 'sending' ? 'access_time' : 
+                                                 room.last_message_status === 'sent' ? 'check' : 
+                                                 'done_all'}
                                             </span>
                                         )}
                                         <span className="flex-1 truncate">
-                                            {room.last_message_is_deleted ? (
-                                                <span className="inline-flex items-center gap-1 italic text-slate-500 dark:text-slate-400">
-                                                    <span className="material-symbols-outlined text-[16px] shrink-0">block</span>
-                                                    <span className="pr-1">This message was deleted</span>
-                                                </span>
-                                            ) :
-                                            room.last_message_type === 'image' ? (
-                                                <span className="flex items-center gap-1">
-                                                    {room.type === 'group' && room.last_message_type !== 'system' && room.last_message_sender_id && (
-                                                        <span className="shrink-0 inline-flex items-center">{room.last_message_sender_id === user.id ? 'You:' : <>{renderTextWithEmojis(room.last_message_sender_name || 'User')}:</>}</span>
-                                                    )}
-                                                    {room.last_message_is_view_once ? (
-                                                        (room.last_message_viewed_by && room.last_message_viewed_by.length > 0) ? (
-                                                             <>
-                                                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" className="text-slate-500 dark:text-slate-400 shrink-0">
-                                                                    <path d="M12 22 A10 10 0 0 1 12 2" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-                                                                    <path d="M12 2 A10 10 0 0 1 12 22" stroke="currentColor" strokeWidth="2" strokeDasharray="5 3" strokeLinecap="round" />
-                                                                </svg>
-                                                                <span className="truncate text-slate-500 dark:text-slate-400">Opened</span>
-                                                             </>
-                                                        ) : (
-                                                            <>
-                                                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" className="text-slate-500 dark:text-slate-400 shrink-0">
-                                                                    <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2" strokeDasharray="5 3" strokeLinecap="round" />
-                                                                    <path d="M10.5 9L12 7.5V16.5" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
-                                                                </svg>
-                                                                <span className="truncate">Photo</span>
-                                                            </>
-                                                        )
-                                                    ) : (
-                                                        <>
-                                                            <span className="material-symbols-outlined text-[18px] translate-y-[0.5px] shrink-0">image</span>
-                                                            <span className="truncate py-0.5 leading-normal">
-                                                                {room.last_message_attachments_count > 1 
-                                                                    ? `${room.last_message_attachments_count} Photos`
-                                                                    : (room.last_message_caption ? renderTextWithEmojis(room.last_message_caption) : 'Photo')}
-                                                            </span>
-                                                        </>
-                                                    )}
-                                                </span>
-                                            ) :
-                                            room.last_message_type === 'file' ? (
-                                                <span className="flex items-center gap-1">
-                                                    {room.type === 'group' && room.last_message_type !== 'system' && room.last_message_sender_id && (
-                                                        <span className="shrink-0 inline-flex items-center">{room.last_message_sender_id === user.id ? 'You:' : <>{renderTextWithEmojis(room.last_message_sender_name || 'User')}:</>}</span>
-                                                    )}
-                                                    <span className="material-symbols-outlined text-[18px] translate-y-[0.5px] shrink-0">description</span>
-                                                        <span className="truncate py-0.5 leading-normal">
-                                                            {room.last_message_file_name || 'File'}
-                                                            {room.last_message_caption ? ` • ${renderTextWithEmojis(room.last_message_caption)}` : ''}
+                                            {(() => {
+                                                const rRaw = room.last_message_reactions;
+                                                let r = [];
+                                                if (rRaw) {
+                                                    if (typeof rRaw === 'string') { try { r = JSON.parse(rRaw); } catch {} }
+                                                    else if (Array.isArray(rRaw)) { r = rRaw; }
+                                                }
+                                                const hasReactions = r.length > 0;
+
+                                                if (room.last_message_is_deleted) {
+                                                    return (
+                                                        <span className="inline-flex items-center gap-1 italic text-slate-500 dark:text-slate-400">
+                                                            <span className="material-symbols-outlined text-[16px] shrink-0">block</span>
+                                                            <span className="pr-1">This message was deleted</span>
                                                         </span>
-                                                </span>
-                                            ) :
-                                            room.last_message_type === 'location' ? (
-                                                <span className="flex items-center gap-1">
-                                                    {room.type === 'group' && room.last_message_type !== 'system' && room.last_message_sender_id && (
-                                                        <span className="shrink-0 inline-flex items-center">{room.last_message_sender_id === user.id ? 'You:' : <>{renderTextWithEmojis(room.last_message_sender_name || 'User')}:</>}</span>
-                                                    )}
-                                                    <span className="material-symbols-outlined text-[18px] translate-y-[0.5px] shrink-0">location_on</span>
-                                                    <span>Location</span>
-                                                </span>
-                                            ) :
-                                            room.last_message_type === 'audio' ? (
-                                                <span>
-                                                    {room.type === 'group' && room.last_message_type !== 'system' && room.last_message_sender_id && (
-                                                        <span className="mr-1 inline-flex items-center">{room.last_message_sender_id === user.id ? 'You:' : <>{renderTextWithEmojis(room.last_message_sender_name || 'User')}:</>}</span>
-                                                    )}
-                                                    Sent an audio
-                                                </span>
-                                            ) :
-                                            room.last_message_type === 'gif' ? (
-                                                <span>
-                                                     {room.type === 'group' && room.last_message_type !== 'system' && room.last_message_sender_id && (
-                                                        <span className="mr-1 inline-flex items-center">{room.last_message_sender_id === user.id ? 'You:' : <>{renderTextWithEmojis(room.last_message_sender_name || 'User')}:</>}</span>
-                                                    )}
-                                                    Sent a GIF
-                                                </span>
-                                            ) :
-                                            room.last_message_type === 'poll_vote' ? (
-                                                <span className="flex items-center gap-1">
-                                                    <span className="shrink-0">
-                                                        {room.last_message_sender_id === user.id ? 'You' : renderTextWithEmojis(room.last_message_sender_name)}
-                                                    </span>
-                                                    <span>voted in:</span>
-                                                    <PollIcon className="w-4 h-4 shrink-0" />
-                                                    <span className="truncate py-0.5 leading-normal">{renderTextWithEmojis(room.last_message_poll_question) || 'Poll'}</span>
-                                                </span>
-                                            ) :
-                                            room.last_message_type === 'poll' ? (
-                                                <span className="flex items-center gap-1">
-                                                    {room.type === 'group' && room.last_message_sender_name && (
-                                                       <span className="shrink-0">{room.last_message_sender_id === user.id ? 'You' : renderTextWithEmojis(room.last_message_sender_name)}:</span>
-                                                   )}
-                                                    <PollIcon className="w-4 h-4 shrink-0" />
-                                                    <span className="truncate py-0.5 leading-normal">{renderTextWithEmojis(room.last_message_poll_question, '1.1em') || 'Poll'}</span>
-                                                </span>
-                                            ) :
-                                            (room.last_message_content && room.last_message_content.includes('pinned a message')) ? (
-                                                <span className="flex items-center gap-1">
-                                                    <span className="material-symbols-outlined text-[16px] translate-y-[0.5px] shrink-0">push_pin</span>
-                                                    <span className="truncate py-0.5 leading-normal">
-                                                        {room.last_message_sender_id === user.id 
-                                                            ? 'You pinned a message' 
-                                                            : `${room.last_message_sender_name || 'Someone'} pinned a message`}
-                                                    </span>
-                                                </span>
-                                            ) :
-                                            /* Text & Fallback */
-                                            (
-                                                <span className="flex items-center">
-                                                    {room.type === 'group' && room.last_message_type !== 'system' && room.last_message_sender_id && (
-                                                        <span className="mr-1 shrink-0 inline-flex items-center">{room.last_message_sender_id === user.id ? 'You:' : <>{renderTextWithEmojis(room.last_message_sender_name || 'User')}:</>}</span>
-                                                    )}
-                                                    <span className="truncate py-0.5 leading-normal">{renderPreview(room.last_message_content)}</span>
-                                                </span>
-                                            )
-                                        }
+                                                    );
+                                                }
+
+                                                if (hasReactions) {
+                                                    return (
+                                                        <span className="flex items-center">
+                                                            {room.type === 'group' && String(room.last_message_sender_id) === String(user.id) && room.last_message_sender_id && (
+                                                                <span className="mr-1 shrink-0 inline-flex items-center">
+                                                                    You:
+                                                                </span>
+                                                            )}
+                                                            {room.type === 'group' && String(room.last_message_sender_id) !== String(user.id) && room.last_message_sender_id && (
+                                                                <span className="mr-1 shrink-0 inline-flex items-center">
+                                                                    <>{renderTextWithEmojis(room.last_message_sender_name || 'User')}:</>
+                                                                </span>
+                                                            )}
+                                                            <LastMessagePreview room={room} user={user} hasSkippedSync={hasSkippedSync} />
+                                                        </span>
+                                                    );
+                                                }
+
+                                                // Regular rendering (No Reactions)
+                                                switch (room.last_message_type) {
+                                                    case 'image':
+                                                        return (
+                                                            <span className="flex items-center gap-1">
+                                                                {room.type === 'group' && String(room.last_message_sender_id) === String(user.id) && room.last_message_sender_id && (
+                                                                    <span className="shrink-0 inline-flex items-center">You:</span>
+                                                                )}
+                                                                {room.type === 'group' && String(room.last_message_sender_id) !== String(user.id) && room.last_message_sender_id && (
+                                                                    <span className="shrink-0 inline-flex items-center"><>{renderTextWithEmojis(room.last_message_sender_name || 'User')}:</></span>
+                                                                )}
+                                                                 {room.last_message_is_view_once ? (() => {
+                                                                     const isLastMessageMe = String(room.last_message_sender_id) === String(user.id);
+                                                                     const viewedCount = room.last_message_viewed_by?.length || 0;
+                                                                     const memberCount = room.member_count || 2;
+                                                                     const isOpened = isLastMessageMe 
+                                                                         ? (viewedCount >= (memberCount - 1))
+                                                                         : (room.last_message_viewed_by?.includes(user.id));
+                                                                     
+                                                                     return (
+                                                                         <div className="flex items-center gap-1">
+                                                                             <ViewOnceIcon 
+                                                                                 className="w-4 h-4 text-slate-500 dark:text-slate-400" 
+                                                                                 isOpened={isOpened} 
+                                                                             />
+                                                                             <span className={`truncate ${isOpened ? 'text-slate-500 dark:text-slate-400' : ''}`}>
+                                                                                 {isOpened ? 'Opened' : 'Photo'}
+                                                                             </span>
+                                                                         </div>
+                                                                     );
+                                                                 })() : (
+                                                                    <>
+                                                                        {String(room.last_message_sender_id) === String(user.id) && (
+                                                                             <span className={`material-symbols-outlined text-[16px] shrink-0 mr-1 ${
+                                                                                room.last_message_status === 'seen' ? 'text-blue-500' :
+                                                                                'text-slate-400'
+                                                                            }`}>
+                                                                                {room.last_message_status === 'sending' ? 'access_time' : 
+                                                                                 room.last_message_status === 'sent' ? 'check' : 
+                                                                                 'done_all'}
+                                                                            </span>
+                                                                        )}
+                                                                        <span className="material-symbols-outlined text-[18px] translate-y-[0.5px] shrink-0">image</span>
+                                                                        <span className="truncate py-0.5 leading-normal">
+                                                                            {room.last_message_attachments_count > 1 
+                                                                                ? `${room.last_message_attachments_count} Photos`
+                                                                                : (room.last_message_caption ? renderTextWithEmojis(room.last_message_caption) : 'Photo')}
+                                                                        </span>
+                                                                    </>
+                                                                )}
+                                                            </span>
+                                                        );
+                                                    case 'file':
+                                                        return (
+                                                            <span className="flex items-center gap-1">
+                                                                {room.type === 'group' && String(room.last_message_sender_id) === String(user.id) && room.last_message_sender_id && (
+                                                                    <span className="shrink-0 inline-flex items-center">You:</span>
+                                                                )}
+                                                                {room.type === 'group' && String(room.last_message_sender_id) !== String(user.id) && room.last_message_sender_id && (
+                                                                    <span className="shrink-0 inline-flex items-center"><>{renderTextWithEmojis(room.last_message_sender_name || 'User')}:</></span>
+                                                                )}
+                                                                {String(room.last_message_sender_id) === String(user.id) && (
+                                                                     <span className={`material-symbols-outlined text-[16px] shrink-0 ${
+                                                                        room.last_message_status === 'seen' ? 'text-blue-500' :
+                                                                        room.last_message_status === 'delivered' ? 'text-slate-400' :
+                                                                        'text-slate-400'
+                                                                    }`}>
+                                                                        {room.last_message_status === 'sending' ? 'access_time' : 
+                                                                         room.last_message_status === 'sent' ? 'check' : 
+                                                                         'done_all'}
+                                                                    </span>
+                                                                )}
+                                                                <span className="material-symbols-outlined text-[18px] translate-y-[0.5px] shrink-0">description</span>
+                                                                    <span className="truncate py-0.5 leading-normal">
+                                                                        {room.last_message_file_name || 'File'}
+                                                                        {room.last_message_caption ? <> • {renderTextWithEmojis(room.last_message_caption)}</> : ''}
+                                                                    </span>
+                                                            </span>
+                                                        );
+                                                    case 'location':
+                                                        return (
+                                                            <span className="flex items-center gap-1">
+                                                                {room.type === 'group' && String(room.last_message_sender_id) === String(user.id) && room.last_message_sender_id && (
+                                                                    <span className="shrink-0 inline-flex items-center">You:</span>
+                                                                )}
+                                                                {room.type === 'group' && String(room.last_message_sender_id) !== String(user.id) && room.last_message_sender_id && (
+                                                                    <span className="shrink-0 inline-flex items-center"><>{renderTextWithEmojis(room.last_message_sender_name || 'User')}:</></span>
+                                                                )}
+                                                                {String(room.last_message_sender_id) === String(user.id) && (
+                                                                     <span className={`material-symbols-outlined text-[16px] shrink-0 ${
+                                                                        room.last_message_status === 'seen' ? 'text-blue-500' :
+                                                                        'text-slate-400'
+                                                                    }`}>
+                                                                        {room.last_message_status === 'sending' ? 'access_time' : 
+                                                                         room.last_message_status === 'sent' ? 'check' : 
+                                                                         'done_all'}
+                                                                    </span>
+                                                                )}
+                                                                <span className="material-symbols-outlined text-[18px] translate-y-[0.5px] shrink-0">location_on</span>
+                                                                <span>Location</span>
+                                                            </span>
+                                                        );
+                                                    case 'audio':
+                                                        return ( 
+                                                            <span className="flex items-center gap-1">
+                                                                {room.type === 'group' && String(room.last_message_sender_id) === String(user.id) && room.last_message_sender_id && (
+                                                                    <span className="shrink-0 inline-flex items-center">You:</span>
+                                                                )}
+                                                                {room.type === 'group' && String(room.last_message_sender_id) !== String(user.id) && room.last_message_sender_id && (
+                                                                    <span className="shrink-0 inline-flex items-center"><>{renderTextWithEmojis(room.last_message_sender_name || 'User')}:</></span>
+                                                                )}
+                                                                {String(room.last_message_sender_id) === String(user.id) && (
+                                                                     <span className={`material-symbols-outlined text-[16px] shrink-0 ${
+                                                                        room.last_message_status === 'seen' ? 'text-blue-500' :
+                                                                        'text-slate-400'
+                                                                    }`}>
+                                                                        {room.last_message_status === 'sending' ? 'access_time' : 
+                                                                         room.last_message_status === 'sent' ? 'check' : 
+                                                                         'done_all'}
+                                                                    </span>
+                                                                )}
+                                                                <span className="material-symbols-outlined text-[18px] translate-y-[0.5px] shrink-0">mic</span>
+                                                                <span>Voice message</span>
+                                                            </span>
+                                                        );
+                                                    case 'gif':
+                                                        return (
+                                                            <span className="flex items-center gap-1">
+                                                                {room.type === 'group' && String(room.last_message_sender_id) === String(user.id) && room.last_message_sender_id && (
+                                                                    <span className="shrink-0 inline-flex items-center">You:</span>
+                                                                )}
+                                                                {room.type === 'group' && String(room.last_message_sender_id) !== String(user.id) && room.last_message_sender_id && (
+                                                                    <span className="shrink-0 inline-flex items-center"><>{renderTextWithEmojis(room.last_message_sender_name || 'User')}:</></span>
+                                                                )}
+                                                                {String(room.last_message_sender_id) === String(user.id) && (
+                                                                     <span className={`material-symbols-outlined text-[16px] shrink-0 ${
+                                                                        room.last_message_status === 'seen' ? 'text-blue-500' :
+                                                                        'text-slate-400'
+                                                                    }`}>
+                                                                        {room.last_message_status === 'sending' ? 'access_time' : 
+                                                                         room.last_message_status === 'sent' ? 'check' : 
+                                                                         'done_all'}
+                                                                    </span>
+                                                                )}
+                                                                <span className="material-symbols-outlined text-[18px] translate-y-[0.5px] shrink-0">gif_box</span>
+                                                                <span>GIF</span>
+                                                            </span>
+                                                        );
+                                                    case 'video':
+                                                        return (
+                                                            <span className="flex items-center gap-1">
+                                                                {room.type === 'group' && String(room.last_message_sender_id) === String(user.id) && room.last_message_sender_id && (
+                                                                    <span className="shrink-0 inline-flex items-center">You:</span>
+                                                                )}
+                                                                {room.type === 'group' && String(room.last_message_sender_id) !== String(user.id) && room.last_message_sender_id && (
+                                                                    <span className="shrink-0 inline-flex items-center"><>{renderTextWithEmojis(room.last_message_sender_name || 'User')}:</></span>
+                                                                )}
+                                                                {String(room.last_message_sender_id) === String(user.id) && (
+                                                                     <span className={`material-symbols-outlined text-[16px] shrink-0 ${
+                                                                        room.last_message_status === 'seen' ? 'text-blue-500' :
+                                                                        'text-slate-400'
+                                                                    }`}>
+                                                                        {room.last_message_status === 'sending' ? 'access_time' : 
+                                                                         room.last_message_status === 'sent' ? 'check' : 
+                                                                         'done_all'}
+                                                                    </span>
+                                                                )}
+                                                                <span className="material-symbols-outlined text-[18px] translate-y-[0.5px] shrink-0">videocam</span>
+                                                                <span>Video</span>
+                                                            </span>
+                                                        );
+                                                    case 'poll_vote':
+                                                        return (
+                                                            <span className="flex items-center gap-1">
+                                                                <span className="shrink-0">
+                                                                    {String(room.last_message_sender_id) === String(user.id) ? 'You' : renderTextWithEmojis(room.last_message_sender_name)}
+                                                                </span>
+                                                                <span>voted in:</span>
+                                                                <PollIcon className="w-4 h-4 shrink-0" />
+                                                                <span className="truncate py-0.5 leading-normal">{renderTextWithEmojis(room.last_message_poll_question) || 'Poll'}</span>
+                                                            </span>
+                                                        );
+                                                    case 'poll':
+                                                        return (
+                                                            <span className="flex items-center gap-1">
+                                                                {room.type === 'group' && String(room.last_message_sender_id) === String(user.id) && room.last_message_sender_name && (
+                                                                   <span className="shrink-0">You:</span>
+                                                               )}
+                                                               {room.type === 'group' && String(room.last_message_sender_id) !== String(user.id) && room.last_message_sender_name && (
+                                                                   <span className="shrink-0">{renderTextWithEmojis(room.last_message_sender_name)}:</span>
+                                                               )}
+                                                                {String(room.last_message_sender_id) === String(user.id) && (
+                                                                     <span className={`material-symbols-outlined text-[16px] shrink-0 ${
+                                                                        room.last_message_status === 'seen' ? 'text-blue-500' :
+                                                                        'text-slate-400'
+                                                                    }`}>
+                                                                        {room.last_message_status === 'sending' ? 'access_time' : 
+                                                                         room.last_message_status === 'sent' ? 'check' : 
+                                                                         'done_all'}
+                                                                    </span>
+                                                                )}
+                                                                <PollIcon className="w-4 h-4 shrink-0" />
+                                                                <span className="truncate py-0.5 leading-normal">{renderTextWithEmojis(room.last_message_poll_question, '1.1em') || 'Poll'}</span>
+                                                            </span>
+                                                        );
+                                                    default:
+                                                        if (room.last_message_content && room.last_message_content.includes('pinned a message')) {
+                                                            return (
+                                                                <span className="flex items-center gap-1">
+                                                                    <span className="material-symbols-outlined text-[16px] translate-y-[0.5px] shrink-0">push_pin</span>
+                                                                    <span className="truncate py-0.5 leading-normal">
+                                                                        {String(room.last_message_sender_id) === String(user.id) 
+                                                                            ? (room.type === 'group' ? 'You pinned a message' : 'Pinned a message')
+                                                                            : `${room.last_message_sender_name || 'Someone'} pinned a message`}
+                                                                    </span>
+                                                                </span>
+                                                            );
+                                                        }
+                                                        return (
+                                                            <span className="flex items-center">
+                                                                {room.type === 'group' && String(room.last_message_sender_id) === String(user.id) && room.last_message_sender_id && (
+                                                                    <span className="mr-1 shrink-0 inline-flex items-center">You:</span>
+                                                                )}
+                                                                {room.type === 'group' && String(room.last_message_sender_id) !== String(user.id) && room.last_message_type !== 'system' && room.last_message_sender_id && (
+                                                                    <span className="mr-1 shrink-0 inline-flex items-center"><>{renderTextWithEmojis(room.last_message_sender_name || 'User')}:</></span>
+                                                                )}
+                                                                <LastMessagePreview room={room} user={user} hasSkippedSync={hasSkippedSync} />
+                                                            </span>
+                                                        );
+                                                }
+                                            })()}
                                         </span>
                                     </div>
                                 )}
@@ -663,11 +1088,11 @@ export default function Sidebar({ rooms, activeRoom, onSelectRoom, loadingRoomId
                                             <span className="material-symbols-outlined text-[16px] text-slate-400 dark:text-slate-500 transform rotate-45">push_pin</span>
                                         )}
                                          {/* Mention Badge */}
-                                         {room.unread_count > 0 && room.last_message_content && room.last_message_content.includes(`(user:${user.id})`) && (
-                                            <span className="bg-orange-500 text-white w-5 h-5 rounded-full flex items-center justify-center shadow-sm animate-pulse">
-                                                <span className="material-symbols-outlined text-[14px]">alternate_email</span>
-                                            </span>
-                                        )}
+                                         {room.mention_count > 0 && (
+                                             <span className="bg-orange-500 text-white w-5 h-5 rounded-full flex items-center justify-center shadow-sm animate-pulse ring-2 ring-white dark:ring-slate-900">
+                                                 <span className="material-symbols-outlined text-[14px]">alternate_email</span>
+                                             </span>
+                                         )}
 
                                         {room.unread_count > 0 && (
                                             <span className="bg-violet-600 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full min-w-[20px] h-[20px] flex items-center justify-center">
@@ -786,7 +1211,7 @@ export default function Sidebar({ rooms, activeRoom, onSelectRoom, loadingRoomId
                 <ProfilePanel
                     userId={user.id}
                     onClose={() => setShowMyProfile(false)}
-                    // No actions for self in sidebar
+                    onGoToMessage={onGoToMessage}
                 />
             )}
 

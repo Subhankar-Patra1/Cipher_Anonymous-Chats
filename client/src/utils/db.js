@@ -1,34 +1,127 @@
-import { openDB } from 'idb';
+import Dexie from 'dexie';
 
-const DB_NAME = 'cipher_offline_db';
-const STORE_NAME = 'pending_messages';
+const db = new Dexie('CipherChatDB');
 
-export const initDB = async () => {
-    return openDB(DB_NAME, 1, {
-        upgrade(db) {
-            if (!db.objectStoreNames.contains(STORE_NAME)) {
-                db.createObjectStore(STORE_NAME, { keyPath: 'tempId' });
-            }
-        },
+// Define Schema
+// ++localId = Auto-incrementing integer (Internal use only)
+// id = The Server ID (Index this so you can search by it)
+// tempId = The Optimistic ID (Index this for your update logic)
+db.version(3).stores({
+  messages: '++localId, id, room_id, created_at, tempId, status', 
+  keys: 'room_id',
+  pending_queue: '++localId, room_id'
+});
+
+// [CRITICAL] Handle "UpgradeError: Not yet support for changing primary key"
+// This happens during refactoring when primary keys are modified.
+db.open().catch(err => {
+  if (err.name === 'UpgradeError' || err.message.includes('primary key')) {
+    console.warn('[Dexie] Schema mismatch detected (primary key change). Resetting database...');
+    db.delete().then(() => {
+        window.location.reload();
     });
+  } else {
+    console.error('[Dexie] Failed to open database:', err);
+  }
+});
+
+export default db;
+
+// Helper functions for easy access
+
+export const saveLocalMessage = async (message) => {
+    try {
+        // Normalize IDs to String for consistent Dexie querying
+        if (message.id) message.id = String(message.id);
+        if (message.temp_id) message.temp_id = String(message.temp_id);
+        if (message.tempId) message.tempId = String(message.tempId);
+        if (message.room_id) message.room_id = String(message.room_id);
+
+        // 1. Reconciliation by Real ID
+        if (message.id && !message.id.startsWith('temp-')) {
+            const existing = await db.messages.where('id').equals(message.id).first();
+            if (existing) {
+                // [FIX] Preserve local status if it's more authoritative than server status
+                // Status priority: seen > delivered > sent > sending > pending
+                const statusPriority = { 'seen': 4, 'delivered': 3, 'sent': 2, 'sending': 1, 'pending': 0 };
+                const existingPriority = statusPriority[existing.status] ?? -1;
+                const incomingPriority = statusPriority[message.status] ?? -1;
+                
+                // Keep existing status if it's higher priority (more "advanced")
+                const finalStatus = existingPriority >= incomingPriority ? existing.status : message.status;
+                
+                await db.messages.update(existing.localId, { 
+                    ...message, 
+                    status: finalStatus,
+                    // Also preserve plaintext_content if already cached
+                    plaintext_content: message.plaintext_content || existing.plaintext_content
+                });
+                return existing.localId;
+            }
+        }
+
+        // 2. Reconciliation by Temp ID (Confirmation of own messages)
+        const tempId = message.tempId || message.temp_id;
+        if (tempId) {
+            const existing = await db.messages.where('tempId').equals(String(tempId)).first();
+            if (existing) {
+                // Merge new data into existing (confirming Real ID, content updates, etc)
+                await db.messages.update(existing.localId, {
+                    ...message,
+                    id: message.id ? String(message.id) : existing.id
+                });
+                return existing.localId;
+            }
+        }
+
+        // 3. Brand New Message
+        return await db.messages.add(message);
+    } catch (err) {
+        console.error('[Dexie] Save error:', err);
+        return null;
+    }
 };
 
-export const savePendingMessage = async (message) => {
-    const db = await initDB();
-    await db.put(STORE_NAME, message);
+export const updateLocalMessage = async (idOrTempId, updates) => {
+    const searchId = String(idOrTempId);
+    // Try tempId index first
+    let count = await db.messages.where('tempId').equals(searchId).modify(updates);
+    if (count === 0) {
+        // Try real server id index
+        count = await db.messages.where('id').equals(searchId).modify(updates);
+    }
+    return count;
+};
+
+export const deleteLocalMessage = async (idOrTempId) => {
+    const searchId = String(idOrTempId);
+    let count = await db.messages.where('tempId').equals(searchId).delete();
+    if (count === 0) {
+        count = await db.messages.where('id').equals(searchId).delete();
+    }
+    return count;
+};
+
+export const saveFetchedMessages = async (messages) => {
+    for (const msg of messages) {
+        await saveLocalMessage(msg);
+    }
 };
 
 export const getPendingMessages = async () => {
-    const db = await initDB();
-    return db.getAll(STORE_NAME);
+    return await db.messages.where('status').anyOf(['sending', 'pending', 'failed']).toArray();
+};
+
+export const savePendingMessage = async (message) => {
+    return await db.messages.add({ 
+        ...message, 
+        id: message.id ? String(message.id) : undefined,
+        tempId: message.tempId ? String(message.tempId) : undefined,
+        room_id: message.room_id ? String(message.room_id) : undefined,
+        status: 'pending' 
+    });
 };
 
 export const deletePendingMessage = async (tempId) => {
-    const db = await initDB();
-    await db.delete(STORE_NAME, tempId);
-};
-
-export const clearPendingMessages = async () => {
-    const db = await initDB();
-    await db.clear(STORE_NAME);
+    return await db.messages.where('tempId').equals(String(tempId)).delete();
 };

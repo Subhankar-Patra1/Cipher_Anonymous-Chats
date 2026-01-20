@@ -85,10 +85,10 @@ router.post('/audio', upload.single('audio'), async (req, res) => {
         // Insert into DB (always save, even if blocked)
         // [MODIFIED] Include blocked_for_user_id to permanently hide from blocker
         const result = await db.query(
-            `INSERT INTO messages (room_id, user_id, type, audio_url, audio_duration_ms, audio_waveform, content, reply_to_message_id, blocked_for_user_id) 
-             VALUES ($1, $2, 'audio', $3, $4, $5, 'Voice message', $6, $7) 
+            `INSERT INTO messages (room_id, user_id, type, audio_url, audio_duration_ms, audio_waveform, content, reply_to_message_id, blocked_for_user_id, mention_user_ids) 
+             VALUES ($1, $2, 'audio', $3, $4, $5, 'Voice message', $6, $7, $8) 
              RETURNING id, status, created_at`,
-            [roomId, req.user.id, audioUrl, durationMs, waveform, replyToMessageId || null, blockerUserId || null]
+            [roomId, req.user.id, audioUrl, durationMs, waveform, replyToMessageId || null, blockerUserId || null, req.body.mention_user_ids || null]
         );
         
         // [NEW] Update Room Last Message At
@@ -235,10 +235,10 @@ router.post('/image', upload.array('images', 10), async (req, res) => {
 
         // Insert into DB with blocked_for_user_id
         const result = await db.query(
-            `INSERT INTO messages (room_id, user_id, type, image_url, image_width, image_height, image_size, content, caption, reply_to_message_id, attachments, is_view_once, blocked_for_user_id) 
-             VALUES ($1, $2, 'image', $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) 
-             RETURNING id, status, created_at`,
-            [roomId, req.user.id, primaryImage.url, primaryImage.width, primaryImage.height, primaryImage.size, 'Image', caption || '', replyToMessageId || null, JSON.stringify(attachments), isViewOnce === 'true' || isViewOnce === true, blockerUserId || null]
+            `INSERT INTO messages (room_id, user_id, type, image_url, image_width, image_height, image_size, content, caption, reply_to_message_id, attachments, is_view_once, blocked_for_user_id, mention_user_ids, temp_id) 
+             VALUES ($1, $2, 'image', $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) 
+             RETURNING id, status, created_at, temp_id`,
+            [roomId, req.user.id, primaryImage.url, primaryImage.width, primaryImage.height, primaryImage.size, 'Image', caption || '', replyToMessageId || null, JSON.stringify(attachments), isViewOnce === 'true' || isViewOnce === true, blockerUserId || null, req.body.mention_user_ids || null, tempId || null]
         );
         
         // Update Room Last Message At
@@ -271,6 +271,7 @@ router.post('/image', upload.array('images', 10), async (req, res) => {
             avatar_thumb_url: user ? user.avatar_thumb_url : null,
             avatar_url: user ? user.avatar_url : null,
             tempId: tempId,
+            temp_id: tempId, // [FIX] Add temp_id for client reconciliation
             is_view_once: isViewOnce === 'true' || isViewOnce === true,
             viewed_by: []
         };
@@ -354,10 +355,10 @@ router.post('/file', upload.single('file'), async (req, res) => {
 
         // Insert into DB with blocked_for_user_id
         const result = await db.query(
-            `INSERT INTO messages (room_id, user_id, type, file_url, file_name, file_size, file_type, file_extension, content, caption, reply_to_message_id, blocked_for_user_id) 
-             VALUES ($1, $2, 'file', $3, $4, $5, $6, $7, $8, $9, $10, $11) 
+            `INSERT INTO messages (room_id, user_id, type, file_url, file_name, file_size, file_type, file_extension, content, caption, reply_to_message_id, blocked_for_user_id, mention_user_ids) 
+             VALUES ($1, $2, 'file', $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) 
              RETURNING id, status, created_at`,
-            [roomId, req.user.id, fileUrl, originalName, fileSize, mimeType, ext, 'File', caption || null, replyToMessageId || null, blockerUserId || null]
+            [roomId, req.user.id, fileUrl, originalName, fileSize, mimeType, ext, 'File', caption || null, replyToMessageId || null, blockerUserId || null, req.body.mention_user_ids || null]
         );
         
         // Update Room Last Message At
@@ -467,27 +468,27 @@ router.post('/', async (req, res) => {
         let params;
         if (type === 'gif') {
             query = `
-                INSERT INTO messages (room_id, user_id, type, gif_url, preview_url, width, height, content, reply_to_message_id, blocked_for_user_id) 
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) 
+                INSERT INTO messages (room_id, user_id, type, gif_url, preview_url, width, height, content, reply_to_message_id, blocked_for_user_id, mention_user_ids) 
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) 
                 RETURNING id, status, reply_to_message_id, created_at
             `;
-            params = [room_id, req.user.id, type, gif_url, preview_url, width, height, content || 'GIF', replyToMessageId || null, blockerUserId || null];
+            params = [room_id, req.user.id, type, gif_url, preview_url, width, height, content || 'GIF', replyToMessageId || null, blockerUserId || null, req.body.mention_user_ids || null];
         } else if (type === 'location') {
             const { latitude, longitude, address } = req.body;
             query = `
-                INSERT INTO messages (room_id, user_id, type, content, latitude, longitude, address, reply_to_message_id, blocked_for_user_id) 
-                VALUES ($1, $2, 'location', $3, $4, $5, $6, $7, $8) 
+                INSERT INTO messages (room_id, user_id, type, content, latitude, longitude, address, reply_to_message_id, blocked_for_user_id, mention_user_ids) 
+                VALUES ($1, $2, 'location', $3, $4, $5, $6, $7, $8, $9) 
                 RETURNING id, status, reply_to_message_id, created_at
             `;
-            params = [room_id, req.user.id, address || 'Location', latitude, longitude, address || null, replyToMessageId || null, blockerUserId || null];
+            params = [room_id, req.user.id, address || 'Location', latitude, longitude, address || null, replyToMessageId || null, blockerUserId || null, req.body.mention_user_ids || null];
         } else {
             // Fallback for text
             query = `
-                INSERT INTO messages (room_id, user_id, content, reply_to_message_id, blocked_for_user_id) 
-                VALUES ($1, $2, $3, $4, $5) 
+                INSERT INTO messages (room_id, user_id, content, reply_to_message_id, blocked_for_user_id, mention_user_ids) 
+                VALUES ($1, $2, $3, $4, $5, $6) 
                 RETURNING id, status, reply_to_message_id, created_at
             `;
-            params = [room_id, req.user.id, content, replyToMessageId || null, blockerUserId || null];
+            params = [room_id, req.user.id, content, replyToMessageId || null, blockerUserId || null, req.body.mention_user_ids || null];
         }
 
         const result = await db.query(query, params);
@@ -502,16 +503,16 @@ router.post('/', async (req, res) => {
 
 
         // [FIX] Explicitly find who is hidden BEFORE updating
-        console.log(`[DEBUG] Handling invisible check for room ${room_id}`);
+        // console.log(`[DEBUG] Handling invisible check for room ${room_id}`);
         const hiddenMembersRes = await db.query('SELECT user_id FROM room_members WHERE room_id = $1 AND is_hidden = TRUE', [room_id]);
         const hiddenUserIds = hiddenMembersRes.rows.map(r => r.user_id);
-        console.log(`[DEBUG] Found hidden members in room ${room_id}:`, hiddenUserIds);
+        // console.log(`[DEBUG] Found hidden members in room ${room_id}:`, hiddenUserIds);
         
         // Unhide for everyone (ensure consistency)
         const updateRes = await db.query('UPDATE room_members SET is_hidden = FALSE WHERE room_id = $1', [room_id]);
-        console.log(`[DEBUG] Updated room ${room_id} visibility. RowCount: ${updateRes.rowCount}`);
+        // console.log(`[DEBUG] Updated room ${room_id} visibility. RowCount: ${updateRes.rowCount}`);
         
-        console.log('[DEBUG] Previously hidden users:', hiddenUserIds);
+        // console.log('[DEBUG] Previously hidden users:', hiddenUserIds);
 
         // We can also just broadcast to ALL other members to be safe, client dedups.
         // But let's prioritize the hidden ones + anyone else who might be missing it?
@@ -546,6 +547,7 @@ router.post('/', async (req, res) => {
                     (SELECT u.display_name FROM users u WHERE u.id = r.created_by) as creator_name,
                     (SELECT u.username FROM users u WHERE u.id = r.created_by) as creator_username,
                     (SELECT COUNT(*) FROM messages m WHERE m.room_id = r.id AND m.created_at > COALESCE(rm.last_read_at, '1970-01-01')) as unread_count,
+                    (SELECT COUNT(*) FROM messages m WHERE m.room_id = r.id AND m.created_at > COALESCE(rm.last_read_at, '1970-01-01') AND $1::integer = ANY(m.mention_user_ids)) as mention_count,
                     gp.send_mode, gp.allow_name_change, gp.allow_description_change, gp.allow_add_members, gp.allow_remove_members
                     FROM rooms r 
                     JOIN room_members rm ON r.id = rm.room_id 
@@ -564,7 +566,8 @@ router.post('/', async (req, res) => {
                         avatar_url: rawRoom.type === 'direct' ? rawRoom.other_user_avatar_url : rawRoom.avatar_url,
                         creator_name: rawRoom.creator_name,
                         creator_username: rawRoom.creator_username,
-                        unread_count: parseInt(rawRoom.unread_count || 0) // Ensure number
+                        unread_count: parseInt(rawRoom.unread_count || 0), // Ensure number
+                        mention_count: parseInt(rawRoom.mention_count || 0) // [NEW] Real-time sync
                      };
                      
                      io.to(`user:${recipientId}`).emit('room_added', formattedRoom);
@@ -594,6 +597,7 @@ router.post('/', async (req, res) => {
             address: req.body.address || null,
             status: info.status,
             reply_to_message_id: info.reply_to_message_id,
+            mention_user_ids: req.body.mention_user_ids || [], // [NEW] Broadcast mentions
             created_at: createdAtISO,
 
             username: req.user.username,
@@ -620,10 +624,17 @@ router.post('/', async (req, res) => {
 
 // [NEW] Message Info
 router.get('/:id/info', async (req, res) => {
-    const messageId = req.params.id;
+    let messageId = req.params.id;
     const userId = req.user.id;
 
     try {
+        // [FIX] Support UUIDs (Resolve to ID)
+        if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(messageId)) {
+             const idRes = await db.query('SELECT id FROM messages WHERE temp_id = $1', [messageId]);
+             if (idRes.rows.length === 0) return res.status(404).json({ error: 'Message not found' });
+             messageId = idRes.rows[0].id;
+        }
+
         // 1. Fetch Message & Basic Checks
         // We need message details + room_id to check permissions
         const messageRes = await db.query(`
@@ -783,7 +794,22 @@ router.delete('/:id/for-me', async (req, res) => {
     const messageId = req.params.id;
     const userId = req.user.id;
 
+    // Validate ID (Allow Integer OR UUID)
+    const isUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(messageId);
+    const isInt = /^\d+$/.test(messageId);
+
+    if (!isUUID && !isInt) {
+        return res.status(400).json({ error: 'Invalid message ID' });
+    }
+
     try {
+        let targetId = messageId;
+        if (isUUID) {
+            const idRes = await db.query('SELECT id FROM messages WHERE temp_id = $1', [messageId]);
+            if (idRes.rows.length === 0) return res.status(404).json({ error: 'Message not found' });
+            targetId = idRes.rows[0].id; // Resolve to Integer
+        }
+
         // We use array_append to add the user ID to the list
         // and distinct to avoid duplicates just in case, though array_append simply adds.
         // Postgres has array_append(anyarray, anyelement)
@@ -793,7 +819,7 @@ router.delete('/:id/for-me', async (req, res) => {
             UPDATE messages 
             SET deleted_for_user_ids = array_append(COALESCE(deleted_for_user_ids, '{}'), $1::text)
             WHERE id = $2
-        `, [String(userId), messageId]);
+        `, [String(userId), targetId]);
 
         const io = req.app.get('io');
         // Force client to refresh rooms list to update last message preview
@@ -811,9 +837,24 @@ router.delete('/:id/for-everyone', async (req, res) => {
     const messageId = req.params.id;
     const userId = req.user.id;
 
+    // Validate ID (Allow Integer OR UUID)
+    const isUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(messageId);
+    const isInt = /^\d+$/.test(messageId);
+
+    if (!isUUID && !isInt) {
+        return res.status(400).json({ error: 'Invalid message ID' });
+    }
+
     try {
-        // Verify ownership
-        const msgRes = await db.query('SELECT user_id FROM messages WHERE id = $1', [messageId]);
+        // Verify ownership & Get Room ID
+        // Handles both ID types
+        let msgRes;
+        if (isUUID) {
+            msgRes = await db.query('SELECT id, user_id, room_id FROM messages WHERE temp_id = $1', [messageId]);
+        } else {
+            msgRes = await db.query('SELECT id, user_id, room_id FROM messages WHERE id = $1', [messageId]);
+        }
+        
         if (msgRes.rows.length === 0) return res.status(404).json({ error: 'Message not found' });
         
         const message = msgRes.rows[0];
@@ -821,25 +862,21 @@ router.delete('/:id/for-everyone', async (req, res) => {
             return res.status(403).json({ error: 'Not authorized to delete this message' });
         }
 
-        // Perform delete
+        // Perform delete (Always use the resolved Integer ID for safety/consistency)
         await db.query(`
             UPDATE messages 
             SET is_deleted_for_everyone = TRUE
             WHERE id = $1
-        `, [messageId]);
+        `, [message.id]);
 
         // Emit socket event to notify all users in the room
-        // We need to fetch the room_id first or return it from UPDATE
-        const roomRes = await db.query('SELECT room_id FROM messages WHERE id = $1', [messageId]);
-        if (roomRes.rows[0]) {
-             const io = req.app.get('io');
-             io.to(`room:${roomRes.rows[0].room_id}`).emit('message_deleted', { 
-                 messageId,
-                 is_deleted_for_everyone: true,
-                 content: "",
-                 roomId: roomRes.rows[0].room_id // [NEW] Include roomId for client cache updates
-             });
-        }
+        const io = req.app.get('io');
+        io.to(`room:${message.room_id}`).emit('message_deleted', { 
+            messageId: message.id, // Use Integer ID
+            is_deleted_for_everyone: true,
+            content: "",
+            roomId: message.room_id
+        });
 
         res.json({ success: true });
     } catch (err) {
@@ -850,10 +887,17 @@ router.delete('/:id/for-everyone', async (req, res) => {
 
 // Mark audio as heard (Played)
 router.post('/:id/audio-heard', async (req, res) => {
-    const messageId = req.params.id;
+    let messageId = req.params.id;
     const userId = req.user.id;
 
     try {
+        // [FIX] Support UUIDs
+        if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(messageId)) {
+             const idRes = await db.query('SELECT id FROM messages WHERE temp_id = $1', [messageId]);
+             if (idRes.rows.length === 0) return res.status(404).json({ error: 'Message not found' });
+             messageId = idRes.rows[0].id;
+        }
+
         // [MODIFIED] Use message_interactions
         await db.query(`
             INSERT INTO message_interactions (message_id, user_id, interaction_type)
@@ -877,11 +921,18 @@ router.post('/:id/audio-heard', async (req, res) => {
 
 // Edit message
 router.put('/:id/edit', async (req, res) => {
-    const messageId = req.params.id;
+    let messageId = req.params.id;
     const userId = req.user.id;
-    const { new_content } = req.body;
+    const { new_content, ciphertext, iv, key_version, signature } = req.body; // [MODIFIED] Accept signature
 
     try {
+        // [FIX] Support UUIDs
+        if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(messageId)) {
+             const idRes = await db.query('SELECT id FROM messages WHERE temp_id = $1', [messageId]);
+             if (idRes.rows.length === 0) return res.status(404).json({ error: 'Message not found' });
+             messageId = idRes.rows[0].id;
+        }
+
         // 1. Fetch message and verify ownership
         const msgRes = await db.query('SELECT * FROM messages WHERE id = $1', [messageId]);
         if (msgRes.rows.length === 0) return res.status(404).json({ error: 'Message not found' });
@@ -903,35 +954,65 @@ router.put('/:id/edit', async (req, res) => {
 
         // 2. Update
         let updateRes;
-        if (message.type === 'image') {
-            updateRes = await db.query(`
-                UPDATE messages 
-                SET caption = $1, content = $1, edited_at = NOW(), edit_version = edit_version + 1
-                WHERE id = $2
-                RETURNING id, content, caption, edited_at, edit_version, room_id, user_id, type, reply_to_message_id, created_at
-            `, [new_content, messageId]);
+        
+        // [FIX] Handle E2EE updates
+        if (ciphertext && iv) {
+            if (message.type === 'image') {
+                updateRes = await db.query(`
+                    UPDATE messages 
+                    SET caption = $1, content = $1, ciphertext = $3, iv = $4, key_version = COALESCE($5::bigint, key_version), signature = $6, mention_user_ids = $7, edited_at = NOW(), edit_version = edit_version + 1
+                    WHERE id = $2
+                    RETURNING id, temp_id, content, caption, ciphertext, iv, signature, edited_at, edit_version, room_id, user_id, type, reply_to_message_id, created_at, key_version, mention_user_ids
+                `, [new_content || '', messageId, ciphertext, iv, key_version, signature, req.body.mention_user_ids || null]);
+            } else {
+                updateRes = await db.query(`
+                    UPDATE messages 
+                    SET content = $1, ciphertext = $3, iv = $4, key_version = COALESCE($5::bigint, key_version), signature = $6, mention_user_ids = $7, edited_at = NOW(), edit_version = edit_version + 1
+                    WHERE id = $2
+                    RETURNING id, temp_id, content, caption, ciphertext, iv, signature, edited_at, edit_version, room_id, user_id, type, reply_to_message_id, created_at, key_version, mention_user_ids
+                `, [new_content || '', messageId, ciphertext, iv, key_version, signature, req.body.mention_user_ids || null]);
+            }
         } else {
-            updateRes = await db.query(`
-                UPDATE messages 
-                SET content = $1, edited_at = NOW(), edit_version = edit_version + 1
-                WHERE id = $2
-                RETURNING id, content, caption, edited_at, edit_version, room_id, user_id, type, reply_to_message_id, created_at
-            `, [new_content, messageId]);
+            // Legacy/Plaintext Fallback
+            // [NOTE] If switching from E2EE to plaintext (not recommended), we should probably clear signature? 
+            // But usually we just update content. 
+            // If the message WAS encrypted, editing it to plaintext should technically clear ciphertext/iv/signature.
+            // But for now, we assume if ciphertext is not sent, it's a legacy flow or non-encrypted msg.
+            if (message.type === 'image') {
+                updateRes = await db.query(`
+                    UPDATE messages 
+                    SET caption = $1, content = $1, edited_at = NOW(), edit_version = edit_version + 1
+                    WHERE id = $2
+                    RETURNING id, temp_id, content, caption, ciphertext, iv, signature, edited_at, edit_version, room_id, user_id, type, reply_to_message_id, created_at, key_version
+                `, [new_content, messageId]);
+            } else {
+                updateRes = await db.query(`
+                    UPDATE messages 
+                    SET content = $1, edited_at = NOW(), edit_version = edit_version + 1
+                    WHERE id = $2
+                    RETURNING id, temp_id, content, caption, ciphertext, iv, signature, edited_at, edit_version, room_id, user_id, type, reply_to_message_id, created_at, key_version
+                `, [new_content, messageId]);
+            }
         }
 
         const updatedMsg = updateRes.rows[0];
 
         // 3. Broadcast
-        // Need display name for the event payload consistency, though client might just patch
-        // We'll send the essential update fields
         const io = req.app.get('io');
+        // [FIX] Include E2EE fields in broadcast
         io.to(`room:${updatedMsg.room_id}`).emit('message_edited', {
             id: updatedMsg.id,
+            temp_id: updatedMsg.temp_id,
             room_id: updatedMsg.room_id,
             content: updatedMsg.content,
-            caption: updatedMsg.caption, // [NEW] Include caption
+            caption: updatedMsg.caption,
+            ciphertext: updatedMsg.ciphertext,
+            iv: updatedMsg.iv,
+            signature: updatedMsg.signature, // [NEW] Send signature
             edited_at: updatedMsg.edited_at,
-            edit_version: updatedMsg.edit_version
+            edit_version: updatedMsg.edit_version,
+            is_encrypted: !!updatedMsg.ciphertext,
+            key_version: updatedMsg.key_version 
         });
 
         res.json(updatedMsg);
@@ -968,10 +1049,17 @@ router.get('/proxy-download', async (req, res) => {
 
 // View Once - Get Image
 router.get('/:id/view-once', async (req, res) => {
-    const messageId = req.params.id;
+    let messageId = req.params.id;
     const userId = req.user.id;
 
     try {
+        // [FIX] Support UUIDs
+        if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(messageId)) {
+             const idRes = await db.query('SELECT id FROM messages WHERE temp_id = $1', [messageId]);
+             if (idRes.rows.length === 0) return res.status(404).json({ error: 'Message not found' });
+             messageId = idRes.rows[0].id;
+        }
+
         const result = await db.query(`
             SELECT m.*, 
             (SELECT COUNT(*) FROM room_members rm WHERE rm.room_id = m.room_id) as room_member_count
@@ -983,6 +1071,11 @@ router.get('/:id/view-once', async (req, res) => {
 
         if (!message.is_view_once) {
             return res.status(400).json({ error: 'Not a view-once message' });
+        }
+
+        // [NEW] Prevent sender from viewing their own view-once photo
+        if (parseInt(message.user_id) === parseInt(userId)) {
+            return res.status(403).json({ error: 'Sender cannot view their own view-once photo' });
         }
 
         // Check if user already viewed
@@ -1057,11 +1150,18 @@ router.get('/:id/view-once', async (req, res) => {
 
 // Pin a message
 router.post('/:id/pin', async (req, res) => {
-    const messageId = req.params.id;
+    let messageId = req.params.id;
     const userId = req.user.id;
     const { durationHours = 168 } = req.body; // Default 7 days
 
     try {
+        // [FIX] Support UUIDs
+        if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(messageId)) {
+             const idRes = await db.query('SELECT id FROM messages WHERE temp_id = $1', [messageId]);
+             if (idRes.rows.length === 0) return res.status(404).json({ error: 'Message not found' });
+             messageId = idRes.rows[0].id;
+        }
+
         // Get message and verify it exists
         const msgRes = await db.query('SELECT * FROM messages WHERE id = $1', [messageId]);
         if (msgRes.rows.length === 0) {
@@ -1136,10 +1236,17 @@ router.post('/:id/pin', async (req, res) => {
 
 // Unpin a message
 router.delete('/:id/pin', async (req, res) => {
-    const messageId = req.params.id;
+    let messageId = req.params.id;
     const userId = req.user.id;
 
     try {
+        // [FIX] Support UUIDs
+        if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(messageId)) {
+             const idRes = await db.query('SELECT id FROM messages WHERE temp_id = $1', [messageId]);
+             if (idRes.rows.length === 0) return res.status(404).json({ error: 'Message not found' });
+             messageId = idRes.rows[0].id;
+        }
+
         // Get message
         const msgRes = await db.query('SELECT * FROM messages WHERE id = $1', [messageId]);
         if (msgRes.rows.length === 0) {
@@ -1270,6 +1377,132 @@ router.get('/room/:roomId/pinned', async (req, res) => {
 
     } catch (err) {
         console.error('Error fetching pinned messages:', err);
+        res.status(500).json({ error: 'Server error' });
+    }
+});
+
+// =====================
+// STARRED MESSAGES ROUTES
+// =====================
+
+// Get all starred messages for the user
+router.get('/starred', async (req, res) => {
+    try {
+        const userId = req.user.id;
+        const { roomId } = req.query; // [NEW] Support filtering
+        
+        let query = `
+            SELECT m.*, 
+                   u.display_name, u.username, u.avatar_thumb_url, u.avatar_url,
+                   r.name as room_name, r.type as room_type,
+                   sm.created_at as starred_at
+            FROM starred_messages sm
+            JOIN messages m ON sm.message_id = m.id
+            JOIN users u ON m.user_id = u.id
+            JOIN rooms r ON m.room_id = r.id
+            WHERE sm.user_id = $1
+            AND m.is_deleted_for_everyone = FALSE
+        `;
+        
+        const params = [userId];
+        
+        // [NEW] Filter by Room
+        if (roomId) {
+            query += ` AND m.room_id = $2`;
+            params.push(roomId);
+        }
+        
+        query += ` ORDER BY sm.created_at DESC`;
+
+        // Fetch starred messages with context
+        const result = await db.query(query, params);
+
+        // Filter out messages deleted contextually (deleted for me)
+        const messages = result.rows.filter(msg => {
+            const deletedFor = msg.deleted_for_user_ids || [];
+            return !deletedFor.includes(String(userId));
+        });
+
+        res.json(messages);
+
+    } catch (err) {
+        console.error('Error fetching starred messages:', err);
+        res.status(500).json({ error: 'Server error' });
+    }
+});
+
+// Star a message (Idempotent)
+router.post('/:id/star', async (req, res) => {
+    let messageId = req.params.id;
+    const userId = req.user.id;
+
+    try {
+        // [FIX] Support UUIDs
+        if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(messageId)) {
+             const idRes = await db.query('SELECT id FROM messages WHERE temp_id = $1', [messageId]);
+             if (idRes.rows.length === 0) return res.status(404).json({ error: 'Message not found' });
+             messageId = idRes.rows[0].id; // Resolve to Integer
+        }
+
+        const result = await db.query(`
+            INSERT INTO starred_messages (user_id, message_id)
+            VALUES ($1, $2)
+            ON CONFLICT (user_id, message_id) DO NOTHING
+            RETURNING message_id
+        `, [userId, messageId]);
+
+        // Get room_id for context (optional but helpful for client)
+        const msgInfo = await db.query('SELECT room_id FROM messages WHERE id = $1', [messageId]);
+        const roomId = msgInfo.rows[0]?.room_id;
+
+        // Emit to user's private room
+        const io = req.app.get('io');
+        io.to(`user:${userId}`).emit('message_starred', { 
+            messageId, 
+            roomId, 
+            isStarred: true 
+        });
+
+        res.json({ success: true });
+    } catch (err) {
+        console.error('Error starring message:', err);
+        res.status(500).json({ error: 'Server error' });
+    }
+});
+
+// Unstar a message (Idempotent)
+router.delete('/:id/star', async (req, res) => {
+    let messageId = req.params.id;
+    const userId = req.user.id;
+
+    try {
+        // [FIX] Support UUIDs
+        if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(messageId)) {
+             const idRes = await db.query('SELECT id FROM messages WHERE temp_id = $1', [messageId]);
+             if (idRes.rows.length === 0) return res.status(404).json({ error: 'Message not found' });
+             messageId = idRes.rows[0].id; // Resolve to Integer
+        }
+
+        await db.query(`
+            DELETE FROM starred_messages
+            WHERE user_id = $1 AND message_id = $2
+        `, [userId, messageId]);
+
+        // Get room_id for context
+        const msgInfo = await db.query('SELECT room_id FROM messages WHERE id = $1', [messageId]);
+        const roomId = msgInfo.rows[0]?.room_id;
+
+        // Emit to user's private room
+        const io = req.app.get('io');
+        io.to(`user:${userId}`).emit('message_starred', { 
+            messageId, 
+            roomId, 
+            isStarred: false 
+        });
+
+        res.json({ success: true });
+    } catch (err) {
+        console.error('Error unstarring message:', err);
         res.status(500).json({ error: 'Server error' });
     }
 });

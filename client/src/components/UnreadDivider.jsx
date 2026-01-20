@@ -1,8 +1,8 @@
 import React from 'react';
 
-export default function UnreadDivider({ count, isExiting }) {
+export default function UnreadDivider({ id, count, isExiting }) {
     return (
-        <div className={`flex justify-center my-4 transition-all duration-2000 ease-in-out ${
+        <div id={id} className={`flex justify-center my-4 transition-all duration-2000 ease-in-out ${
             isExiting 
                 ? 'opacity-0 scale-105 blur-sm h-0 my-0 overflow-hidden' 
                 : 'opacity-100 scale-100 blur-0 h-auto animate-in fade-in slide-in-from-top-2'

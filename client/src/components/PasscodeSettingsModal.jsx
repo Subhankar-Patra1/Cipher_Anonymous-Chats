@@ -98,7 +98,7 @@ export default function PasscodeSettingsModal({ onClose }) {
                     value={digit}
                     onChange={(e) => handleInput(i, e.target.value)}
                     onKeyDown={(e) => handleKeyDown(i, e)}
-                    className={`w-12 h-12 rounded-full bg-slate-100 dark:bg-slate-800 border-[1.5px] text-center text-xl font-bold text-slate-900 dark:text-white focus:outline-none transition-all ${
+                    className={`w-12 h-12 rounded-full bg-slate-100 dark:bg-slate-800 border-[1.5px] text-center text-xl font-bold text-slate-900 dark:text-white focus:outline-none transition-all caret-transparent ${
                         error ? 'border-red-500 bg-red-50 dark:bg-red-900/10' : 'border-slate-300 dark:border-slate-600 focus:border-violet-500 focus:ring-4 focus:ring-violet-500/10'
                     }`}
                 />

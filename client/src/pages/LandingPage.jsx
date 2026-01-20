@@ -1,6 +1,7 @@
 import EncryptionShowcase from '../components/EncryptionShowcase';
 import { useEffect, useState, useRef } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
+import BigTextName from '../components/BigTextName';
 
 const LandingPage = () => {
     const navigate = useNavigate();
@@ -404,8 +405,7 @@ const LandingPage = () => {
                     <div className="container mx-auto px-4">
                         <div className="grid grid-cols-1 gap-12 lg:grid-cols-2 lg:items-center">
                             <div className="flex flex-col gap-4">
-                                <h2 className="text-3xl font-bold tracking-tighter text-gray-100 sm:text-4xl text-glow-green">// Data Privacy: Our Prime Directive</h2>
-                                <p className="text-base text-gray-400 sm:text-lg">We uphold your right to private data streams. ChatRooms is architected with a robust security framework, ensuring classified communication.</p>
+                                <p className="text-base text-gray-400 sm:text-lg">We uphold your right to private data streams. Cipher is architected with a robust security framework, ensuring classified communication.</p>
                             </div>
                             <div className="flex flex-col gap-6">
                                 <div className="flex items-start gap-4">
@@ -574,6 +574,7 @@ const LandingPage = () => {
                         </div>
                     </div>
                 </section>
+                <BigTextName />
             </main>
 
             <footer className="border-t border-accent-green/20">

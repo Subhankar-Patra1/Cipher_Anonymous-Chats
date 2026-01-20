@@ -13,7 +13,10 @@ import { renderTextWithEmojis, renderTextWithEmojisToHtml } from '../utils/emoji
 import SharedMedia from './SharedMedia';
 import AvatarViewerModal from './AvatarViewerModal';
 import LinkedDevices from './LinkedDevices';
-import ChatColorPicker from './ChatColorPicker'; // [NEW]
+import ChatColorPicker from './ChatColorPicker'; 
+import { useAppLock } from '../context/AppLockContext'; // [NEW]
+import StarredMessagesModal from './StarredMessagesModal';
+import CreateBackupModal from './CreateBackupModal';
 
 
 const timeAgo = (dateString) => {
@@ -29,7 +32,51 @@ const timeAgo = (dateString) => {
     return date.toLocaleDateString();
 };
 
-export default function ProfilePanel({ userId, roomId, onClose, onActionSuccess, onGoToMessage }) {
+// Internal Component for App Lock Switch
+const AppLockSetting = () => {
+    const { isEnabled, enableLock, disableLock, isSupported } = useAppLock();
+    const [loading, setLoading] = useState(false);
+
+    const handleToggle = async () => {
+        setLoading(true);
+        if (isEnabled) {
+            await disableLock();
+        } else {
+            await enableLock();
+        }
+        setLoading(false);
+    };
+
+    if (!isSupported) return null;
+
+    return (
+        <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+                <div className={`w-8 h-8 rounded-full flex items-center justify-center transition-colors ${isEnabled ? 'bg-indigo-100 dark:bg-indigo-900/30 text-indigo-600 dark:text-indigo-400' : 'bg-slate-100 dark:bg-slate-800 text-slate-400'}`}>
+                        <span className="material-symbols-outlined text-[18px]">fingerprint</span>
+                </div>
+                <div>
+                    <p className="text-sm font-semibold text-slate-700 dark:text-slate-200">Biometric App Lock</p>
+                    <p className="text-xs text-slate-400">Require unlock to open app</p>
+                </div>
+            </div>
+            <div className="flex items-center gap-3">
+                {loading && (
+                    <div className="w-4 h-4 border-2 border-indigo-500/30 border-t-indigo-500 rounded-full animate-spin" />
+                )}
+                <button 
+                    onClick={handleToggle}
+                    disabled={loading}
+                    className={`w-11 h-6 rounded-full transition-colors relative ${isEnabled ? 'bg-indigo-500' : 'bg-slate-300 dark:bg-slate-700'} ${loading ? 'opacity-80 cursor-not-allowed' : 'cursor-pointer'}`}
+                >
+                    <div className={`absolute top-1 left-1 w-4 h-4 rounded-full bg-white shadow-sm transition-transform ${isEnabled ? 'translate-x-5' : 'translate-x-0'}`} />
+                </button>
+            </div>
+        </div>
+    );
+};
+
+export default function ProfilePanel({ userId, roomId, onClose, onActionSuccess, onGoToMessage, onRequestSync, showRestoreOption, socket }) {
     const { token, user: currentUser, updateUser, logout } = useAuth();
     const { presenceMap, fetchStatuses } = usePresence();
     const { 
@@ -37,7 +84,8 @@ export default function ProfilePanel({ userId, roomId, onClose, onActionSuccess,
         permission: notificationPermission, 
         enabled: notificationsEnabled, 
         toggleEnabled: toggleNotifications,
-        requestPermission 
+        requestPermission,
+        showNotification
     } = useNotification();
     const [profile, setProfile] = useState(null);
     const [loading, setLoading] = useState(true);
@@ -46,10 +94,22 @@ export default function ProfilePanel({ userId, roomId, onClose, onActionSuccess,
     const [confirmModal, setConfirmModal] = useState(null); // { type: 'clear' | 'delete', title: string, destructive: boolean }
     const [actionLoading, setActionLoading] = useState(false);
     
+    // [NEW] Clear Chat Confirmation State
+    const [isClearModalOpen, setIsClearModalOpen] = useState(false);
+    const [deleteMediaInfo, setDeleteMediaInfo] = useState(false);
+    const [mediaRefreshKey, setMediaRefreshKey] = useState(0); // [NEW] Force media refetch
+    
     const [isEditModalOpen, setIsEditModalOpen] = useState(false);
     const [viewingImage, setViewingImage] = useState(null);
     const [avatarSourceRect, setAvatarSourceRect] = useState(null);
     const avatarRef = useRef(null);
+
+    const [showStarredMessages, setShowStarredMessages] = useState(false); // [NEW]
+    
+    // [NEW] All Groups View State
+    const [showAllGroups, setShowAllGroups] = useState(false);
+    const [groupsSearchQuery, setGroupsSearchQuery] = useState('');
+
 
     const [isEditingBio, setIsEditingBio] = useState(false);
     const [editedBio, setEditedBio] = useState('');
@@ -58,6 +118,9 @@ export default function ProfilePanel({ userId, roomId, onClose, onActionSuccess,
     // [NEW] Passcode Modal
     const [showPasscodeModal, setShowPasscodeModal] = useState(false);
     const [showLinkedDevices, setShowLinkedDevices] = useState(false);
+    const [showCreateBackup, setShowCreateBackup] = useState(false);
+    const [hasActiveBackup, setHasActiveBackup] = useState(false);
+    const [showCopyToast, setShowCopyToast] = useState(false);
     
     // Display Name State
     const [isEditingName, setIsEditingName] = useState(false);
@@ -360,6 +423,20 @@ export default function ProfilePanel({ userId, roomId, onClose, onActionSuccess,
             .catch(err => console.error("Failed to fetch preferences", err));
         }
     }, [roomId, token]);
+    
+    // Check if backup exists
+    useEffect(() => {
+        if (isMe && token) {
+            fetch(`${import.meta.env.VITE_API_URL}/api/auth/backup`, {
+                headers: { Authorization: `Bearer ${token}` }
+            })
+            .then(res => res.ok ? res.json() : null)
+            .then(data => {
+                if (data) setHasActiveBackup(true);
+            })
+            .catch(err => console.error("Failed to check backup status", err));
+        }
+    }, [isMe, token]);
 
     const handleColorChange = async (color) => {
         if (!roomId) return;
@@ -389,7 +466,7 @@ export default function ProfilePanel({ userId, roomId, onClose, onActionSuccess,
         return () => window.removeEventListener('keydown', handleKeyDown);
     }, [onClose, confirmModal]);
 
-    const handleClearMessages = async () => {
+    const handleClearMessages = async (deleteMedia = false) => { // [NEW] Accept flag
         setActionLoading(true);
         try {
             const res = await fetch(`${import.meta.env.VITE_API_URL}/api/rooms/${roomId}/clear`, {
@@ -398,11 +475,13 @@ export default function ProfilePanel({ userId, roomId, onClose, onActionSuccess,
                     'Content-Type': 'application/json',
                     Authorization: `Bearer ${token}` 
                 },
-                body: JSON.stringify({ scope: 'me' })
+                body: JSON.stringify({ scope: 'me', deleteMedia }) // [NEW] Pass flag
             });
 
             if (res.ok) {
                 setConfirmModal(null);
+                setIsClearModalOpen(false); // [FIX] Close custom modal too
+                setMediaRefreshKey(k => k + 1); // [NEW] Force SharedMedia refetch
                 // The socket event will handle the UI update usually, but we can also trigger callback
                 if (onActionSuccess) onActionSuccess('clear');
             }
@@ -526,14 +605,84 @@ export default function ProfilePanel({ userId, roomId, onClose, onActionSuccess,
                 aria-label={`Profile for ${profile.display_name}`}
             >
                 {/* Header */}
-                <div className="h-16 flex items-center px-4 bg-gray-50/80 dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 shrink-0 transition-colors">
-                    <button onClick={onClose} className="mr-4 text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-white transition-colors">
-                        <span className="material-symbols-outlined">close</span>
-                    </button>
-                    <h2 className="text-lg font-bold text-slate-800 dark:text-white">Contact Info</h2>
+                {showCopyToast && createPortal(
+                    <div className="fixed bottom-10 left-1/2 -translate-x-1/2 z-[100] animate-in fade-in slide-in-from-bottom-4 duration-300">
+                        <div className="bg-slate-900/90 dark:bg-slate-800/90 backdrop-blur-md text-white px-6 py-3 rounded-2xl shadow-2xl flex items-center gap-3 border border-white/10">
+                            <div className="w-6 h-6 rounded-full bg-white flex items-center justify-center shrink-0">
+                                <span className="material-symbols-outlined text-slate-900 text-[18px]">info</span>
+                            </div>
+                            <p className="text-sm font-medium whitespace-nowrap">Username was copied</p>
+                        </div>
+                    </div>,
+                    document.body
+                )}
+
+                {/* Header */}
+                <div className="h-16 flex items-center px-4 bg-gray-50/80 dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 shrink-0 transition-colors gap-3">
+                    {showAllGroups ? (
+                        <>
+                            <button onClick={() => setShowAllGroups(false)} className="text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-white transition-colors rounded-full w-8 h-8 flex items-center justify-center hover:bg-slate-100 dark:hover:bg-slate-800">
+                                <span className="material-symbols-outlined">arrow_back</span>
+                            </button>
+                            <h2 className="text-lg font-bold text-slate-800 dark:text-white">Groups in Common</h2>
+                        </>
+                    ) : (
+                        <>
+                            <button onClick={onClose} className="text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-white transition-colors rounded-full w-8 h-8 flex items-center justify-center hover:bg-slate-100 dark:hover:bg-slate-800 mr-1">
+                                <span className="material-symbols-outlined">close</span>
+                            </button>
+                            <h2 className="text-lg font-bold text-slate-800 dark:text-white">Contact Info</h2>
+                        </>
+                    )}
                 </div>
 
                 {/* Content */}
+                {showAllGroups ? (
+                     <div className="flex-1 overflow-y-auto custom-scrollbar bg-white dark:bg-slate-900 transition-colors flex flex-col">
+                        <div className="p-4 border-b border-slate-200 dark:border-slate-800 bg-gray-50/95 dark:bg-slate-900/95 backdrop-blur-sm sticky top-0 z-10 transition-colors">
+                            <div className="relative">
+                                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 material-symbols-outlined text-[20px]">search</span>
+                                <input 
+                                    type="text"
+                                    placeholder="Search groups..."
+                                    value={groupsSearchQuery}
+                                    onChange={(e) => setGroupsSearchQuery(e.target.value)}
+                                    className="w-full bg-slate-100 dark:bg-slate-800 border border-transparent focus:border-violet-500/50 focus:bg-white dark:focus:bg-slate-800 focus:ring-4 focus:ring-violet-500/10 rounded-xl pl-10 pr-4 py-2.5 text-sm outline-none text-slate-700 dark:text-slate-200 transition-all placeholder:text-slate-400"
+                                    autoFocus
+                                />
+                            </div>
+                        </div>
+                        
+                        <div className="p-2 space-y-1">
+                            {profile.groups_in_common?.filter(g => g.name.toLowerCase().includes(groupsSearchQuery.toLowerCase())).length > 0 ? (
+                                profile.groups_in_common
+                                    .filter(g => g.name.toLowerCase().includes(groupsSearchQuery.toLowerCase()))
+                                    .map(group => (
+                                    <div key={group.id} className="flex items-center gap-4 p-3 hover:bg-slate-100 dark:hover:bg-slate-800/50 rounded-xl transition-colors cursor-pointer group">
+                                        <div className="w-12 h-12 rounded-xl bg-slate-200 dark:bg-slate-800 flex items-center justify-center text-slate-500 dark:text-slate-400 shrink-0 transition-colors group-hover:bg-white dark:group-hover:bg-slate-700 border-2 border-transparent group-hover:border-violet-100 dark:group-hover:border-slate-600">
+                                            <span className="material-symbols-outlined text-[24px]">group</span>
+                                        </div>
+                                        <div className="flex-1 min-w-0">
+                                            <p className="text-slate-800 dark:text-slate-100 font-semibold truncate flex items-center gap-1 text-[15px]">
+                                                {linkifyText(group.name)}
+                                            </p>
+                                            <p className="text-slate-500 text-sm">{group.member_count} members</p>
+                                        </div>
+                                        <span className="material-symbols-outlined text-slate-300 dark:text-slate-600 -translate-x-2 opacity-0 group-hover:opacity-100 group-hover:translate-x-0 transition-all">chevron_right</span>
+                                    </div>
+                                ))
+                            ) : (
+                                <div className="py-12 flex flex-col items-center justify-center text-center px-4">
+                                    <div className="w-16 h-16 bg-slate-100 dark:bg-slate-800 rounded-full flex items-center justify-center mb-4 text-slate-300 dark:text-slate-600">
+                                        <span className="material-symbols-outlined text-[32px]">group_off</span>
+                                    </div>
+                                    <p className="text-slate-500 dark:text-slate-400 font-medium">No groups found</p>
+                                    <p className="text-slate-400 dark:text-slate-500 text-sm mt-1">Try searching for a different name</p>
+                                </div>
+                            )}
+                        </div>
+                     </div>
+                ) : (
                 <div className="flex-1 overflow-y-auto custom-scrollbar bg-white dark:bg-slate-900 transition-colors">
                     {/* Profile Header */}
                     <div className="p-6 flex flex-col items-center border-b border-slate-200/50 dark:border-slate-800/50 bg-gray-50/30 dark:bg-slate-900 transition-colors">
@@ -707,7 +856,25 @@ export default function ProfilePanel({ userId, roomId, onClose, onActionSuccess,
                                 </div>
                             </div>
                         )}
-                        <p className="text-slate-500 text-sm mb-2">{profile.username}</p>
+                        <div className="flex justify-center mb-2 group/copy">
+                            <div className="relative inline-flex items-center">
+                                <span className="text-slate-500 text-sm leading-none">{profile.username}</span>
+                                <button 
+                                    onClick={() => {
+                                        navigator.clipboard.writeText(profile.username);
+                                        setShowCopyToast(true);
+                                        setTimeout(() => setShowCopyToast(false), 2000);
+                                    }}
+                                    className={`absolute left-full ml-1.5 text-slate-400 hover:text-slate-600 dark:hover:text-white transition-colors flex items-center justify-center translate-y-[1px] ${showCopyToast ? 'opacity-100 text-emerald-500 dark:text-emerald-400' : 'opacity-0 group-hover/copy:opacity-100'}`}
+                                    title="Copy username"
+                                    style={{ width: '18px', height: '18px' }}
+                                >
+                                    <span className="material-symbols-outlined text-[18px] transition-all duration-200">
+                                        {showCopyToast ? 'check' : 'content_copy'}
+                                    </span>
+                                </button>
+                            </div>
+                        </div>
                         
                         {!isMe && (
                             <div className="text-sm font-medium">
@@ -917,21 +1084,158 @@ export default function ProfilePanel({ userId, roomId, onClose, onActionSuccess,
                         </div>
                     )}
 
+                    {/* [NEW] Privacy & Security (Only for Me) */}
+                    {isMe && (
+                        <div className="border-b border-slate-200/50 dark:border-slate-800/50 transition-colors">
+                            <h3 className="text-slate-500 font-bold text-xs uppercase px-4 pt-4 mb-1 tracking-wider">Privacy & Security</h3>
+                            <div className="px-4 pb-4 space-y-4">
+                                <AppLockSetting /> 
+                                
+                                <button 
+                                    onClick={() => setShowStarredMessages(true)}
+                                    className="w-full flex items-center justify-between group"
+                                >
+                                    <div className="flex items-center gap-3">
+                                        <div className="w-8 h-8 rounded-full bg-amber-100 dark:bg-amber-900/30 flex items-center justify-center text-amber-600 dark:text-amber-400">
+                                             <span className="material-symbols-outlined text-[18px] filled">star</span>
+                                        </div>
+                                        <div className="text-left">
+                                            <p className="text-sm font-semibold text-slate-700 dark:text-slate-200">Starred Messages</p>
+                                            <p className="text-xs text-slate-400">View saved messages</p>
+                                        </div>
+                                    </div>
+                                    <span className="material-symbols-outlined text-slate-400 group-hover:text-amber-500 transition-colors text-[20px]">chevron_right</span>
+                                </button>
+
+                                <button 
+                                    onClick={() => setShowLinkedDevices(true)}
+                                    className="w-full flex items-center justify-between group"
+                                >
+                                    <div className="flex items-center gap-3">
+                                        <div className="w-8 h-8 rounded-full bg-violet-100 dark:bg-violet-900/30 flex items-center justify-center text-violet-600 dark:text-violet-400">
+                                             <span className="material-symbols-outlined text-[18px]">devices</span>
+                                        </div>
+                                        <div className="text-left">
+                                            <p className="text-sm font-semibold text-slate-700 dark:text-slate-200">Linked Devices</p>
+                                            <p className="text-xs text-slate-400">Manage encryption keys</p>
+                                        </div>
+                                    </div>
+                                    <span className="material-symbols-outlined text-slate-400 group-hover:text-violet-500 transition-colors text-[20px]">chevron_right</span>
+                                </button>
+                                
+                                <button 
+                                    onClick={() => setShowPasscodeModal(true)}
+                                    className="w-full flex items-center justify-between group"
+                                >
+                                    <div className="flex items-center gap-3">
+                                        <div className="w-8 h-8 rounded-full bg-emerald-100 dark:bg-emerald-900/30 flex items-center justify-center text-emerald-600 dark:text-emerald-400">
+                                             <span className="material-symbols-outlined text-[18px]">lock</span>
+                                        </div>
+                                        <div className="text-left">
+                                            <p className="text-sm font-semibold text-slate-700 dark:text-slate-200">Chat Lock Code</p>
+                                            <p className="text-xs text-slate-400">Manage hidden chats</p>
+                                        </div>
+                                    </div>
+                                    <span className="material-symbols-outlined text-slate-400 group-hover:text-emerald-500 transition-colors text-[20px]">chevron_right</span>
+                                </button>
+
+                                <button 
+                                    onClick={() => setShowCreateBackup(true)}
+                                    className="w-full flex items-center justify-between group"
+                                >
+                                    <div className="flex items-center gap-3">
+                                        <div className="w-8 h-8 rounded-full bg-blue-100 dark:bg-blue-900/30 flex items-center justify-center text-blue-600 dark:text-blue-400">
+                                             <span className="material-symbols-outlined text-[18px]">cloud_upload</span>
+                                         </div>
+                                         <div className="text-left">
+                                             <p className="text-sm font-semibold text-slate-700 dark:text-slate-200">Cloud Backup</p>
+                                             <p className="text-xs text-slate-400">
+                                                {hasActiveBackup ? 'Backup password set' : 'Secure history with password'}
+                                             </p>
+                                         </div>
+                                    </div>
+                                    <span className="material-symbols-outlined text-slate-400 group-hover:text-blue-500 transition-colors text-[20px]">chevron_right</span>
+                                </button>
+                                
+                                {showRestoreOption && (
+                                    <button 
+                                        onClick={onRequestSync}
+                                        className="w-full flex items-center justify-between group"
+                                    >
+                                        <div className="flex items-center gap-3">
+                                            <div className="w-8 h-8 rounded-full bg-indigo-100 dark:bg-indigo-900/30 flex items-center justify-center text-indigo-600 dark:text-indigo-400">
+                                                <span className="material-symbols-outlined text-[18px]">sync_lock</span>
+                                            </div>
+                                            <div className="text-left">
+                                                <p className="text-sm font-semibold text-slate-700 dark:text-slate-200">Restore Chat History</p>
+                                                <p className="text-xs text-slate-400">Sync from another device</p>
+                                            </div>
+                                        </div>
+                                        <span className="material-symbols-outlined text-slate-400 group-hover:text-indigo-500 transition-colors text-[20px]">chevron_right</span>
+                                    </button>
+                                )}
+                            </div>
+                        </div>
+                    )}
+
+                    {isMe && (
+                        <CreateBackupModal 
+                            isOpen={showCreateBackup}
+                            onClose={() => setShowCreateBackup(false)}
+                            token={token}
+                            hasActiveBackup={hasActiveBackup}
+                            onBackupSuccess={() => {
+                                setHasActiveBackup(true);
+                                showNotification(hasActiveBackup ? 'Cloud backup updated successfully!' : 'Cloud backup created successfully!', 'success');
+                            }}
+                        />
+                    )}
+
+                    {/* [NEW] Starred Messages Button */}
+                    {!isMe && (
+                        <button 
+                            onClick={() => setShowStarredMessages(true)}
+                            className="w-full flex items-center gap-3 p-3 rounded-lg hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors text-slate-700 dark:text-slate-200"
+                        >
+                            <div className="w-10 h-10 rounded-full bg-yellow-100 dark:bg-yellow-900/30 flex items-center justify-center text-yellow-600 dark:text-yellow-400">
+                                <span className="material-symbols-outlined">star</span>
+                            </div>
+                            <div className="flex-1 text-left">
+                                <h3 className="font-medium">Starred Messages</h3>
+                            </div>
+                            <span className="material-symbols-outlined text-slate-400">chevron_right</span>
+                        </button>
+                    )}
+
                     {/* Shared Media */}
-                    <div className="border-b border-slate-200/50 dark:border-slate-800/50 transition-colors">
-                         <h3 className="text-slate-500 text-xs font-bold uppercase px-4 pt-4 mb-1 tracking-wider">Shared Content</h3>
-                         <SharedMedia roomId={roomId} onGoToMessage={onGoToMessage} />
-                    </div>
+                    {roomId && (
+                        <div className="border-b border-slate-200/50 dark:border-slate-800/50 transition-colors">
+                            <h3 className="text-slate-500 text-xs font-bold uppercase px-4 pt-4 mb-1 tracking-wider">Shared Content</h3>
+                            <SharedMedia roomId={roomId} onGoToMessage={onGoToMessage} socket={socket} refreshKey={mediaRefreshKey} />
+                        </div>
+                    )}
+
 
                     {/* Groups in Common */}
                     <div className="p-4 border-b border-slate-200/50 dark:border-slate-800/50 transition-colors">
-                        <h3 className="text-slate-500 text-xs font-bold uppercase mb-3 tracking-wider flex justify-between items-center">
-                            Groups in Common
-                            <span className="bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400 px-2 py-0.5 rounded-full text-[10px] transition-colors">{profile.groups_in_common?.length || 0}</span>
-                        </h3>
+                        <div className="flex items-center justify-between mb-3">
+                            <h3 className="text-slate-500 text-xs font-bold uppercase tracking-wider flex justify-between items-center">
+                                Groups in Common
+                                <span className="bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400 px-2 py-0.5 rounded-full text-[10px] transition-colors ml-2">{profile.groups_in_common?.length || 0}</span>
+                            </h3>
+                            {profile.groups_in_common?.length > 3 && (
+                                <button 
+                                    onClick={() => setShowAllGroups(true)}
+                                    className="text-xs font-semibold text-violet-600 dark:text-violet-400 hover:text-violet-700 dark:hover:text-violet-300 transition-colors"
+                                >
+                                    See all
+                                </button>
+                            )}
+                        </div>
+                        
                         {profile.groups_in_common?.length > 0 ? (
                             <div className="space-y-2">
-                                {profile.groups_in_common.map(group => (
+                                {profile.groups_in_common.slice(0, 3).map(group => (
                                     <div key={group.id} className="flex items-center gap-3 p-2 hover:bg-slate-100 dark:hover:bg-slate-800/50 rounded-lg transition-colors cursor-pointer">
                                         <div className="w-10 h-10 rounded-lg bg-slate-200 dark:bg-slate-800 flex items-center justify-center text-slate-500 dark:text-slate-400 shrink-0 transition-colors">
                                             <span className="material-symbols-outlined">group</span>
@@ -944,6 +1248,14 @@ export default function ProfilePanel({ userId, roomId, onClose, onActionSuccess,
                                         </div>
                                     </div>
                                 ))}
+                                {profile.groups_in_common.length > 3 && (
+                                    <button 
+                                        onClick={() => setShowAllGroups(true)}
+                                        className="w-full py-2 text-xs font-medium text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200 bg-slate-50/50 hover:bg-slate-100 dark:bg-slate-800/20 dark:hover:bg-slate-800/50 rounded-lg transition-colors mt-1"
+                                    >
+                                        +{profile.groups_in_common.length - 3} more groups
+                                    </button>
+                                )}
                             </div>
                         ) : (
                             <p className="text-slate-500 dark:text-slate-600 text-sm italic">No groups in common</p>
@@ -994,13 +1306,7 @@ export default function ProfilePanel({ userId, roomId, onClose, onActionSuccess,
                         {roomId && (
                             <>
                                 <button 
-                                    onClick={() => setConfirmModal({ 
-                                        type: 'clear', 
-                                        title: 'Clear messages in this chat?', 
-                                        desc: 'These messages will be removed for you. This cannot be undone.',
-                                        actionReq: handleClearMessages,
-                                        destructive: true
-                                    })}
+                                    onClick={() => setIsClearModalOpen(true)}
                                     className="w-full flex items-center gap-4 p-3 hover:bg-red-50 dark:hover:bg-slate-800/50 rounded-lg text-red-500 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-500/10 transition-colors text-left"
                                 >
                                     <span className="material-symbols-outlined">delete_sweep</span>
@@ -1025,21 +1331,9 @@ export default function ProfilePanel({ userId, roomId, onClose, onActionSuccess,
                         
                         {isMe && (
                              <>
-                                <button 
-                                    onClick={() => setShowPasscodeModal(true)}
-                                    className="w-full flex items-center gap-4 p-3 hover:bg-slate-100 dark:hover:bg-slate-800/50 rounded-lg text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors text-left"
-                                >
-                                    <span className="material-symbols-outlined text-slate-400 dark:text-slate-500">lock</span>
-                                    <span className="text-sm font-medium">App Lock</span>
-                                </button>
+
                                 
-                                <button 
-                                    onClick={() => setShowLinkedDevices(true)}
-                                    className="w-full flex items-center gap-4 p-3 hover:bg-slate-100 dark:hover:bg-slate-800/50 rounded-lg text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors text-left"
-                                >
-                                    <span className="material-symbols-outlined text-slate-400 dark:text-slate-500">devices</span>
-                                    <span className="text-sm font-medium">Linked Devices</span>
-                                </button>
+
 
                                 {/* Notification Settings */}
                                 {notificationsSupported && (
@@ -1093,7 +1387,8 @@ export default function ProfilePanel({ userId, roomId, onClose, onActionSuccess,
                              </>
                         )}
                     </div>
-                </div>
+                    </div>
+                )}
             </div>
 
             {/* Confirmation Modal */}
@@ -1122,6 +1417,48 @@ export default function ProfilePanel({ userId, roomId, onClose, onActionSuccess,
                 </div>
             )}
 
+            {/* [NEW] Clear Chat Confirmation Modal */}
+            {isClearModalOpen && (
+                <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+                    <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl shadow-2xl max-w-sm w-full p-6 animate-scale-up transition-colors">
+                        <h3 className="text-xl font-bold text-slate-800 dark:text-white mb-2">Clear Messages?</h3>
+                        <p className="text-slate-600 dark:text-slate-400 text-sm mb-6">
+                            This will clear all messages in this chat for you.
+                        </p>
+
+                        <label className="flex items-center gap-3 p-3 rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50 cursor-pointer mb-6 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors">
+                            <input 
+                                type="checkbox" 
+                                checked={deleteMediaInfo} 
+                                onChange={(e) => setDeleteMediaInfo(e.target.checked)}
+                                className="w-5 h-5 rounded border-gray-300 text-violet-600 focus:ring-violet-500"
+                            />
+                            <div className="flex flex-col">
+                                <span className="font-medium text-slate-700 dark:text-slate-200 text-sm">Also delete media</span>
+                                <span className="text-xs text-slate-500 dark:text-slate-500">Remove photos and files from Shared Media</span>
+                            </div>
+                        </label>
+
+                        <div className="flex gap-3 justify-end">
+                            <button 
+                                onClick={() => setIsClearModalOpen(false)}
+                                className="px-4 py-2 text-slate-500 dark:text-slate-300 font-medium hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition-colors"
+                            >
+                                Cancel
+                            </button>
+                            <button 
+                                onClick={() => handleClearMessages(deleteMediaInfo)} // [NEW] Pass flag
+                                disabled={actionLoading}
+                                className="px-4 py-2 rounded-lg bg-red-500 hover:bg-red-600 text-white font-bold transition-colors shadow-lg shadow-red-500/20 flex items-center gap-2"
+                            >
+                                {actionLoading && <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"/>}
+                                Clear Chat
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
              <AvatarEditorModal 
                 isOpen={isEditModalOpen} 
                 onClose={() => setIsEditModalOpen(false)}
@@ -1137,6 +1474,22 @@ export default function ProfilePanel({ userId, roomId, onClose, onActionSuccess,
             
             {showLinkedDevices && (
                 <LinkedDevices onClose={() => setShowLinkedDevices(false)} />
+            )}
+
+            {/* [NEW] Starred Messages Modal */}
+            {showStarredMessages && (
+                <StarredMessagesModal 
+                    roomId={isMe ? null : roomId}
+                    onClose={() => setShowStarredMessages(false)} 
+                    onGoToMessage={(roomId, messageId) => {
+                        // If we have a global navigator (Sidebar), stick to it? 
+                        // If we are in specific room context (onGoToMessage prop), it usually only takes ID.
+                        // We need to differentiate context. 
+                        // But ProfilePanel for "Me" is usually global.
+                        // Let's rely on onGoToMessage being smart OR just accept we can't jump yet.
+                        if (onGoToMessage) onGoToMessage(roomId, messageId);
+                    }}
+                />
             )}
             
             {/* Image Viewer with Hero Animation */}

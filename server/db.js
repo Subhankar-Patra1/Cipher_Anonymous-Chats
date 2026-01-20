@@ -98,6 +98,15 @@ const createTables = async () => {
                 PRIMARY KEY (user_id, message_id)
             );
 
+            CREATE TABLE IF NOT EXISTS message_reactions (
+                id SERIAL PRIMARY KEY,
+                message_id INTEGER REFERENCES messages(id) ON DELETE CASCADE,
+                user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+                reaction TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(message_id, user_id)
+            );
+
             -- Migration for room_members (Chat Visibility)
             ALTER TABLE room_members ADD COLUMN IF NOT EXISTS cleared_at TIMESTAMP DEFAULT NULL;
             ALTER TABLE room_members ADD COLUMN IF NOT EXISTS is_hidden BOOLEAN DEFAULT FALSE;
@@ -137,6 +146,19 @@ const createTables = async () => {
             ALTER TABLE messages ADD COLUMN IF NOT EXISTS file_size INTEGER;
             ALTER TABLE messages ADD COLUMN IF NOT EXISTS file_type TEXT;
             ALTER TABLE messages ADD COLUMN IF NOT EXISTS file_extension TEXT;
+
+            -- [NEW E2EE] Client-generated ID for Replay Protection & Encryption Salt
+            -- Must be UNIQUE to prevent replay attacks (Same ID cannot be inserted twice)
+            ALTER TABLE messages ADD COLUMN IF NOT EXISTS temp_id UUID;
+            
+            DO $$
+            BEGIN
+                IF NOT EXISTS (
+                    SELECT 1 FROM pg_constraint WHERE conname = 'messages_temp_id_key'
+                ) THEN
+                    ALTER TABLE messages ADD CONSTRAINT messages_temp_id_key UNIQUE (temp_id);
+                END IF;
+            END $$;
 
             CREATE TABLE IF NOT EXISTS group_permissions (
                 group_id INTEGER PRIMARY KEY REFERENCES rooms(id) ON DELETE CASCADE,
@@ -189,6 +211,22 @@ const createTables = async () => {
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 PRIMARY KEY (user_id, room_id)
+            );
+
+            CREATE TABLE IF NOT EXISTS starred_messages (
+                user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+                message_id INTEGER REFERENCES messages(id) ON DELETE CASCADE,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (user_id, message_id)
+            );
+
+            -- [PHASE 2] Cloud Backup
+            CREATE TABLE IF NOT EXISTS key_backups (
+                user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+                encrypted_blob TEXT NOT NULL,
+                salt TEXT NOT NULL,
+                iv TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
         `);
         console.log("Tables created successfully");

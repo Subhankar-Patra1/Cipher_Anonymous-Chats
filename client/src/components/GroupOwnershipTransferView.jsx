@@ -1,5 +1,4 @@
-import React, { useState } from 'react';
-import { renderTextWithEmojis } from '../utils/emojiRenderer';
+import { useConfirm } from '../context/ConfirmationContext';
 
 export default function GroupOwnershipTransferView({
     room,
@@ -9,6 +8,7 @@ export default function GroupOwnershipTransferView({
     onBack,
     isTransferring
 }) {
+    const confirm = useConfirm();
     // Filter out current user from potential owners
     const potentialOwners = members.filter(m => String(m.id) !== String(currentUser.id));
     
@@ -21,8 +21,14 @@ export default function GroupOwnershipTransferView({
         m.username.toLowerCase().includes(searchQuery.toLowerCase())
     );
 
-    const handleSelect = (member) => {
-        if (confirm(`Are you sure you want to transfer ownership to ${member.display_name} and leave the group? This cannot be undone.`)) {
+    const handleSelect = async (member) => {
+        const confirmed = await confirm({
+            title: 'Transfer Ownership',
+            message: `Are you sure you want to transfer ownership to ${member.display_name} and leave the group? This cannot be undone.`,
+            type: 'warning',
+            confirmText: 'Transfer'
+        });
+        if (confirmed) {
             onTransfer(member.id);
         }
     };

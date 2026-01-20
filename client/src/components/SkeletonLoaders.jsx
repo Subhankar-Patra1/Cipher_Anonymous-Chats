@@ -134,17 +134,54 @@ export function ProfileSkeleton() {
 }
 
 // Shared media skeleton
-export function SharedMediaSkeleton({ count = 9 }) {
-    return (
-        <div className="grid grid-cols-3 gap-1 p-2">
-            {Array.from({ length: count }).map((_, i) => (
-                <SkeletonBase 
-                    key={i} 
-                    className="aspect-square rounded-lg" 
-                />
-            ))}
-        </div>
-    );
+// Shared media skeleton
+export function SharedMediaSkeleton({ count = 9, type = 'photos' }) {
+    if (type === 'photos') {
+        return (
+            <div className="grid grid-cols-3 gap-1 p-2">
+                {Array.from({ length: count }).map((_, i) => (
+                    <SkeletonBase 
+                        key={i} 
+                        className="aspect-square rounded-lg" 
+                    />
+                ))}
+            </div>
+        );
+    }
+    
+    if (type === 'videos') {
+         return (
+            <div className="space-y-2 p-2">
+                {Array.from({ length: 4 }).map((_, i) => (
+                    <div key={i} className="flex gap-3">
+                        <SkeletonBase className="w-16 h-16 rounded-lg shrink-0" />
+                        <div className="flex-1 space-y-2 py-2">
+                             <SkeletonBase className="h-4 w-24 rounded" />
+                             <SkeletonBase className="h-3 w-16 rounded" />
+                        </div>
+                    </div>
+                ))}
+            </div>
+         );
+    }
+
+    if (type === 'files' || type === 'links') {
+        return (
+            <div className="space-y-3 p-2">
+                {Array.from({ length: 5 }).map((_, i) => (
+                    <div key={i} className="flex gap-3 items-center">
+                        <SkeletonBase className="w-10 h-10 rounded-lg shrink-0" />
+                        <div className="flex-1 space-y-2">
+                             <SkeletonBase className="h-3 w-3/4 rounded" />
+                             <SkeletonBase className="h-3 w-1/2 rounded" />
+                        </div>
+                    </div>
+                ))}
+            </div>
+        );
+    }
+
+    return null;
 }
 
 // Single line skeleton (generic)

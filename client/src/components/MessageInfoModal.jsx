@@ -141,7 +141,7 @@ const MessagePreview = ({ msg }) => {
 
 // Helper Component for a User Row
 const UserRow = ({ user, statusTime, statusLabel }) => (
-    <div className="flex items-center gap-3 px-4 py-2 hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors">
+    <div className="flex items-center gap-3 px-4 py-2 hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors animate-in fade-in slide-in-from-left-2 duration-300">
         <div className="w-10 h-10 rounded-full bg-slate-200 dark:bg-slate-700 overflow-hidden shrink-0">
             {user.avatar ? (
                 <img src={user.avatar} alt={user.name} className="w-full h-full object-cover" />
@@ -196,12 +196,16 @@ const Section = ({ title, icon, users, emptyText, showApproximate = false, hideT
     </div>
 );
 
-export default function MessageInfoModal({ messageId, onClose }) {
+export default function MessageInfoModal({ message, onClose, socket }) {
     const { token } = useAuth();
     const [data, setData] = useState(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
 
+    // [FIX] Use local message for instant preview & decrypted content
+    const messageId = message?.id;
+
+    // Fetch initial data
     useEffect(() => {
         if (!messageId) return;
         setLoading(true);
@@ -215,25 +219,124 @@ export default function MessageInfoModal({ messageId, onClose }) {
             }
             return res.json();
         })
-        .then(setData)
+        .then(serverData => {
+            // [FIX] Merge Server Data with Local Decrypted Data
+            // Server gives us read receipts, local gives us decrypted 'content'
+            setData({
+                ...serverData,
+                message: {
+                    ...serverData.message,
+                    content: message.content || serverData.message.content, // Prefer local decrypted
+                    media_url: message.media_url || message.image_url || serverData.message.media_url, // Prefer local blob
+                    caption: message.caption || serverData.message.caption
+                }
+            });
+        })
         .catch(err => setError(err.message))
         .finally(() => setLoading(false));
-    }, [messageId, token]);
+    }, [messageId, token, message]);
+
+    // [NEW] Real-time Updates via Socket
+    useEffect(() => {
+        if (!socket || !data || !messageId) return;
+
+        const handleDelivery = ({ messageId: deliveredMsgId, userId, deliveredAt }) => {
+            if (String(deliveredMsgId) !== String(messageId)) return;
+            
+            // Only update if not already in delivered or read sections
+            setData(prev => {
+                if (!prev) return prev;
+                const alreadyDelivered = prev.delivered.some(u => String(u.userId) === String(userId));
+                const alreadyRead = prev.interactions?.read?.some(u => String(u.userId) === String(userId));
+                
+                if (alreadyDelivered || alreadyRead) return prev;
+
+                // We need the user's name/avatar. Since socket payload might be minimal,
+                // we check if this user is in 'pending' list to grab their details.
+                const pendingUser = prev.pending.find(u => String(u.userId) === String(userId));
+                
+                if (!pendingUser) return prev; // If not pending, maybe joined later? Ignore for now to prevent weirdness
+
+                const newDeliveredUser = {
+                    ...pendingUser,
+                    at: deliveredAt
+                };
+
+                return {
+                    ...prev,
+                    delivered: [...prev.delivered, newDeliveredUser],
+                    pending: prev.pending.filter(u => String(u.userId) !== String(userId))
+                };
+            });
+        };
+
+        const handleReadReceipt = ({ messageIds, userId, readAt }) => {
+            // Check if our message is in the list of read messages
+            // messageIds can be array of strings or ints
+            const isRead = messageIds.some(id => String(id) === String(messageId));
+            if (!isRead) return;
+
+             setData(prev => {
+                if (!prev) return prev;
+                const alreadyRead = prev.interactions?.read?.some(u => String(u.userId) === String(userId));
+                if (alreadyRead) return prev;
+
+                // Find user info from pending or delivered
+                // They might be in delivered now (most likely) or pending (direct read race condition)
+                const knownUser = prev.delivered.find(u => String(u.userId) === String(userId)) 
+                               || prev.pending.find(u => String(u.userId) === String(userId));
+
+                if (!knownUser) return prev;
+
+                const newReadUser = {
+                    ...knownUser,
+                    at: readAt
+                };
+
+                return {
+                    ...prev,
+                    interactions: {
+                        ...prev.interactions,
+                        read: [...(prev.interactions.read || []), newReadUser]
+                    },
+                    // If they are in delivered, keep them there? 
+                    // Usually "Read" implies "Delivered". 
+                    // Our UI logic below filters read users out of "Delivered" display to avoid dupes usually, 
+                    // or shows checks. 
+                    // But 'data.delivered' usually tracks physical delivery events.
+                    // Let's ensure we update delivered too if missing? 
+                    // Actually, let's just push to read. The render logic handles the "effective" display.
+                    
+                    // Actually, if we just push to read, we should also ensuring they are in delivered for consistency?
+                    // Server does inconsistent things sometimes.
+                    // For UI, we just update 'read'.
+                };
+            });
+        };
+
+        socket.on('message:delivered', handleDelivery);
+        socket.on('message:read_receipt', handleReadReceipt); 
+
+        return () => {
+            socket.off('message:delivered', handleDelivery);
+            socket.off('message:read_receipt', handleReadReceipt);
+        };
+    }, [socket, messageId, data]);
 
     if (!messageId) return null;
 
     return (
         <div 
-            className="fixed inset-0 z-[1000] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4 animate-in fade-in duration-200"
+            className="fixed inset-0 z-[1000] flex items-center justify-center bg-slate-950/60 backdrop-blur-sm p-4 animate-in fade-in duration-200"
             onClick={onClose}
         >
             <div 
-                className="bg-white dark:bg-slate-900 w-full max-w-md rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[85vh] animate-in zoom-in-95 duration-200"
+                className="bg-white dark:bg-slate-900 w-full max-w-md rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-800 overflow-hidden flex flex-col max-h-[85vh] animate-in zoom-in-95 duration-200"
                 onClick={e => e.stopPropagation()}
             >
                 {/* Header */}
-                <div className="px-4 py-3 border-b border-slate-200 dark:border-slate-800 flex items-center gap-3">
-                    <button onClick={onClose} className="w-9 h-9 flex items-center justify-center rounded-full hover:bg-slate-100 dark:hover:bg-slate-700/50 transition-colors">
+                <div className="px-4 py-3 border-b border-slate-200 dark:border-slate-800 flex items-center gap-3 bg-slate-50/50 dark:bg-slate-900/50">
+                    <button onClick={onClose} className="w-9 h-9 flex items-center justify-center rounded-full hover:bg-slate-200 dark:hover:bg-slate-800 transition-colors">
                         <span className="material-symbols-outlined text-[20px] text-slate-500 dark:text-slate-400">arrow_back</span>
                     </button>
                     <h2 className="text-lg font-semibold text-slate-800 dark:text-white">Message Info</h2>
@@ -252,7 +355,7 @@ export default function MessageInfoModal({ messageId, onClose }) {
                 ) : (
                     <div className="flex-1 overflow-y-auto custom-scrollbar">
                         {/* Preview Section */}
-                        <div className="p-4 border-b border-slate-200 dark:border-slate-800">
+                        <div className="p-4 border-b border-slate-200 dark:border-slate-800 bg-slate-50/30 dark:bg-slate-800/20">
                              <MessagePreview msg={data.message} />
                              <div className="mt-2 flex flex-col gap-1">
                                  <div className="text-xs text-slate-400 dark:text-slate-500 flex justify-end gap-1">
@@ -266,7 +369,7 @@ export default function MessageInfoModal({ messageId, onClose }) {
 
                         <div className="divide-y divide-slate-100 dark:divide-slate-800/50">
                             {(() => {
-                                const { message, interactions, delivered, pending } = data;
+                                const { message, interactions, delivered } = data; // Removed 'pending' from destructuring used in list
                                 const { read = [], played = [], opened = [] } = interactions || {};
                                 
                                 // [NEW] Calculate Effective Delivered and Pending lists
@@ -286,26 +389,11 @@ export default function MessageInfoModal({ messageId, onClose }) {
                                     });
                                 });
 
-                                // Filter pending: Remove anyone who is now in effectiveDelivered
-                                const effectivePending = pending.filter(u => !deliveredIds.has(u.userId));
-
-                                const renderPending = () => effectivePending && effectivePending.length > 0 && (
-                                    <div className="pb-6">
-                                        <Section 
-                                            title="Sent to" 
-                                            icon={<span className="material-symbols-outlined text-[18px] text-slate-400">check</span>}
-                                            users={effectivePending} 
-                                            emptyText="Sent"
-                                            hideTime={true}
-                                        />
-                                    </div>
-                                );
+                                // [CHANGE] REMOVED "Sent to" (Pending) section entirely as requested.
+                                // We only show events that have actually happened.
                                 
                                 // Logic for Voice Messages: Played, Seen, Delivered
                                 if (message.type === 'audio') {
-                                    // Seen: SHOW ALL (No disjoint)
-                                    // Delivered: SHOW ALL (No disjoint)
-
                                     return (
                                         <>
                                             <Section 
@@ -314,32 +402,24 @@ export default function MessageInfoModal({ messageId, onClose }) {
                                                 users={played} 
                                                 emptyText="Not played yet"
                                             />
-                                            {read.length > 0 && (
-                                                <Section 
-                                                    title="Seen" 
-                                                    icon={<span className="material-symbols-outlined text-[18px] text-blue-500 filled">done_all</span>}
-                                                    users={read} 
-                                                    emptyText="Not seen yet"
-                                                />
-                                            )}
-                                            {effectiveDelivered.length > 0 && (
-                                                <Section 
-                                                    title="Delivered to" 
-                                                    icon={<span className="material-symbols-outlined text-[18px] text-slate-400">done_all</span>}
-                                                    users={effectiveDelivered} 
-                                                    emptyText="Delivered"
-                                                />
-                                            )}
-                                            {renderPending()}
+                                            <Section 
+                                                title="Seen" 
+                                                icon={<span className="material-symbols-outlined text-[18px] text-blue-500 filled">done_all</span>}
+                                                users={read} 
+                                                emptyText="Not seen yet"
+                                            />
+                                            <Section 
+                                                title="Delivered to" 
+                                                icon={<span className="material-symbols-outlined text-[18px] text-slate-400">done_all</span>}
+                                                users={effectiveDelivered} 
+                                                emptyText="Delivered"
+                                            />
                                         </>
                                     );
                                 }
 
                                 // Logic for View Once: Opened, Seen, Delivered
                                 if (message.is_view_once) {
-                                    // Seen: SHOW ALL (No disjoint)
-                                    // Delivered: SHOW ALL
-
                                     return (
                                         <>
                                             <Section 
@@ -348,23 +428,18 @@ export default function MessageInfoModal({ messageId, onClose }) {
                                                 users={opened} 
                                                 emptyText="Not opened yet"
                                             />
-                                            {read.length > 0 && (
-                                                <Section 
-                                                    title="Seen" 
-                                                    icon={<span className="material-symbols-outlined text-[18px] text-blue-500 filled">done_all</span>}
-                                                    users={read} 
-                                                    emptyText="Not seen yet"
-                                                />
-                                            )}
-                                            {effectiveDelivered.length > 0 && (
-                                                <Section 
-                                                    title="Delivered to" 
-                                                    icon={<span className="material-symbols-outlined text-[18px] text-slate-400">done_all</span>}
-                                                    users={effectiveDelivered} 
-                                                    emptyText="Delivered"
-                                                />
-                                            )}
-                                            {renderPending()}
+                                            <Section 
+                                                title="Seen" 
+                                                icon={<span className="material-symbols-outlined text-[18px] text-blue-500 filled">done_all</span>}
+                                                users={read} 
+                                                emptyText="Not seen yet"
+                                            />
+                                            <Section 
+                                                title="Delivered to" 
+                                                icon={<span className="material-symbols-outlined text-[18px] text-slate-400">done_all</span>}
+                                                users={effectiveDelivered} 
+                                                emptyText="Delivered"
+                                            />
                                         </>
                                     );
                                 }
@@ -378,15 +453,12 @@ export default function MessageInfoModal({ messageId, onClose }) {
                                             users={read} 
                                             emptyText="Not read yet"
                                         />
-                                        {effectiveDelivered.length > 0 && (
-                                            <Section 
-                                                title="Delivered to" 
-                                                icon={<span className="material-symbols-outlined text-[18px] text-slate-400">done_all</span>}
-                                                users={effectiveDelivered} 
-                                                emptyText="Delivered"
-                                            />
-                                        )}
-                                        {renderPending()}
+                                        <Section 
+                                            title="Delivered to" 
+                                            icon={<span className="material-symbols-outlined text-[18px] text-slate-400">done_all</span>}
+                                            users={effectiveDelivered} 
+                                            emptyText="Delivered"
+                                        />
                                     </>
                                 );
                             })()}

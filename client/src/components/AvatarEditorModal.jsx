@@ -150,8 +150,11 @@ async function getCroppedImg(
     });
 }
 
+import { useConfirm } from '../context/ConfirmationContext';
+
 export default function AvatarEditorModal({ isOpen, onClose, ...props }) {
     const { token, updateUser } = useAuth();
+    const confirm = useConfirm();
     const [imageSrc, setImageSrc] = useState(null);
     const [crop, setCrop] = useState({ x: 0, y: 0 });
     const [zoom, setZoom] = useState(1);
@@ -264,7 +267,13 @@ export default function AvatarEditorModal({ isOpen, onClose, ...props }) {
     };
 
     const handleRemove = async () => {
-        if (!confirm("Are you sure you want to remove this photo?")) return;
+        const confirmed = await confirm({
+            title: 'Remove Photo',
+            message: 'Are you sure you want to remove this photo?',
+            type: 'danger',
+            confirmText: 'Remove'
+        });
+        if (!confirmed) return;
         setLoading(true);
         try {
              const deleteUrl = props.deleteUrl || `${import.meta.env.VITE_API_URL}/api/users/me/avatar`;

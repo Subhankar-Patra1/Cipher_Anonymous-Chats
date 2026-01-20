@@ -429,6 +429,7 @@ router.get('/', async (req, res) => {
     try {
         const roomsRes = await db.query(`
             SELECT r.*, rm.role, rm.last_read_at, rm.is_archived, rm.is_pinned, rm.pinned_at,
+            (SELECT COUNT(*) FROM room_members rm3 WHERE rm3.room_id = r.id) as member_count,
             (SELECT u.display_name FROM room_members rm2 JOIN users u ON rm2.user_id = u.id WHERE rm2.room_id = r.id AND rm2.user_id != $1::integer LIMIT 1) as other_user_name,
             (SELECT u.username FROM room_members rm2 JOIN users u ON rm2.user_id = u.id WHERE rm2.room_id = r.id AND rm2.user_id != $1::integer LIMIT 1) as other_user_username,
             (SELECT u.avatar_thumb_url FROM room_members rm2 JOIN users u ON rm2.user_id = u.id WHERE rm2.room_id = r.id AND rm2.user_id != $1::integer LIMIT 1) as other_user_avatar_thumb,
@@ -439,13 +440,20 @@ router.get('/', async (req, res) => {
             (SELECT u.username FROM users u WHERE u.id = r.created_by) as creator_username,
             (SELECT COUNT(*) FROM messages m 
              WHERE m.room_id = r.id 
-             AND m.created_at > rm.last_read_at 
+             AND m.created_at > COALESCE(rm.last_read_at, '1970-01-01') 
              AND (m.blocked_for_user_id IS NULL OR m.blocked_for_user_id != $1::integer)
              -- NOTE: This filter is ONLY for unread count calculation. Do NOT reuse for message history queries.
              AND m.user_id NOT IN (SELECT blocked_id FROM blocked_users WHERE blocker_id = $1::integer)
              AND m.user_id != $1::integer
             ) as unread_count,
-            last_msg.content as last_message_content,
+            (SELECT COUNT(*) FROM messages m 
+             WHERE m.room_id = r.id 
+             AND m.created_at > COALESCE(rm.last_read_at, '1970-01-01') 
+             AND $1::integer = ANY(m.mention_user_ids)
+             AND (m.blocked_for_user_id IS NULL OR m.blocked_for_user_id != $1::integer)
+             AND m.user_id != $1::integer
+            ) as mention_count,
+            COALESCE(last_msg.content, CASE WHEN last_msg.ciphertext IS NOT NULL THEN '🔒 Encrypted Message' ELSE NULL END) as last_message_content,
             last_msg.type as last_message_type,
             last_msg.user_id as last_message_sender_id,
             last_msg.sender_name as last_message_sender_name, 
@@ -466,6 +474,9 @@ router.get('/', async (req, res) => {
             last_msg.file_url as last_message_file_url,
             last_msg.gif_url as last_message_gif_url,
             last_msg.preview_url as last_message_preview_url,
+            last_msg.ciphertext, last_msg.iv, last_msg.key_version, last_msg.temp_id, last_msg.sender_device_id, 
+            last_msg.distribution_headers,
+            last_msg.reactions as last_message_reactions,
             
             gp.send_mode, gp.allow_name_change, gp.allow_description_change, gp.allow_add_members, gp.allow_remove_members,
             (SELECT COUNT(*) > 0 FROM blocked_users bu WHERE bu.blocker_id = $1::integer AND bu.blocked_id = (SELECT user_id FROM room_members rm2 WHERE rm2.room_id = r.id AND rm2.user_id != $1::integer LIMIT 1)) as is_blocked_by_me,
@@ -479,7 +490,22 @@ router.get('/', async (req, res) => {
                        p.question as poll_question,
                        -- [NEW] Media fields
                        m.audio_url, m.audio_duration_ms, m.audio_waveform,
-                       m.image_url, m.file_url, m.gif_url, m.preview_url
+                       m.image_url, m.file_url, m.gif_url, m.preview_url,
+                       m.ciphertext, m.iv, m.key_version, m.temp_id, m.sender_device_id,
+                       m.distribution_headers,
+                       COALESCE(
+                           (SELECT json_agg(json_build_object(
+                               'userId', r2.user_id, 
+                               'reaction', r2.reaction,
+                               'username', u_react.username,
+                               'display_name', u_react.display_name,
+                               'avatar_thumb_url', u_react.avatar_thumb_url
+                            ))
+                            FROM message_reactions r2 
+                            JOIN users u_react ON r2.user_id = u_react.id
+                            WHERE r2.message_id = m.id),
+                           '[]'
+                       ) as reactions
                 FROM messages m
                 LEFT JOIN users u ON m.user_id = u.id
                 LEFT JOIN polls p ON m.poll_id = p.id
@@ -498,6 +524,7 @@ router.get('/', async (req, res) => {
         
         const mappedRooms = rooms.map(r => ({
             ...r,
+            member_count: parseInt(r.member_count) || 0,
             name: r.type === 'direct' ? (r.other_user_name || 'Unknown User') : r.name,
             username: r.type === 'direct' ? r.other_user_username : null,
             other_user_id: r.type === 'direct' ? r.other_user_id : null,
@@ -516,6 +543,7 @@ router.get('/', async (req, res) => {
             last_message_is_view_once: r.last_message_is_view_once,
             last_message_viewed_by: r.last_message_viewed_by,
             last_message_poll_question: r.last_message_poll_question,
+            last_message_polls: r.last_message_polls, // (If needed)
             last_message_is_deleted: r.last_message_is_deleted, 
             // [NEW] Pass through rich media fields
             last_message_audio_url: r.last_message_audio_url,
@@ -525,7 +553,16 @@ router.get('/', async (req, res) => {
             last_message_file_url: r.last_message_file_url,
             last_message_gif_url: r.last_message_gif_url,
             last_message_preview_url: r.last_message_preview_url,
-
+            // [NEW] E2EE Fields
+            last_message_ciphertext: r.ciphertext,
+            last_message_iv: r.iv,
+            last_message_key_version: r.key_version,
+            last_message_temp_id: r.temp_id,
+            last_message_sender_device_id: r.sender_device_id,
+            last_message_distribution_headers: r.distribution_headers,
+            last_message_reactions: r.last_message_reactions,
+            
+            unread_count: parseInt(r.unread_count || 0),
             // [NEW] Count attachments for multi-image preview
             last_message_attachments_count: (() => {
                 if (!r.last_message_attachments) return 0;
@@ -560,6 +597,7 @@ router.get('/:id/messages', async (req, res) => {
                    m.gif_url, m.preview_url, m.width, m.height,
                    m.author_name, m.meta,
                    (aps.heard_at IS NOT NULL) as audio_heard,
+                   (sm.created_at IS NOT NULL) as is_starred, -- [NEW]
                    m.created_at,
                    m.image_url, m.caption, m.image_width, m.image_height, m.image_size, m.attachments,
                    m.is_view_once, m.viewed_by,
@@ -567,11 +605,28 @@ router.get('/:id/messages', async (req, res) => {
                    m.latitude, m.longitude, m.address, -- [FIX] Added location data
                    m.is_pinned, m.pinned_by, m.pinned_at, m.pin_expires_at, 
                    m.poll_id, -- [FIX] Added poll_id
+                   m.ciphertext, m.iv, m.key_version, m.temp_id, -- [NEW E2EE] Added for decryption
+                   m.signature, m.signature_version, m.sender_device_id, -- [NEW] Sender Authentication
+                   m.distribution_headers, -- [NEW] Piggybacking Key Distribution
                    (SELECT COUNT(*) FROM room_members rm_cnt WHERE rm_cnt.room_id = m.room_id) as room_member_count,
+                   COALESCE(
+                       (SELECT json_agg(json_build_object(
+                           'userId', r.user_id, 
+                           'reaction', r.reaction,
+                           'username', u_react.username,
+                           'display_name', u_react.display_name,
+                           'avatar_thumb_url', u_react.avatar_thumb_url
+                        ))
+                        FROM message_reactions r 
+                        JOIN users u_react ON r.user_id = u_react.id
+                        WHERE r.message_id = m.id),
+                       '[]'
+                   ) as reactions,
                    u.display_name, u.username, u.avatar_thumb_url, u.avatar_url 
             FROM messages m 
             LEFT JOIN users u ON m.user_id = u.id 
             LEFT JOIN audio_play_state aps ON m.id = aps.message_id AND aps.user_id = $2
+            LEFT JOIN starred_messages sm ON m.id = sm.message_id AND sm.user_id = $2 -- [NEW]
             JOIN room_members rm_curr ON rm_curr.room_id = m.room_id AND rm_curr.user_id = $2
             WHERE m.room_id = $1 
             AND m.created_at > COALESCE(rm_curr.cleared_at, '1970-01-01')
@@ -715,7 +770,7 @@ router.get('/:id/media', async (req, res) => {
             LEFT JOIN users u ON m.user_id = u.id
             JOIN room_members rm ON rm.room_id = m.room_id AND rm.user_id = $2
             WHERE m.room_id = $1 
-            AND m.created_at > COALESCE(rm.cleared_at, '1970-01-01')
+            AND m.created_at > COALESCE(rm.media_cleared_at, '1970-01-01') -- [FIX] Respect media-specific clear timestamp
             AND (m.is_deleted_for_everyone IS FALSE OR m.is_deleted_for_everyone IS NULL)
             AND (m.deleted_for_user_ids IS NULL OR NOT ($2::text = ANY(m.deleted_for_user_ids)))
             AND (m.is_view_once IS FALSE OR m.is_view_once IS NULL)
@@ -1036,11 +1091,21 @@ router.post('/:id/read', async (req, res) => {
 // Clear Messages
 router.post('/:id/clear', async (req, res) => {
     try {
-        await db.query('UPDATE room_members SET cleared_at = NOW() WHERE room_id = $1 AND user_id = $2', [req.params.id, req.user.id]);
+        const { deleteMedia } = req.body; // [NEW] Option to delete shared media access
+        
+        await db.query(`
+            UPDATE room_members 
+            SET 
+                cleared_at = NOW(),
+                media_cleared_at = CASE WHEN $3::boolean THEN NOW() ELSE media_cleared_at END
+            WHERE room_id = $1 AND user_id = $2
+        `, [req.params.id, req.user.id, !!deleteMedia]);
+        
         const io = req.app.get('io');
         io.to(`user:${req.user.id}`).emit('chat:cleared', { roomId: req.params.id, userId: req.user.id });
         res.json({ ok: true });
     } catch (error) {
+        console.error(error);
         res.status(500).json({ error: 'Server error' });
     }
 });
@@ -1689,6 +1754,174 @@ router.post('/:id/preferences', async (req, res) => {
         res.json({ success: true, bubbleColor, wallpaper });
     } catch (error) {
         console.error(error);
+        res.status(500).json({ error: 'Server error' });
+    }
+});
+
+// [NEW E2EE] Get Device Keys for all members (to encrypt for them)
+router.get('/:id/devices', async (req, res) => {
+    const roomId = req.params.id;
+    try {
+        // Check membership
+        const check = await db.query('SELECT 1 FROM room_members WHERE room_id=$1 AND user_id=$2', [roomId, req.user.id]);
+        if (!check.rows.length) return res.status(403).json({ error: 'Not a member' });
+
+        // Get devices of ALL members
+        const devices = await db.query(`
+            SELECT ud.id as "deviceId", ud.user_id as "userId", ud.public_key as "publicKey", ud.signing_public_key as "signingPublicKey"
+            FROM user_devices ud
+            JOIN room_members rm ON ud.user_id = rm.user_id
+            WHERE rm.room_id = $1
+        `, [roomId]);
+        
+        res.json(devices.rows);
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: 'Server error' });
+    }
+});
+
+// [NEW E2EE] Upload Encrypted Room Keys (Envelope)
+router.post('/:id/keys', async (req, res) => {
+    const roomId = req.params.id;
+    const { keys, keyVersion, senderDeviceId } = req.body; 
+    // keys: { deviceId: encryptedBlob, ... }
+    
+    if (!senderDeviceId || !keyVersion) return res.status(400).json({ error: 'Missing fields' });
+
+    try {
+        // [GUARD] Check membership
+        const check = await db.query('SELECT 1 FROM room_members WHERE room_id=$1 AND user_id=$2', [roomId, req.user.id]);
+        if (!check.rows.length) return res.status(403).json({ error: 'Not a member' });
+
+        // [GUARD] Check Device validity (Revocation check)
+        // If device was deleted (revoked), this query returns 0 rows.
+        const deviceCheck = await db.query('SELECT user_id FROM user_devices WHERE id=$1', [senderDeviceId]);
+        if (deviceCheck.rows.length === 0) return res.status(403).json({ error: 'Device revoked or not found' });
+        if (deviceCheck.rows[0].user_id !== req.user.id) return res.status(403).json({ error: 'Device mismatch' });
+
+        // [RACE PROTECTION] Register Key Version
+        // Only one device can win the race to define a specific version (e.g. v2)
+        try {
+            await db.query(
+                'INSERT INTO room_key_versions (room_id, version, created_by_device_id) VALUES ($1, $2, $3)',
+                [roomId, keyVersion, senderDeviceId]
+            );
+        } catch (e) {
+            if (e.code === '23505') { // Unique violation
+                // Check if WE created it (Idempotency)
+                const current = await db.query(
+                    'SELECT created_by_device_id FROM room_key_versions WHERE room_id=$1 AND version=$2',
+                    [roomId, keyVersion]
+                );
+                if (current.rows.length > 0 && current.rows[0].created_by_device_id !== senderDeviceId) {
+                    console.warn(`[E2EE] Race condition: Device ${senderDeviceId} tried to overwrite v${keyVersion} created by ${current.rows[0].created_by_device_id}`);
+                    return res.status(409).json({ error: 'Version conflict', code: 'RACE_CONDITION' });
+                }
+            } else {
+                throw e;
+            }
+        }
+
+        // Insert for each device
+        for (const [deviceId, encryptedKey] of Object.entries(keys)) {
+             await db.query(`
+                 INSERT INTO room_keys (room_id, device_id, encrypted_key, key_version)
+                 VALUES ($1, $2, $3, $4)
+                 ON CONFLICT (room_id, device_id, key_version) DO NOTHING
+             `, [roomId, deviceId, encryptedKey, keyVersion || 1]);
+        }
+        res.json({ success: true });
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: 'Server error' });
+    }
+});
+
+// [NEW E2EE] Get My Encrypted Room Key
+router.get('/:id/keys/my', async (req, res) => {
+    const roomId = req.params.id;
+    const { deviceId, version } = req.query;
+    
+    if (!deviceId) return res.status(400).json({ error: 'DeviceId required' });
+    
+    // Check membership
+    const check = await db.query('SELECT 1 FROM room_members WHERE room_id=$1 AND user_id=$2', [roomId, req.user.id]);
+    if (!check.rows.length) return res.status(403).json({ error: 'Not a member' });
+
+    try {
+        let query = 'SELECT encrypted_key, key_version FROM room_keys WHERE room_id=$1 AND device_id=$2';
+        const params = [roomId, deviceId];
+        
+        if (version) {
+            query += ' AND key_version=$3';
+            params.push(version);
+        } else {
+            // Get latest
+            query += ' ORDER BY key_version DESC LIMIT 1';
+        }
+        
+        const resKey = await db.query(query, params);
+        if (resKey.rows.length === 0) return res.json({ encrypted_key: null });
+        
+        res.json(resKey.rows[0]);
+    } catch (err) {
+         console.error(err);
+         res.status(500).json({ error: 'Server error' });
+    }
+});
+
+// [NEW E2EE] Get Device IDs that have a specific key version
+router.get('/:id/keys/devices', async (req, res) => {
+    const roomId = req.params.id;
+    const { version } = req.query;
+    
+    if (!version) return res.status(400).json({ error: 'Version required' });
+    
+    try {
+        // Check membership
+        const check = await db.query('SELECT 1 FROM room_members WHERE room_id=$1 AND user_id=$2', [roomId, req.user.id]);
+        if (!check.rows.length) return res.status(403).json({ error: 'Not a member' });
+        
+        const result = await db.query(
+            'SELECT device_id FROM room_keys WHERE room_id = $1 AND key_version = $2',
+            [roomId, version]
+        );
+        
+        res.json({ deviceIds: result.rows.map(r => r.device_id) });
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: 'Server error' });
+    }
+});
+
+// [NEW E2EE] Check if any room key exists for this room
+// This prevents multiple users from generating different keys
+router.get('/:id/keys/exists', async (req, res) => {
+    const roomId = req.params.id;
+    
+    try {
+        // Check membership
+        const check = await db.query('SELECT 1 FROM room_members WHERE room_id=$1 AND user_id=$2', [roomId, req.user.id]);
+        if (!check.rows.length) return res.status(403).json({ error: 'Not a member' });
+        
+        // Get the latest key version for this room (any device)
+        const result = await db.query(
+            'SELECT key_version, device_id FROM room_keys WHERE room_id = $1 ORDER BY key_version DESC LIMIT 1',
+            [roomId]
+        );
+        
+        if (result.rows.length === 0) {
+            return res.json({ exists: false });
+        }
+        
+        res.json({ 
+            exists: true, 
+            latestVersion: result.rows[0].key_version,
+            holderDeviceId: result.rows[0].device_id
+        });
+    } catch (err) {
+        console.error(err);
         res.status(500).json({ error: 'Server error' });
     }
 });

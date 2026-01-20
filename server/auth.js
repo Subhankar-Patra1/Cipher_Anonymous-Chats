@@ -68,8 +68,15 @@ router.post('/signup', async (req, res) => {
         if (error.code === '23505') {
             return res.status(400).json({ error: 'Username taken' });
         }
+        
         console.error("Signup error:", error);
-        res.status(500).json({ error: error.message });
+        
+        // Handle Connection Errors gracefully
+        if (error.message.includes('getaddrinfo') || error.code === 'ENOTFOUND' || error.code === 'ECONNREFUSED') {
+            return res.status(503).json({ error: 'Unable to connect to server. Please check your internet connection.' });
+        }
+        
+        res.status(500).json({ error: 'An unexpected error occurred. Please try again.' });
     }
 });
 
@@ -113,7 +120,12 @@ router.post('/login', async (req, res) => {
         res.json({ token, user: { id: user.id, username: user.username, display_name: user.display_name, share_presence: user.share_presence, avatar_url: user.avatar_url, avatar_thumb_url: user.avatar_thumb_url } });
     } catch (error) {
         console.error("Login error:", error);
-        res.status(500).json({ error: error.message });
+        
+        if (error.message.includes('getaddrinfo') || error.code === 'ENOTFOUND' || error.code === 'ECONNREFUSED') {
+            return res.status(503).json({ error: 'Unable to connect to server. Please check your internet connection.' });
+        }
+        
+        res.status(500).json({ error: 'An unexpected error occurred. Please try again.' });
     }
 });
 
@@ -143,7 +155,12 @@ router.post('/recover-account', async (req, res) => {
         res.json({ success: true, message: 'Password updated successfully' });
     } catch (error) {
         console.error("Recovery error:", error);
-        res.status(500).json({ error: error.message });
+        
+        if (error.message.includes('getaddrinfo') || error.code === 'ENOTFOUND' || error.code === 'ECONNREFUSED') {
+            return res.status(503).json({ error: 'Unable to connect to server. Please check your internet connection.' });
+        }
+
+        res.status(500).json({ error: 'An unexpected error occurred. Please try again.' });
     }
 });
 
@@ -231,6 +248,171 @@ router.get('/check-username', async (req, res) => {
     } catch (error) {
         console.error("Check username error:", error);
         res.status(500).json({ error: error.message });
+    }
+});
+
+// [NEW E2EE] Register Device & Public Key
+router.post('/device', async (req, res) => {
+    // Expected: { deviceId, publicKey, label? }
+    // User must be authenticated (Token has sessionId, but deviceId might be new if re-install? 
+    // Wait, if token has sessionId, that's from user_sessions. 
+    // We are linking the crypto deviceId (UUID) to user.
+    
+    // Auth check manually since router level middleware isn't strictly applied here in this file structure shown previously?
+    // Actually top level index.js likely applies generic auth or this router lacks it?
+    // Looking at messages.js, it has 'router.use(authenticate)'. 
+    // auth.js usually is public. But /device requires we know WHO the user is.
+    // Let's expect headers.authorization.
+    
+    const jwt = require('jsonwebtoken');
+    const token = req.headers.authorization?.split(' ')[1];
+    if (!token) return res.status(401).json({ error: 'No token' });
+    
+    let userId;
+    try {
+        const decoded = jwt.verify(token, JWT_SECRET);
+        userId = decoded.id;
+    } catch (e) {
+        return res.status(401).json({ error: 'Invalid token' });
+    }
+
+    const { deviceId, publicKey, label, signingPublicKey } = req.body;
+    if (!deviceId || !publicKey) {
+        return res.status(400).json({ error: 'Missing device info' });
+    }
+
+    // [NEW] Generate rich label from User-Agent
+    const ua = new UAParser(req.headers['user-agent']);
+    const browser = ua.getBrowser();
+    const os = ua.getOS();
+    const device = ua.getDevice();
+    
+    let deviceLabel = label;
+    if (!deviceLabel) {
+        if (device.model) {
+            deviceLabel = `${device.vendor || ''} ${device.model} (${os.name || 'Android'})`.trim();
+        } else {
+            deviceLabel = `${browser.name || 'Browser'} on ${os.name || 'Unknown OS'}`;
+        }
+    }
+
+    try {
+        // Upsert device
+        await db.query(`
+            INSERT INTO user_devices (id, user_id, public_key, signing_public_key, label, last_active_at)
+            VALUES ($1, $2, $3, $4, $5, NOW())
+            ON CONFLICT (id) DO UPDATE 
+            SET last_active_at = NOW(), public_key = $3, signing_public_key = $4, user_id = $2, label = $5
+        `, [deviceId, userId, publicKey, signingPublicKey, deviceLabel]);
+        
+        res.json({ success: true });
+    } catch (err) {
+        console.error('Device registration failed:', err);
+        res.status(500).json({ error: 'Server error' });
+    }
+});
+
+// [NEW] Get Client Devices
+router.get('/devices', async (req, res) => {
+    const token = req.headers.authorization?.split(' ')[1];
+    if (!token) return res.status(401).json({ error: 'No token' });
+    
+    try {
+        const decoded = require('jsonwebtoken').verify(token, process.env.JWT_SECRET || 'supersecretkey');
+        const userId = decoded.id;
+
+        const { rows } = await db.query(
+            'SELECT id, public_key, label, last_active_at, created_at, signing_public_key FROM user_devices WHERE user_id = $1 ORDER BY last_active_at DESC',
+            [userId]
+        );
+        res.json(rows);
+    } catch (err) {
+        console.error('Get devices failed:', err);
+        res.status(500).json({ error: 'Server error' });
+    }
+});
+
+// [NEW] Revoke Device
+router.delete('/devices/:deviceId', async (req, res) => {
+    const token = req.headers.authorization?.split(' ')[1];
+    if (!token) return res.status(401).json({ error: 'No token' });
+    
+    try {
+        const decoded = require('jsonwebtoken').verify(token, process.env.JWT_SECRET || 'supersecretkey');
+        const userId = decoded.id;
+        const deviceId = req.params.deviceId;
+
+        // [SECURITY] Prevent revoking self (Client UI blocks it, but API must too?)
+        // Actually, revoking self is a "Logout". It's fine but treating it as revocation is okay.
+        // However, for strictly E2EE revocation context, usually we revoke *other* devices.
+        // Users might want to "Logout via Revocation" which is fine.
+        
+        // Check ownership
+        const check = await db.query('SELECT user_id FROM user_devices WHERE id = $1', [deviceId]);
+        if (check.rows.length === 0) return res.status(404).json({ error: 'Device not found' });
+        if (check.rows[0].user_id !== userId) return res.status(403).json({ error: 'Not your device' });
+
+        // [FIX] Handle room_key_versions foreign key (missing ON DELETE CASCADE)
+        await db.query('UPDATE room_key_versions SET created_by_device_id = NULL WHERE created_by_device_id = $1', [deviceId]);
+
+        // Delete (Cascades to room_keys)
+        await db.query('DELETE FROM user_devices WHERE id = $1', [deviceId]);
+        
+        // Optional: Also kill sessions for this device if we can link them?
+        // We link via user_sessions but we don't strictly track Crypto Device ID in user_sessions yet.
+        // Future improvement: Link session to crypto device ID.
+        
+        res.json({ success: true });
+    } catch (err) {
+        console.error('Revoke device failed:', err);
+        res.status(500).json({ error: 'Server error' });
+    }
+});
+
+// [NEW] Cloud Backup Routes
+router.post('/backup', async (req, res) => {
+    const token = req.headers.authorization?.split(' ')[1];
+    if (!token) return res.status(401).json({ error: 'No token' });
+    
+    try {
+        const decoded = jwt.verify(token, JWT_SECRET);
+        const userId = decoded.id;
+        const { encryptedBlob, salt, iv } = req.body;
+
+        if (!encryptedBlob || !salt || !iv) {
+            return res.status(400).json({ error: 'Missing backup data' });
+        }
+
+        await db.query(`
+            INSERT INTO key_backups (user_id, encrypted_blob, salt, iv, password_hint)
+            VALUES ($1, $2, $3, $4, $5)
+            ON CONFLICT (user_id) DO UPDATE 
+            SET encrypted_blob = $2, salt = $3, iv = $4, password_hint = $5, created_at = NOW()
+        `, [userId, encryptedBlob, salt, iv, req.body.passwordHint || null]);
+
+        res.json({ success: true });
+    } catch (err) {
+        res.status(401).json({ error: 'Invalid token' });
+    }
+});
+
+router.get('/backup', async (req, res) => {
+    const token = req.headers.authorization?.split(' ')[1];
+    if (!token) return res.status(401).json({ error: 'No token' });
+    
+    try {
+        const decoded = jwt.verify(token, JWT_SECRET);
+        const userId = decoded.id;
+
+        const { rows } = await db.query('SELECT encrypted_blob, salt, iv, password_hint FROM key_backups WHERE user_id = $1', [userId]);
+        
+        if (rows.length === 0) {
+            return res.json(null);
+        }
+        
+        res.json(rows[0]);
+    } catch (err) {
+        res.status(401).json({ error: 'Invalid token' });
     }
 });
 
