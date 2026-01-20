@@ -54,7 +54,7 @@ export const ANIMATED_EMOJIS = {
     [normalize("😔")]: `${BASE_URL}/Smileys/Pensive%20Face.webp`,
     [normalize("😕")]: `${BASE_URL}/Smileys/Confused%20Face.webp`,
     [normalize("🙃")]: `${BASE_URL}/Smileys/Upside-Down%20Face.webp`,
-    [normalize("🤑")]: `${BASE_URL}/Smileys/Money-Mouth%20Face.webp`,
+    [normalize("🤑")]: `${BASE_URL}/Smileys/Money%20Mouth%20Face.webp`,
     [normalize("😲")]: `${BASE_URL}/Smileys/Astonished%20Face.webp`,
     [normalize("☹️")]: `${BASE_URL}/Smileys/Frowning%20Face.webp`,
     [normalize("🙁")]: `${BASE_URL}/Smileys/Slightly%20Frowning%20Face.webp`,

@@ -28,7 +28,7 @@ const getEmojiSize = (count) => {
 
 // Spoiler component - reveals ONCE on click (Telegram behavior)
 // Now with dynamic emoji sizing for emoji-only content
-const SpoilerText = ({ children, keyProp, rawContent, disableBigEmoji }) => {
+const SpoilerText = ({ children, rawContent, disableBigEmoji }) => {
     const [revealed, setRevealed] = useState(false);
     
     // Check if this is emoji-only spoiler content
@@ -39,7 +39,6 @@ const SpoilerText = ({ children, keyProp, rawContent, disableBigEmoji }) => {
     
     return (
         <span
-            key={keyProp}
             className={`spoiler-message ${revealed ? 'spoiler-revealed' : ''} ${isBigEmoji ? 'inline-flex items-center gap-1' : ''}`}
             style={isBigEmoji ? { padding: '8px', borderRadius: '12px' } : {}}
             onClick={(e) => {
@@ -136,7 +135,7 @@ export const linkifyText = (text, searchTerm = '', linkClass, options = {}) => {
             processUrls(spoilerContent, contentElements); // Recurse for links inside
 
             outputArray.push(
-                <SpoilerText keyProp={globalKey++} rawContent={spoilerContent} disableBigEmoji={options.disableBigEmoji}>
+                <SpoilerText key={globalKey++} rawContent={spoilerContent} disableBigEmoji={options.disableBigEmoji}>
                     {contentElements.length > 0 ? contentElements : spoilerContent}
                 </SpoilerText>
             );
