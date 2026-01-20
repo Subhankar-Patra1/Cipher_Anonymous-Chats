@@ -24,13 +24,14 @@ const PublicRoute = ({ children }) => {
     return user ? <Navigate to="/dashboard" /> : children;
 };
 
-const AppContent = () => {
-    const { isUnlocking } = useAppLock(); // [NEW] Get unlocking state
+import AppLockOverlay from './components/AppLockOverlay';
 
+const AppContent = () => {
+    // [MODIFIED] simplified AppContent
     return (
         <ChatLockProvider>
+            <AppLockOverlay />
             <LockScreen />
-            {isUnlocking && <LoadingScreen />} 
             <Router>
                 <Routes>
                     <Route path="/auth" element={
@@ -56,13 +57,17 @@ const AppContent = () => {
     );
 };
 
+import { ConfirmationProvider } from './context/ConfirmationContext';
+
 function App() {
   return (
     <AuthProvider>
         <NotificationProvider>
-            <AppLockProvider>
-                <AppContent />
-            </AppLockProvider>
+            <ConfirmationProvider>
+                <AppLockProvider>
+                    <AppContent />
+                </AppLockProvider>
+            </ConfirmationProvider>
         </NotificationProvider>
     </AuthProvider>
   );

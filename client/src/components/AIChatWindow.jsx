@@ -5,6 +5,7 @@ import MessageInput from './MessageInput';
 import { linkifyText } from '../utils/linkify';
 import SparkleLogo from './icons/SparkleLogo';
 import { useAiChat } from '../context/AiChatContext';
+import { useConfirm } from '../context/ConfirmationContext';
 
 // [NEW] Welcome Component
 function WelcomeView({ onPromptClick }) {
@@ -46,6 +47,7 @@ function WelcomeView({ onPromptClick }) {
 
 export default function AIChatWindow({ socket, room, user, onBack, isLoading }) {
     const { token } = useAuth();
+    const confirm = useConfirm();
     
     // AI Chat State
     const { getChatState, registerRoom, sendQuery, cancelAi, clearAiChat, regenerate, setMessages: setContextMessages, deleteMessageLocal, syncMessages } = useAiChat(); // [FIX] Added syncMessages
@@ -107,7 +109,13 @@ export default function AIChatWindow({ socket, room, user, onBack, isLoading }) 
     };
 
     const handleClearChat = async () => {
-        if (!confirm('Clear all messages in this AI chat?')) return;
+        const confirmed = await confirm({
+            title: 'Clear AI Chat',
+            message: 'Clear all messages in this AI chat?',
+            type: 'danger',
+            confirmText: 'Clear'
+        });
+        if (!confirmed) return;
         try {
              justClearedRef.current = true;
              // Clear local state immediately
