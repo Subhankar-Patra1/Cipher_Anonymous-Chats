@@ -1,4 +1,12 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import db, {
+    saveLocalMessage,
+    updateLocalMessage,
+    deleteLocalMessage,
+    getPendingMessages,
+    deletePendingMessage
+} from '../utils/db'; 
+import { processIncomingMessage, normalizeReplies, getMessagePreview } from '../utils/messageHydrator';
 import { useAuth } from '../context/AuthContext';
 import { useNotification } from '../context/NotificationContext';
 // [MODIFIED] Use context, don't provide it here
@@ -10,8 +18,11 @@ import CreateRoomModal from '../components/CreateRoomModal';
 import JoinRoomModal from '../components/JoinRoomModal';
 import GroupInfoModal from '../components/GroupInfoModal';
 import LogoutModal from '../components/LogoutModal';
+import RestoreModal from '../components/RestoreModal';
+import { countRoomKeys } from '../lib/crypto/db';
 import NotificationPermissionBanner from '../components/NotificationPermissionBanner';
 import ChatAreaLockGuard from '../components/ChatAreaLockGuard';
+import ProfilePanel from '../components/ProfilePanel'; // [NEW]
 import { renderTextWithEmojis } from '../utils/emojiRenderer';
 import io from 'socket.io-client';
 import { PresenceProvider } from '../context/PresenceContext';
@@ -19,6 +30,9 @@ import { PresenceProvider } from '../context/PresenceContext';
 import { AiChatProvider } from '../context/AiChatContext';
 import notificationSound from '../assets/notification.ogg';
 import sentSound from '../assets/sent.ogg';
+import { cryptoManager } from '../lib/crypto/CryptoManager';
+import { CallProvider } from '../context/CallContext';
+import CallModal from '../components/CallModal';
 
 // Helper to strip emoji characters from text (for clean notification display)
 const stripEmojis = (text) => {
@@ -29,33 +43,23 @@ const stripEmojis = (text) => {
         .trim();
 };
 
-// Helper to generate notification preview text
-const getMessagePreview = (msg) => {
-    // If there's content, try to show it regardless of type
-    if (msg.content) {
-        // Strip only HTML tags, keep emojis
-        const text = (msg.content.replace(/<[^>]*>/g, '') || '').trim();
-        if (text) {
-            return text.length > 80 ? text.slice(0, 80) + '...' : text;
-        }
-    }
-    
-    // Fallback based on type
-    switch(msg.type) {
-        case 'text': return 'Message';
-        case 'image': return msg.caption || 'Photo';
-        case 'video': return msg.caption || 'Video';
-        case 'audio': return 'Voice message';
-        case 'file': return msg.file_name || 'Document';
-        case 'gif': return 'GIF';
-        case 'sticker': return 'Sticker';
-        case 'system': return msg.content; // [NEW] System message preview
-        default: return msg.caption || 'New message';
-    }
+
+
+
+
+// Status priority for tick consistency
+const STATUS_PRIORITY = {
+    'seen': 4,
+    'delivered': 3,
+    'sent': 2,
+    'sending': 1,
+    'pending': 0,
+    'error': -1
 };
 
-
-
+const getStatusPriority = (status) => STATUS_PRIORITY[status] || 0;
+const isStatusBetter = (newStatus, oldStatus) => getStatusPriority(newStatus) > getStatusPriority(oldStatus);
+const isStatusWorse = (newStatus, oldStatus) => getStatusPriority(newStatus) < getStatusPriority(oldStatus);
 
 export default function Dashboard() {
     const { user, token, logout, updateUser } = useAuth();
@@ -69,8 +73,174 @@ export default function Dashboard() {
     const [showJoinModal, setShowJoinModal] = useState(false);
 
     const [showGroupInfo, setShowGroupInfo] = useState(false);
-    const [highlightMessageId, setHighlightMessageId] = useState(null); // [NEW] Highlight message
+    const [highlightMessageId, setHighlightMessageId] = useState(null); 
     const [showLogoutModal, setShowLogoutModal] = useState(false);
+    const [showProfile, setShowProfile] = useState(false); // [NEW]
+
+    const [syncState, setSyncState] = useState({ 
+        active: false, 
+        status: '', 
+        showBackupPrompt: false,
+        mode: 'approve' // 'approve' or 'password'
+    });
+    const [pendingSyncRequest, setPendingSyncRequest] = useState(null);
+    const ecdhKeysRef = useRef(null);
+    const syncTimeoutRef = useRef(null);
+
+    // [PHASE 2] Manual Restore States
+    const [restorePassword, setRestorePassword] = useState('');
+    const [isRestoring, setIsRestoring] = useState(false);
+    const [restoreError, setRestoreError] = useState('');
+    
+    // [NEW] Post-Restore Animation State
+    const [justRestored, setJustRestored] = useState(false);
+
+    // [NEW] Track if user skipped sync (to show manual restore option)
+    const [hasSkippedSync, setHasSkippedSync] = useState(() => localStorage.getItem('skipped_sync') === 'true');
+    const [showPassword, setShowPassword] = useState(false); // [NEW] Password visibility toggle
+    const seenMessages = useRef(new Set()); // [NEW] Global Replay Protection
+    const [typingByRoom, setTypingByRoom] = useState({}); // [NEW] { roomId: [{ userId, name }] }
+    const globalTypingTimeoutsRef = useRef({}); // [NEW] { "roomId:userId": timeoutId }
+
+    const handleManualRestore = async (e) => {
+        if (e) e.preventDefault();
+        setIsRestoring(true);
+        setRestoreError('');
+
+        try {
+            // 1. Fetch encrypted backup from server
+            const res = await fetch(`${import.meta.env.VITE_API_URL}/api/auth/backup`, {
+                headers: { Authorization: `Bearer ${token}` }
+            });
+
+            if (!res.ok) throw new Error('Failed to fetch backup');
+            const data = await res.json();
+            if (!data) throw new Error('No backup found on server');
+
+            // 2. Decrypt bundle using password
+            const bundle = await cryptoManager.decryptBackup(
+                data.encrypted_blob,
+                data.salt,
+                data.iv,
+                restorePassword
+            );
+
+            // 3. Import keys
+            await cryptoManager.importKeysSync(bundle);
+
+            // 4. Notify others to clear popups
+            socket?.emit('sync_finished');
+
+            setSyncState({ active: false, status: 'Success!', showBackupPrompt: false, mode: 'approve' });
+            
+            // [NEW] Clear skipped flag on success
+            localStorage.removeItem('skipped_sync');
+            setHasSkippedSync(false);
+
+            // Trigger animation on next chat open
+            setJustRestored(true); 
+            showNotification('Chat history restored successfully!', 'success');
+            fetchRooms();
+        } catch (err) {
+            console.error('[Restore] Error:', err);
+            setRestoreError(err.name === 'OperationError' ? 'Invalid password. Decryption failed.' : 'Restoration failed. Please try again.');
+        } finally {
+            setIsRestoring(false);
+        }
+    };
+
+    // [NEW] Handle Cancel/Skip Sync
+    const handleSkipSync = () => {
+        // [FIX] Clear timeout to prevent mode switch
+        if (syncTimeoutRef.current) clearTimeout(syncTimeoutRef.current);
+
+        // 1. Notify server to tell other devices to close popups
+        if (syncState.active && socket) {
+            console.log('[Sync] Cancelling sync request...');
+            socket.emit('sync_canceled');
+        }
+
+        // 2. Close local modal
+        setSyncState({ active: false, status: '', showBackupPrompt: false, mode: 'approve' });
+
+        // [NEW] Mark as skipped so we show the "Restore" option in settings
+        localStorage.setItem('skipped_sync', 'true');
+        localStorage.setItem('history_hidden_at', Date.now().toString()); // [NEW] Mark when history was hidden
+        setHasSkippedSync(true);
+        
+        // 3. Ensure we have fallback identity (CryptoManager handles init automatically on load, so we are good)
+        // Just show a small toast for clarity
+        showNotification('History sync skipped. You can always restore later from settings.', 'info');
+    };
+
+    const handleDenySyncRequest = () => {
+        if (!socket || !pendingSyncRequest) return;
+        socket.emit('sync_denied', { targetDeviceId: pendingSyncRequest.targetDeviceId });
+        setPendingSyncRequest(null);
+    };
+
+    const handleApproveSync = async () => {
+        if (!socket || !pendingSyncRequest) return;
+        const { targetDeviceId, senderPublicKey } = pendingSyncRequest;
+        
+        try {
+            // 1. Generate our own ECDH key to respond
+            const myKeyPair = await cryptoManager.generateECDHKeyPair();
+            
+            // 2. Derive Shared Secret
+            const sharedKey = await cryptoManager.deriveSharedSyncKey(myKeyPair.privateKey, senderPublicKey);
+            
+            // 3. Export all keys as JWK
+            const bundle = await cryptoManager.exportAllKeysSync();
+            
+            // 4. Encrypt bundle
+            const encrypted = await cryptoManager.encryptSyncBundle(bundle, sharedKey);
+            
+            // 5. Provide Public Key for their side to derive same secret
+            const myPubBuffer = await window.crypto.subtle.exportKey('spki', myKeyPair.publicKey);
+            const myPubBase64 = cryptoManager.arrayBufferToBase64(myPubBuffer);
+
+            socket.emit('provide_key_sync', {
+                targetDeviceId,
+                encryptedBlob: encrypted,
+                senderPublicKey: myPubBase64
+            });
+            
+            setPendingSyncRequest(null);
+            showNotification('Chat history synced successfully!', 'success');
+        } catch (e) {
+            console.error('[Sync] Failed to provide keys', e);
+            setPendingSyncRequest(null);
+        }
+    };
+
+    const triggerSync = useCallback(async () => {
+        if (!socket) {
+            console.warn('[Sync] Cannot trigger sync: Socket not initialized');
+            return;
+        }
+        
+        console.log(`[Sync] Starting Key Sync Race... DeviceID: ${cryptoManager.deviceId}`);
+        console.log(`[Sync] Starting Key Sync Race... DeviceID: ${cryptoManager.deviceId}`);
+        setSyncState({ active: true, status: 'Contacting other devices...', showBackupPrompt: false, mode: 'approve' });
+
+        // 1. Generate Ephemeral ECDH Keys
+        const keyPair = await cryptoManager.generateECDHKeyPair();
+        ecdhKeysRef.current = keyPair;
+
+        // 2. Export Public Key
+        const pubBuffer = await window.crypto.subtle.exportKey('spki', keyPair.publicKey);
+        const pubBase64 = cryptoManager.arrayBufferToBase64(pubBuffer);
+
+        // 3. Emit Request
+        console.log('[Sync] Emitting request_key_sync...');
+        socket.emit('request_key_sync', pubBase64);
+
+        // 4. Update mode to approve
+        setSyncState(prev => ({ ...prev, active: true, mode: 'approve' }));
+
+        // [MODIFIED] Do not set timeout here. Wait for 'sync:target_count' from server.
+    }, [socket, token, showNotification]);
     const activeRoomRef = useRef(null);
     const canNotifyRef = useRef(canNotify); // Track current notification state for socket handler
 
@@ -170,7 +340,50 @@ export default function Dashboard() {
             if (res.ok) {
                 const data = await res.json();
                 if (Array.isArray(data)) {
-                    setRooms(data);
+                    const enriched = data.map(room => ({
+                        ...room,
+                        official_last_message: {
+                            id: room.last_message_id,
+                            content: room.last_message_content,
+                            type: room.last_message_type,
+                            ciphertext: room.last_message_ciphertext,
+                            iv: room.last_message_iv,
+                            salt: room.last_message_salt,
+                            key_version: room.last_message_key_version,
+                            temp_id: room.last_message_temp_id,
+                            reactions: room.last_message_reactions,
+                            created_at: room.last_message_at,
+                            user_id: room.last_message_sender_id,
+                            sender_name: room.last_message_sender_name,
+                            status: room.last_message_status,
+                            caption: room.last_message_caption,
+                            file_name: room.last_message_file_name,
+                            is_view_once: room.last_message_is_view_once,
+                            viewed_by: room.last_message_viewed_by,
+                            attachments: room.last_message_attachments,
+                            poll_question: room.last_message_poll_question
+                        }
+                    }));
+                    setRooms(prev => {
+                        return enriched.map(newRoom => {
+                            const existing = prev.find(r => String(r.id) === String(newRoom.id));
+                            if (existing) {
+                                // [NEW] Preserve plaintext from UI state if not in server response
+                                const plaintext = newRoom.last_message_plaintext || 
+                                                 (newRoom.last_message_id === existing.last_message_id ? existing.last_message_plaintext : null);
+
+                                if (isStatusWorse(newRoom.last_message_status, existing.last_message_status)) {
+                                    return { 
+                                        ...newRoom, 
+                                        last_message_status: existing.last_message_status,
+                                        last_message_plaintext: plaintext
+                                    };
+                                }
+                                return { ...newRoom, last_message_plaintext: plaintext };
+                            }
+                            return newRoom;
+                        });
+                    });
                 }
             }
         } catch (err) {
@@ -182,16 +395,38 @@ export default function Dashboard() {
 
     // Fetch rooms on mount
     useEffect(() => {
-        fetchRooms(true); // Show loading skeleton on initial load
+        fetchRooms(true); 
     }, [fetchRooms]);
 
+    const syncAttemptedRef = useRef(false);
     useEffect(() => {
+        if (!socket || syncAttemptedRef.current || hasSkippedSync) return;
+        const checkKeys = async () => {
+            const count = await countRoomKeys();
+            if (count === 0) {
+                syncAttemptedRef.current = true;
+                console.log('[Sync] No keys found locally. Delaying sync check (1.5s) to avoid race...');
+                setTimeout(() => {
+                    triggerSync();
+                }, 1500);
+            }
+        };
+        checkKeys();
+    }, [socket, triggerSync]);
+
+    useEffect(() => {
+        console.log(`[Dashboard] Initializing Socket. token=${!!token}, deviceId=${cryptoManager.deviceId}`);
         const newSocket = io(import.meta.env.VITE_API_URL, {
-            auth: { token }
+            auth: { 
+                token,
+                deviceId: cryptoManager.deviceId 
+            },
+            // Force transport to avoid some proxy issues if any
+            transports: ['websocket', 'polling'] 
         });
 
         newSocket.on('connect', () => {
-
+            console.log(`[Dashboard] Socket connected! ID=${newSocket.id}`);
         });
 
         newSocket.on('connect_error', (err) => {
@@ -212,15 +447,48 @@ export default function Dashboard() {
 
         // ... existing listeners ...
 
-        // [NEW] Handle Message Delivered (Updates Sidebar Tick)
-        newSocket.on('message:delivered', ({ messageId, roomId }) => {
-            setRooms(prev => prev.map(r => {
-                if (String(r.id) === String(roomId) && String(r.last_message_id) === String(messageId)) {
-                    return { ...r, last_message_status: 'delivered' };
-                }
-                return r;
-            })); 
-        });
+
+        // [NEW] Serial Queue Processing
+        const processOfflineQueue = async () => {
+             if (!newSocket.connected) return;
+             console.log('[Offline] Processing queue...');
+             const pending = await getPendingMessages();
+             
+             pending.sort((a, b) => {
+                 const tA = parseInt(a.tempId?.split('-')[1] || 0);
+                 const tB = parseInt(b.tempId?.split('-')[1] || 0);
+                 return tA - tB;
+             });
+
+             for (const msg of pending) {
+                 try {
+                     if (!newSocket.connected) break;
+                     await new Promise((resolve, reject) => {
+                         const timeout = setTimeout(() => reject(new Error('ACK Timeout')), 5000);
+                         newSocket.emit('send_message', msg, (response) => {
+                             clearTimeout(timeout);
+                             if (response && response.status === 'ok') resolve(response);
+                             else reject(new Error(response?.error || 'Server Error'));
+                         });
+                     });
+                     await deletePendingMessage(msg.tempId);
+                     console.log(`[Offline] Synced message ${msg.tempId}`);
+                     setRooms(prev => prev.map(r => {
+                         if (r.id === msg.roomId && String(r.last_message_id) === String(msg.tempId)) {
+                             return { ...r, last_message_status: 'sent' };
+                         }
+                         return r;
+                     }));
+                 } catch (err) {
+                     console.warn(`[Offline] Sync failed for ${msg.tempId}:`, err);
+                     break; 
+                 }
+             }
+        };
+
+        newSocket.on('connect', processOfflineQueue);
+        window.addEventListener('online', processOfflineQueue);
+
 
         // [NEW] Force refresh rooms list (fallback for syncing)
         newSocket.on('rooms:refresh', () => {
@@ -232,7 +500,43 @@ export default function Dashboard() {
                     });
                     if (res.ok) {
                         const data = await res.json();
-                        setRooms(data); // API already sorts, but maybe safer to sort client side too? API result is usually trusted.
+                        const enriched = data.map(room => ({
+                            ...room,
+                            official_last_message: {
+                                id: room.last_message_id,
+                                content: room.last_message_content,
+                                type: room.last_message_type,
+                                ciphertext: room.last_message_ciphertext,
+                                iv: room.last_message_iv,
+                                salt: room.last_message_salt,
+                                key_version: room.last_message_key_version,
+                                temp_id: room.last_message_temp_id,
+                                reactions: room.last_message_reactions,
+                                created_at: room.last_message_at,
+                                user_id: room.last_message_sender_id,
+                                sender_name: room.last_message_sender_name,
+                                status: room.last_message_status,
+                                caption: room.last_message_caption,
+                                file_name: room.last_message_file_name,
+                                is_view_once: room.last_message_is_view_once,
+                                viewed_by: room.last_message_viewed_by,
+                                attachments: room.last_message_attachments,
+                                poll_question: room.last_message_poll_question
+                            }
+                        }));
+                        setRooms(prev => {
+                            return enriched.map(newRoom => {
+                                const existing = prev.find(r => String(r.id) === String(newRoom.id));
+                                if (existing && isStatusWorse(newRoom.last_message_status, existing.last_message_status)) {
+                                    return { 
+                                        ...newRoom, 
+                                        last_message_status: existing.last_message_status,
+                                        last_message_plaintext: newRoom.last_message_id === existing.last_message_id ? (newRoom.last_message_plaintext || existing.last_message_plaintext) : newRoom.last_message_plaintext
+                                    };
+                                }
+                                return newRoom;
+                            });
+                        }); 
                     }
                 } catch (err) {
                     console.error(err);
@@ -241,150 +545,141 @@ export default function Dashboard() {
             fetchData();
         });
 
-        newSocket.on('new_message', (msg) => {
+        newSocket.on('message_viewed', async ({ id, room_id, viewed_by }) => {
+            await updateLocalMessage(id, { viewed_by });
+            setRooms(prev => prev.map(r => {
+                if (String(r.id) === String(room_id) && String(r.last_message_id) === String(id)) {
+                    return { ...r, last_message_viewed_by: viewed_by };
+                }
+                return r;
+            }));
+        });
+
+        newSocket.on('new_message', async (msg) => {
             const isSilent = msg.meta?.silent;
 
-            // [NEW] Play notification sound (Only if not silent)
+            // [PHASE 3] Global Replay Protection
+            const gatekeeperId = msg.sender_device_id ? `${msg.sender_device_id}:${msg.temp_id}` : `unsigned:${msg.temp_id || msg.id}`;
+            if (seenMessages.current.has(gatekeeperId)) {
+                return; // Duplicate
+            }
+            seenMessages.current.add(gatekeeperId);
+
+            // [PHASE 3] Global Persistence (Background Processing)
+            const processedMsg = await processIncomingMessage(msg);
+            await saveLocalMessage(processedMsg);
+
+            // Notification / Sound logic
             if (msg.user_id !== user.id && !isSilent) {
                 const audio = new Audio(notificationSound);
                 audio.play().catch(e => console.log("Audio play error:", e));
                 
-                // [NEW] Show desktop notification if tab is hidden or different room
                 const isTabHidden = document.hidden;
                 const isDifferentRoom = activeRoomRef.current?.id !== msg.room_id;
                 
                 if (canNotifyRef.current && (isTabHidden || isDifferentRoom)) {
-                    // Get room info
                     const senderRoom = rooms.find(r => String(r.id) === String(msg.room_id));
+                    if (senderRoom?.is_archived) return;
                     
-                    // Don't show notifications for archived chats
-                    if (senderRoom?.is_archived) {
-                        return;
-                    }
-                    
-                    // Get sender name (keep emojis for display)
                     const senderName = msg.display_name || msg.username || 'Someone';
-                    
-                    let title;
-                    if (senderRoom && senderRoom.type === 'group') {
-                        // For groups: "PersonName @GroupName"
-                        const groupName = senderRoom.name || 'Group';
-                        title = `${senderName} @${groupName}`;
-                    } else {
-                        // For DMs: "@PersonName"
-                        title = `@${senderName}`;
-                    }
+                    const title = (senderRoom && senderRoom.type === 'group') 
+                        ? `${senderName} @${senderRoom.name || 'Group'}`
+                        : `@${senderName}`;
                     
                     showNotification(title, {
-                        body: getMessagePreview(msg),
+                        body: getMessagePreview(processedMsg),
                         icon: msg.avatar_thumb_url || senderRoom?.avatar_thumb_url || '/logo.png',
-                        badge: '/logo.png', // App badge icon (website logo)
-                        tag: `room-${msg.room_id}`, // Group by room
+                        tag: `room-${msg.room_id}`,
                         data: { roomId: msg.room_id },
                         onClick: (data) => {
-                            // Find and select the room
                             const targetRoom = rooms.find(r => String(r.id) === String(data.roomId));
-                            if (targetRoom) {
-                                handleSelectRoom(targetRoom);
-                            }
+                            if (targetRoom) handleSelectRoom(targetRoom);
                         }
                     });
                 }
             } else if (msg.user_id === user.id) {
-                // [NEW] Play sent sound
                 const audio = new Audio(sentSound);
                 audio.play().catch(e => console.log("Audio play error:", e));
             }
 
+            // Update Rooms State (Sidebar)
             setRooms(prev => {
                 let updatedRooms = [...prev];
                 const roomIndex = updatedRooms.findIndex(r => String(r.id) === String(msg.room_id));
                 
-                // [NEW] Emit delivered globally if received (e.g. in sidebar) - SKIP IF SILENT
                 if (String(msg.user_id) !== String(user.id) && !isSilent) {
-                    // console.log('[DEBUG-CLIENT] Emitting global message_delivered for msg:', msg.id);
                     newSocket.emit('message_delivered', { messageId: msg.id, roomId: msg.room_id });
                 }
 
                 if (roomIndex > -1) {
                      const room = { ...updatedRooms[roomIndex] };
-                     // Update unread count if not active - SKIP IF SILENT
-                     if (activeRoomRef.current?.id !== room.id && !isSilent) {
-                         room.unread_count = (room.unread_count || 0) + 1;
-                     } else if (activeRoomRef.current?.id === room.id) {
-                         // [NEW] If active room, mark as read on server immediately so refresh doesn't show unread
+                      const isActiveRoom = activeRoomRef.current && String(activeRoomRef.current.id) === String(room.id);
+                      if (!isActiveRoom && !isSilent) {
+                          room.unread_count = (room.unread_count || 0) + 1;
+                          if (msg.mention_user_ids?.map(Number).includes(Number(user.id))) {
+                              room.mention_count = (room.mention_count || 0) + 1;
+                          }
+                      } else if (isActiveRoom) {
+                         room.unread_count = 0;
+                         room.mention_count = 0;
                          fetch(`${import.meta.env.VITE_API_URL}/api/rooms/${room.id}/read`, {
                              method: 'POST',
                              headers: { Authorization: `Bearer ${token}` }
                          }).catch(console.error);
-                     }
-                     // Update last message preview (Always update text)
-                     room.last_message_content = msg.content;
-                     room.last_message_type = msg.type;
-                     room.last_message_sender_id = msg.user_id;
-                     room.last_message_status = msg.status || 'sent';
-                     room.last_message_id = msg.id;
-                     room.last_message_caption = msg.caption;
-                     room.last_message_is_view_once = msg.is_view_once; // [FIX] Update view once status
-                     room.last_message_viewed_by = msg.viewed_by || []; // [FIX] Reset viewed by
-                     room.last_message_file_name = msg.file_name; // [FIX] Update file name for preview
-                     room.last_message_sender_name = msg.display_name || msg.username; // [NEW] Update sender name for preview logic
-                     room.last_message_is_deleted = msg.is_deleted_for_everyone || false; // [FIX] Reset deleted status for new message
-                     room.last_message_poll_question = msg.poll?.question || null; // [NEW] Update poll question for preview
-                     room.last_message_attachments_count = msg.attachments?.length || 0; // [NEW] Track attachments count for multi-image preview
-                     
-                     // [NEW] Store rich metadata for synthetic message generation (prevent flash)
-                     room.last_message_audio_url = msg.audio_url;
-                     room.last_message_audio_duration_ms = msg.audio_duration_ms;
-                     room.last_message_audio_waveform = msg.audio_waveform;
-                     room.last_message_image_url = msg.image_url;
-                     room.last_message_file_url = msg.file_url;
-                     room.last_message_attachments = msg.attachments; // Store full array for preview
-                     room.last_message_gif_url = msg.gif_url;
-                     room.last_message_preview_url = msg.preview_url;
-                     
-                     // [MODIFIED] Only update timestamp and re-sort if NOT silent
-                     if (!isSilent) {
-                        room.last_message_at = new Date().toISOString(); 
-                     }
+                      }
+                      
+                      const isSameMessage = String(room.last_message_id) === String(msg.id) || String(room.last_message_id) === String(msg.temp_id || msg.tempId);
+                      
+                      let newContent = processedMsg.content || (processedMsg.ciphertext ? '🔒 Encrypted Message' : processedMsg.content);
+                      if (String(msg.user_id) === String(user.id) && isSameMessage && room.last_message_content && room.last_message_content !== '🔒 Encrypted Message') {
+                          newContent = room.last_message_content;
+                      }
+                      
+                      room.last_message_content = newContent;
+                      // [NEW] Cache plaintext for instant sidebar rendering
+                      room.last_message_plaintext = processedMsg.plaintext_content || newContent;
+                      room.last_message_type = msg.type;
+                      
+                      // [NEW] Downgrade protection for last_message_status
+                      const incomingStatus = msg.status || 'sent';
+                      if (!room.last_message_id || String(room.last_message_id) !== String(msg.id) || !isStatusWorse(incomingStatus, room.last_message_status)) {
+                          room.last_message_status = incomingStatus;
+                      }
+                      
+                      room.last_message_id = msg.id;
+                      room.last_message_sender_id = String(msg.user_id);
+                      room.last_message_sender_name = msg.display_name || msg.username || 'Someone';
+                      room.last_message_is_deleted = false;
+                      room.last_message_at = isSilent ? room.last_message_at : new Date().toISOString(); 
+                      
+                      // Handle media specific metadata for sidebar
+                      if (msg.caption !== undefined) room.last_message_caption = msg.caption;
+                      if (msg.file_name !== undefined) room.last_message_file_name = msg.file_name;
+                      if (msg.is_view_once !== undefined) room.last_message_is_view_once = msg.is_view_once;
+                      if (msg.viewed_by !== undefined) room.last_message_viewed_by = msg.viewed_by;
+                      if (msg.attachments_count !== undefined) room.last_message_attachments_count = msg.attachments_count;
+                      else if (msg.attachments) room.last_message_attachments_count = msg.attachments.length;
 
-                     updatedRooms[roomIndex] = room;
-                     
-                     // Re-sort only if we updated timestamp
-                     if (!isSilent) {
-                        return sortRooms(updatedRooms);
-                     }
-                     return updatedRooms;
+                      room.official_last_message = { ...processedMsg, id: processedMsg.id };
+                      updatedRooms[roomIndex] = room;
+                      return isSilent ? updatedRooms : sortRooms(updatedRooms);
                 }
                 return updatedRooms;
             });
         });
 
-        // [NEW] Handle Message Edit (Updates Sidebar & BACKGROUND CACHE)
-        newSocket.on('message_edited', (msg) => {
-            // 1. Update Inactive Room Cache (Prevent Flash of old content)
+        // [NEW] Handle Message Edit (Updates Sidebar & BACKGROUND DEXIE)
+        newSocket.on('message_edited', async (msg) => {
+            // 1. Update Dexie
             try {
-                const cacheKey = `chat_messages_${msg.room_id}`;
-                const cached = localStorage.getItem(cacheKey);
-                if (cached) {
-                    const parsed = JSON.parse(cached);
-                    const updatedCache = parsed.map(m => {
-                        if (String(m.id) === String(msg.id)) {
-                             return {
-                                 ...m,
-                                 content: msg.content,
-                                 caption: msg.caption !== undefined ? msg.caption : m.caption,
-                                 edited_at: msg.edited_at,
-                                 edit_version: msg.edit_version
-                             };
-                        }
-                        return m;
-                    });
-                    localStorage.setItem(cacheKey, JSON.stringify(updatedCache));
-                }
-            } catch (e) {
-                console.error("Failed to patch cache for edit", e);
-            }
+                const processed = await processIncomingMessage(msg);
+                await updateLocalMessage(msg.id, { 
+                    ...processed,
+                    isDecrypted: true,
+                    edited_at: msg.edited_at,
+                    edit_version: msg.edit_version
+                });
+            } catch (e) { console.error("Failed to patch Dexie for edit", e); }
 
             // 2. Update Sidebar State (Existing Logic)
             setRooms(prev => {
@@ -395,7 +690,11 @@ export default function Dashboard() {
                     const room = { ...updatedRooms[roomIndex] };
                     // Only update if the edited message IS the last message
                     if (String(room.last_message_id) === String(msg.id)) {
-                         room.last_message_content = msg.content;
+                         room.last_message_content = msg.content || (msg.ciphertext ? '🔒 Encrypted Message' : msg.content);
+                         // [NEW] Cache plaintext for instant sidebar rendering
+                         room.last_message_plaintext = processed.plaintext_content || room.last_message_content;
+                         room.last_message_sender_id = String(msg.user_id);
+                         room.last_message_sender_name = msg.display_name || msg.username || room.last_message_sender_name;
                          if (msg.caption !== undefined) {
                              room.last_message_caption = msg.caption;
                          }
@@ -407,36 +706,10 @@ export default function Dashboard() {
             });
         });
 
-        // [NEW] Handle message deletion update (Sidebar & BACKGROUND CACHE)
-        newSocket.on('message_deleted', ({ messageId, is_deleted_for_everyone, roomId }) => { // Note: roomId might only come from extended payload, check server
-            
-            // 1. Update Inactive Cache (Best Attempt)
-            // Ideally server sends roomId. If not, we might have to scan all keys or skip?
-            // The logic below assumes we might know the room or we scan. 
-            // WAIT - server/messages.js emits to `room:{roomId}`. Client listener has NO roomId argument usually unless payload has it.
-            // But we are in Dashboard. We don't know which room triggered this unless payload has it.
-            // Let's check server impl. It emits: { messageId, is_deleted_for_everyone: true, content: "" } to room channel.
-            // Socket.IO client doesn't automatically give us the room it came from in the payload unless we put it there.
-            // However, we can scan `rooms` to find which room has this message as last message? No, that's partial.
-            // We can iterate all `chat_messages_*` keys? Expensive.
-            // FIX: I will update server to include `roomId` in delete payload.
-            // Assuming I will do that next, here is the code:
-            if (roomId) {
-                try {
-                     const cacheKey = `chat_messages_${roomId}`;
-                     const cached = localStorage.getItem(cacheKey);
-                     if (cached) {
-                         const parsed = JSON.parse(cached);
-                         const updatedCache = parsed.map(m => {
-                             if (String(m.id) === String(messageId)) {
-                                 return { ...m, is_deleted_for_everyone: true, content: "" };
-                             }
-                             return m;
-                         });
-                         localStorage.setItem(cacheKey, JSON.stringify(updatedCache));
-                     }
-                } catch (e) { console.error(e); }
-            }
+        // [NEW] Handle message deletion update (Sidebar & BACKGROUND DEXIE)
+        newSocket.on('message_deleted', async ({ messageId, is_deleted_for_everyone, roomId }) => {
+            // 1. Update Dexie
+            await updateLocalMessage(messageId, { is_deleted_for_everyone: true, content: "" });
 
             if (!is_deleted_for_everyone) return;
             
@@ -457,16 +730,23 @@ export default function Dashboard() {
         });
 
         // [NEW] Message Viewed (for View Once updates)
-        newSocket.on('message_viewed', ({ id, room_id, userId }) => {
+        newSocket.on('message_viewed', ({ id, room_id, userId, viewed_by }) => {
              setRooms(prev => prev.map(r => {
                  if (String(r.id) === String(room_id) && String(r.last_message_id) === String(id)) {
-                     const currentViewed = r.last_message_viewed_by || [];
-                     if (!currentViewed.includes(userId)) {
-                         return { ...r, last_message_viewed_by: [...currentViewed, userId] };
-                     }
+                     const updatedArray = viewed_by || [...(r.last_message_viewed_by || []), userId];
+                     return { ...r, last_message_viewed_by: updatedArray };
                  }
                  return r;
              }));
+
+             // [NEW] Also update activeRoom for real-time bubble color/status change if it was the last message
+             setActiveRoom(prev => {
+                 if (prev && String(prev.id) === String(room_id) && String(prev.last_message_id) === String(id)) {
+                     const updatedArray = viewed_by || [...(prev.last_message_viewed_by || []), userId];
+                     return { ...prev, last_message_viewed_by: updatedArray };
+                 }
+                 return prev;
+             });
         });
 
         // [NEW] Avatar Updates
@@ -538,11 +818,163 @@ export default function Dashboard() {
             }
         });
 
-        // [NEW] Chat cleared/deleted events
-        newSocket.on('messages_status_update', ({ roomId, messageIds, status }) => {
+        // [NEW] Real-time Sidebar Reaction Updates & Dexie Persistence
+        newSocket.on('message:reaction_update', ({ roomId, messageId, userId, reaction, username, display_name, avatar_thumb_url, ...metadata }) => {
+            const filter = (r) => String(r.userId || r.user_id || '') !== String(userId);
+            const newReactionObj = reaction ? { 
+                userId, 
+                reaction, 
+                username, 
+                display_name, 
+                avatar_thumb_url, 
+                created_at: new Date().toISOString() 
+            } : null;
+
+            // 1. Update Sidebar state (INSTANT / OPTIMISTIC)
+            setRooms(prev => prev.map(r => {
+                if (String(r.id) === String(roomId)) {
+                    const updates = {};
+                    
+                    // Update last_message_reactions if this is the last message
+                    if (String(r.last_message_id) === String(messageId)) {
+                        const current = r.last_message_reactions || [];
+                        updates.last_message_reactions = reaction ? [newReactionObj, ...current.filter(filter)] : current.filter(filter);
+                    }
+                    
+                    // [NEW] Also track latest reaction for any message (for sidebar notification)
+                    if (reaction) {
+                        updates.latest_reaction = {
+                            emoji: reaction,
+                            message_id: messageId,
+                            user_id: userId,
+                            display_name: display_name || username,
+                            timestamp: new Date().toISOString(),
+                            // [NEW] Include message content for sidebar preview
+                            message_content: metadata.message_content,
+                            message_type: metadata.message_type,
+                            message_ciphertext: metadata.message_ciphertext,
+                            message_iv: metadata.message_iv,
+                            message_key_version: metadata.message_key_version,
+                            message_temp_id: metadata.message_temp_id
+                        };
+                    } else {
+                        // [NEW] Clear latest_reaction when reaction is removed
+                        // Only clear if this unreact is for the same message as the current latest_reaction
+                        if (r.latest_reaction && String(r.latest_reaction.message_id) === String(messageId)) {
+                            updates.latest_reaction = null;
+                        }
+                    }
+                    
+                    return { ...r, ...updates };
+                }
+                return r;
+            }));
+
+            // 2. Update Active Room state (INSTANT / OPTIMISTIC)
+            setActiveRoom(prev => {
+                if (!prev || String(prev.id) !== String(roomId)) return prev;
+
+                const updatedRoom = { ...prev };
+                // Update official_last_message reactions if it matches
+                if (updatedRoom.official_last_message && String(updatedRoom.official_last_message.id) === String(messageId)) {
+                    const current = updatedRoom.official_last_message.reactions || [];
+                    updatedRoom.official_last_message.reactions = reaction ? [newReactionObj, ...current.filter(filter)] : current.filter(filter);
+                }
+                
+                // Sync localStorage cache
+                const cacheKey = `chat_messages_${roomId}`;
+                const cached = localStorage.getItem(cacheKey);
+                if (cached) {
+                    try {
+                        const messages = JSON.parse(cached);
+                        const updatedCache = messages.map(m => {
+                            if (String(m.id) === String(messageId)) {
+                                const current = m.reactions || [];
+                                const next = reaction ? [newReactionObj, ...current.filter(filter)] : current.filter(filter);
+                                return { ...m, reactions: next };
+                            }
+                            return m;
+                        });
+                        localStorage.setItem(cacheKey, JSON.stringify(updatedCache));
+                    } catch (e) {
+                         // Silent fail for cache
+                    }
+                }
+
+                return updatedRoom;
+            });
+
+            // 3. Persist to Dexie in BACKGROUND (non-blocking)
+            (async () => {
+                try {
+                    const msg = await db.messages.where('id').equals(String(messageId)).first();
+                    if (msg) {
+                        const current = msg.reactions || [];
+                        const next = reaction ? [newReactionObj, ...current.filter(filter)] : current.filter(filter);
+                        await updateLocalMessage(messageId, { reactions: next });
+                    }
+                } catch (err) {
+                    console.warn('[Dexie] Background reaction update failed:', err);
+                }
+            })();
+        });
+
+        // [NEW] Batch Status Updates (e.g. from server sync)
+        newSocket.on('messages_status_update', async ({ roomId, messageIds, status }) => {
+            // 1. Update Dexie
+            for (const id of messageIds) {
+                await updateLocalMessage(id, { status });
+            }
+
+            // 2. Update Sidebar
             setRooms(prev => prev.map(r => {
                 if (String(r.id) === String(roomId) && r.last_message_id && messageIds.map(String).includes(String(r.last_message_id))) {
+                    // Downgrade protection
+                    if (r.last_message_status === 'seen' && status !== 'seen') return r;
+                    if (r.last_message_status === 'delivered' && status === 'sent') return r;
                     return { ...r, last_message_status: status };
+                }
+                return r;
+            }));
+        });
+
+        // [NEW] Real-time Delivery Receipt
+        newSocket.on('message:delivered', async ({ messageId, roomId }) => {
+            // 1. Update Dexie
+            await updateLocalMessage(messageId, { status: 'delivered' });
+
+            // 2. Update Sidebar
+            setRooms(prev => prev.map(r => {
+                if (String(r.id) === String(roomId) && String(r.last_message_id) === String(messageId)) {
+                    if (r.last_message_status === 'seen') return r;
+                    return { ...r, last_message_status: 'delivered' };
+                }
+                return r;
+            }));
+        });
+
+        // [NEW] Sync read status to room state (fixes stale divider on re-entry)
+        newSocket.on('chat:read-update', ({ chatId, lastReadMessageId }) => {
+            setRooms(prev => prev.map(r => {
+                if (String(r.id) === String(chatId)) {
+                    return { ...r, last_read_message_id: lastReadMessageId };
+                }
+                return r;
+            }));
+        });
+
+        // [NEW] Real-time Read Receipt (Seen)
+        newSocket.on('message:read_receipt', async ({ roomId, messageIds }) => {
+             // 1. Update Dexie
+             const ids = messageIds.map(String);
+             for (const id of ids) {
+                 await updateLocalMessage(id, { status: 'seen' });
+             }
+
+             // 2. Update Sidebar
+             setRooms(prev => prev.map(r => {
+                if (String(r.id) === String(roomId) && r.last_message_id && ids.includes(String(r.last_message_id))) {
+                     return { ...r, last_message_status: 'seen' };
                 }
                 return r;
             }));
@@ -550,10 +982,11 @@ export default function Dashboard() {
 
         newSocket.on('chat:cleared', ({ roomId }) => {
             // Update rooms list
-              setRooms(prev => prev.map(r => 
+            setRooms(prev => prev.map(r => 
                 String(r.id) === String(roomId) ? { 
                     ...r, 
                     unread_count: 0, 
+                    mention_count: 0, // [NEW] Clear mentions
                     initialMessages: [],
                     last_message_content: null,
                     last_message_type: null,
@@ -568,7 +1001,8 @@ export default function Dashboard() {
                     last_message_poll_question: null,
                     last_message_attachments: null,
                     last_message_attachments_count: 0,
-                    last_message_is_deleted: false
+                    last_message_is_deleted: false,
+                    last_message_temp_id: null // [FIX] Clear temp ID
                 } : r
             ));
             
@@ -598,6 +1032,44 @@ export default function Dashboard() {
              // But let's check rooms state first if possible.
              // Actually, simplest is just to refresh.
              fetchRooms();
+        });
+
+        // [NEW] Handle Message Edited (Update Sidebar Preview)
+        newSocket.on('message_edited', (updatedMsg) => {
+             setRooms(prev => prev.map(r => {
+                 if (String(r.id) === String(updatedMsg.room_id) && String(r.last_message_id) === String(updatedMsg.id)) {
+                     return {
+                         ...r,
+                         last_message_content: updatedMsg.ciphertext ? '' : updatedMsg.content,
+                         last_message_caption: updatedMsg.caption,
+                         last_message_ciphertext: updatedMsg.ciphertext,
+                         last_message_iv: updatedMsg.iv,
+                         last_message_key_version: updatedMsg.key_version,
+                         last_message_temp_id: updatedMsg.temp_id
+                     };
+                 }
+                 return r;
+             }));
+             
+             // Also update local cache if exists
+             try {
+                const cacheKey = `chat_messages_${updatedMsg.room_id}`;
+                const cached = localStorage.getItem(cacheKey);
+                if (cached) {
+                    const parsed = JSON.parse(cached);
+                    const newCache = parsed.map(m => String(m.id) === String(updatedMsg.id) ? { 
+                        ...m, 
+                        content: updatedMsg.content,
+                        caption: updatedMsg.caption,
+                        ciphertext: updatedMsg.ciphertext,
+                        iv: updatedMsg.iv,
+                        key_version: updatedMsg.key_version,
+                        edited_at: updatedMsg.edited_at,
+                        edit_version: updatedMsg.edit_version
+                    } : m);
+                    localStorage.setItem(cacheKey, JSON.stringify(newCache));
+                }
+             } catch(e) {}
         });
 
         // [NEW] Force refresh rooms list (fallback for syncing)
@@ -741,18 +1213,161 @@ export default function Dashboard() {
                 return prev;
             });
         });
+        // --- [PHASE 1] KEY SYNC HANDLERS (GLOBAL) ---
+        newSocket.on('request_key_sync', async (payload) => {
+            console.log(`[Sync] Received sync request from ${payload.targetDeviceId}`, payload);
+            setPendingSyncRequest(payload);
+            
+            // Force a browser notification as secondary alert
+            showNotification('New Device Login', {
+                body: `A new device is requesting to sync your chat history. Approve it in the app.`,
+                requireInteraction: true,
+                tag: 'sync-request'
+            });
+        });
+
+        newSocket.on('provide_key_sync', async ({ encryptedBlob, senderPublicKey }) => {
+            console.log('[Sync] Received encrypted key bundle!');
+            if (syncTimeoutRef.current) clearTimeout(syncTimeoutRef.current);
+
+            try {
+                setSyncState(prev => ({ ...prev, status: 'Decrypting history...' }));
+
+                // 1. Derive Shared Secret
+                const sharedKey = await cryptoManager.deriveSharedSyncKey(ecdhKeysRef.current.privateKey, senderPublicKey);
+                
+                // 2. Decrypt bundle
+                const bundle = await cryptoManager.decryptSyncBundle(encryptedBlob, sharedKey);
+                
+                // 3. Import keys
+                await cryptoManager.importKeysSync(bundle);
+                
+                setSyncState({ active: false, status: 'Success!', showBackupPrompt: false, mode: 'approve' });
+                // Trigger animation on next chat open
+                setJustRestored(true);
+                showNotification('Chat history synced successfully!', 'success');
+                
+                // 4. Notify other devices to clear their popups
+                newSocket.emit('sync_finished');
+
+                // Success: Refresh list to ensure we can decrypt sidebar/etc if needed
+                fetchRooms();
+            } catch (e) {
+                console.error('[Sync] Decryption failed', e);
+                setSyncState(prev => ({ ...prev, active: false, status: 'Sync failed.' }));
+            }
+        });
+
+        // [NEW] Handle when requester cancels sync (Provider Side)
+        newSocket.on('sync_canceled', () => {
+             console.log('[Sync] Requester canceled sync. Closing modal.');
+             setPendingSyncRequest(null);
+        });
+
+        newSocket.on('sync_denied', () => {
+            console.log('[Sync] Request denied by other device. Switching to password mode.');
+            setSyncState(prev => ({ ...prev, mode: 'password', status: 'Request denied. Use backup password.' }));
+        });
+
+        // [NEW] Handle online device count from server
+        newSocket.on('sync:target_count', ({ count }) => {
+            console.log(`[Sync] Server found ${count} other online devices.`);
+            if (syncTimeoutRef.current) clearTimeout(syncTimeoutRef.current);
+
+            if (count === 0) {
+                 // No one online? Trigger the 5s fallback to password mode
+                 syncTimeoutRef.current = setTimeout(() => {
+                     setSyncState(prev => {
+                         // ONLY switch if we are still active and in approve mode
+                         if (prev.active && prev.mode === 'approve') {
+                             console.log('[Sync] No devices found after timeout. Switching to password mode.');
+                             return { ...prev, mode: 'password', status: '' };
+                         }
+                         return prev;
+                     });
+                 }, 5000);
+            } else {
+                // Online devices found! DO NOT auto-switch to password.
+                setSyncState(prev => ({ ...prev, status: 'Waiting for approval from your other devices...' }));
+            }
+        });
+
+        newSocket.on('sync_finished', () => {
+            console.log('[Sync] Cleanup: Sync finished on another device.');
+            setPendingSyncRequest(null);
+        });
+
+        // [NEW] Global Typing Indicators
+        newSocket.on('typing:start', ({ room_id, user_id, user_name }) => {
+            const key = `${room_id}:${user_id}`;
+            if (globalTypingTimeoutsRef.current[key]) {
+                clearTimeout(globalTypingTimeoutsRef.current[key]);
+            }
+
+            setTypingByRoom(prev => {
+                const roomTyping = prev[room_id] || [];
+                if (roomTyping.some(u => String(u.userId) === String(user_id))) return prev;
+                return {
+                    ...prev,
+                    [room_id]: [...roomTyping, { userId: user_id, name: user_name }]
+                };
+            });
+
+            globalTypingTimeoutsRef.current[key] = setTimeout(() => {
+                setTypingByRoom(prev => {
+                    const roomTyping = prev[room_id] || [];
+                    const filtered = roomTyping.filter(u => String(u.userId) !== String(user_id));
+                    if (filtered.length === 0) {
+                        const next = { ...prev };
+                        delete next[room_id];
+                        return next;
+                    }
+                    return { ...prev, [room_id]: filtered };
+                });
+                delete globalTypingTimeoutsRef.current[key];
+            }, 4000);
+        });
+
+        newSocket.on('typing:stop', ({ room_id, user_id }) => {
+            const key = `${room_id}:${user_id}`;
+            if (globalTypingTimeoutsRef.current[key]) {
+                clearTimeout(globalTypingTimeoutsRef.current[key]);
+                delete globalTypingTimeoutsRef.current[key];
+            }
+            setTypingByRoom(prev => {
+                const roomTyping = prev[room_id] || [];
+                const filtered = roomTyping.filter(u => String(u.userId) !== String(user_id));
+                if (filtered.length === 0) {
+                    const next = { ...prev };
+                    delete next[room_id];
+                    return next;
+                }
+                return { ...prev, [room_id]: filtered };
+            });
+        });
 
         setSocket(newSocket);
 
-        return () => newSocket.close();
+        return () => {
+            window.removeEventListener('online', processOfflineQueue);
+            newSocket.close();
+        };
     }, [token]);
 
     // Join rooms when they are loaded or socket connects
+    const joinedRoomIds = useRef(new Set());
     useEffect(() => {
         if (socket && rooms.length > 0) {
-            rooms.forEach(room => {
+            const newRooms = rooms.filter(r => !joinedRoomIds.current.has(r.id));
+            if (newRooms.length === 0) return;
+
+            newRooms.forEach(room => {
                 socket.emit('join_room', room.id);
+                joinedRoomIds.current.add(room.id);
             });
+            
+            // [NEW] Pre-fetch keys only for NEW rooms (Background)
+            cryptoManager.prefetchKeys(newRooms);
         }
     }, [socket, rooms]);
 
@@ -813,7 +1428,7 @@ export default function Dashboard() {
             });
             // Update local state
             setRooms(prev => prev.map(r => 
-                r.id === roomId ? { ...r, unread_count: 0 } : r
+                String(r.id) === String(roomId) ? { ...r, unread_count: 0, mention_count: 0 } : r
             ));
         } catch (err) {
             console.error(err);
@@ -826,47 +1441,6 @@ export default function Dashboard() {
         }
     }, [activeRoom]);
 
-    // [NEW] Helper to hydrate messages (resolve replies)
-    const hydrateMessages = (messages) => {
-        const byId = new Map(messages.map(m => [m.id, m]));
-        return messages.map(m => {
-            if (!m.reply_to_message_id) return m;
-
-            const original = byId.get(m.reply_to_message_id);
-            if (!original) return m;
-
-            const raw = original.content || "";
-            const normalized = raw.replace(/\s+/g, " ").trim();
-            const maxLen = 120;
-            const snippet = normalized.length > maxLen
-                ? normalized.slice(0, maxLen) + "…"
-                : normalized;
-
-            return {
-                ...m,
-                replyTo: {
-                    id: original.id,
-                    sender: original.display_name || original.username,
-                    text: snippet,
-                    type: original.type,
-                    is_view_once: original.is_view_once,
-                    // Audio message fields
-                    audio_duration_ms: original.audio_duration_ms,
-                    // File message fields
-                    file_name: original.file_name,
-                    caption: original.caption,
-                    // Image message fields
-                    attachments: original.attachments,
-                    // Location message fields
-                    latitude: original.latitude,
-                    longitude: original.longitude,
-                    address: original.address,
-                    // Poll message fields
-                    poll_question: original.poll?.question
-                },
-            };
-        });
-    };
 
     // [NEW] Handle Room Selection with Pre-fetching & Caching
     const handleSelectRoom = async (room) => {
@@ -889,11 +1463,12 @@ export default function Dashboard() {
                 if (room.last_message_id && !parsedMessages.find(m => String(m.id) === String(room.last_message_id))) {
                     const syntheticMessage = {
                          id: room.last_message_id,
-                         room_id: room.id,
-                         user_id: room.last_message_sender_id,
+                         room_id: String(room.id),
+                         // [FIX] Ensure user_id is populated for alignment
+                         user_id: room.last_message_sender_id, // This is critical for isMe check!
                          content: room.last_message_content,
                          type: room.last_message_type || 'text',
-                         status: room.last_message_status || 'sent',
+                         status: room.last_message_status || 'sent', // Initially take from room
                          created_at: room.last_message_at || new Date().toISOString(),
                          caption: room.last_message_caption,
                          file_name: room.last_message_file_name,
@@ -915,12 +1490,18 @@ export default function Dashboard() {
                          image_url: room.last_message_image_url,
                          file_url: room.last_message_file_url,
                          gif_url: room.last_message_gif_url,
-                         preview_url: room.last_message_preview_url
+                         preview_url: room.last_message_preview_url,
+
+                         // [NEW] E2EE Fields for decryption
+                         ciphertext: room.last_message_ciphertext,
+                         iv: room.last_message_iv,
+                         key_version: room.last_message_key_version,
+                         sender_device_id: room.last_message_sender_device_id
                     };
                     hydrationBase = [...parsedMessages, syntheticMessage];
                 }
 
-                roomWithCache.initialMessages = hydrateMessages(hydrationBase);
+                roomWithCache.initialMessages = normalizeReplies(hydrationBase, []);
             } catch (e) {
                 console.error("Cache parse error", e);
             }
@@ -940,7 +1521,9 @@ export default function Dashboard() {
             
             if (res.ok) {
                 const data = await res.json();
-                const hydrated = hydrateMessages(data);
+                // Ensure room_id is present and String for IndexedDB query alignment
+                const normalizedData = data.map(m => ({ ...m, room_id: String(room.id) }));
+                const hydrated = normalizeReplies(normalizedData, []);
                 
                 // [CRITICAL] Guard against stale API responses during rapid switching
                 if (String(loadingChatId) !== String(activeRoomRef.current?.id)) {
@@ -1024,20 +1607,277 @@ export default function Dashboard() {
         }
     };
 
-    // [NEW] Handle Go To Message
-    const handleGoToMessage = (messageId) => {
+    // [NEW] Handle Go To Message (Global)
+    const handleGoToMessage = async (roomId, messageId) => {
         setShowGroupInfo(false);
+
+        // 1. Switch Room if needed
+        if (activeRoomRef.current?.id !== roomId) {
+            const targetRoom = rooms.find(r => r.id === roomId);
+            if (targetRoom) {
+               await handleSelectRoom(targetRoom);
+               // Small delay to ensure render/message list mount handles the highlight
+               // though React state updates are batched, the new component needs to mount.
+               // handleSelectRoom awaits fetch, so it should be ready-ish.
+            } else {
+                console.warn(`Room ${roomId} not found in sidebar list.`);
+                // Maybe fetch single room? For now assume it's in the list.
+                return;
+            }
+        }
+
+        // 2. Highlight Message
         setHighlightMessageId(messageId);
-        // Reset after a delay so it can be re-triggered if needed, 
-        // essentially handled by the consumer clearing it or just change detection
         setTimeout(() => setHighlightMessageId(null), 2000); 
+    };
+
+    // [NEW] Optimistic Room Update (for Offline/Sending state)
+    const handleMessageSent = (roomId, message) => {
+        setRooms(prev => {
+            const updated = [...prev];
+            const idx = updated.findIndex(r => r.id === roomId);
+            if (idx > -1) {
+                const room = { ...updated[idx] };
+                
+                // Update last message content for sidebar preview
+                room.last_message_content = message.content || (message.type === 'image' ? 'Sent an image' : 'Sent a message');
+                room.last_message_ciphertext = null; 
+                room.last_message_type = message.type;
+                room.last_message_sender_id = user.id;
+                room.last_message_status = 'sending'; 
+                room.last_message_created_at = new Date().toISOString();
+                room.last_message_id = message.tempId || message.id; 
+                
+                updated.splice(idx, 1);
+                updated.unshift(room);
+                return updated;
+            }
+            return prev;
+        });
+    };
+
+    // [NEW] Update Status after ACK (Sending -> Sent)
+    // [NEW] Update Status after ACK (Sending -> Sent)
+    const handleMessageStatusUpdate = (roomId, tempId, newStatus, newId) => {
+         setRooms(prev => {
+             const updated = [...prev];
+             const idx = updated.findIndex(r => r.id === roomId);
+             if (idx > -1) {
+                 const room = { ...updated[idx] };
+                 // Check against both tempId and newId
+                 if (String(room.last_message_id) === String(tempId) || (newId && String(room.last_message_id) === String(newId))) {
+                     // [FIX] Priority Check to prevent downgrade
+                     const priority = { 'sending': 0, 'sent': 1, 'delivered': 2, 'seen': 3 };
+                     const currentP = priority[room.last_message_status] || 0;
+                     const newP = priority[newStatus] || 0;
+                     
+                     if (newP >= currentP) {
+                        room.last_message_status = newStatus;
+                     }
+                     if (newId) room.last_message_id = newId; 
+                 }
+                 updated[idx] = room;
+                 return updated;
+             }
+             return prev;
+         });
+    };
+
+    // [NEW] Optimistic Reaction Update for Sidebar
+    const handleOptimisticReaction = (roomId, message, reaction) => {
+        setRooms(prev => {
+            const idx = prev.findIndex(r => String(r.id) === String(roomId));
+            if (idx === -1) return prev;
+
+            const room = { ...prev[idx] };
+            const isLastMessage = String(room.last_message_id) === String(message.id);
+
+            // Compute new reactions for this message
+            let currentReactions = isLastMessage ? (room.last_message_reactions || []) : (message.reactions || []);
+            if (typeof currentReactions === 'string') {
+                try { currentReactions = JSON.parse(currentReactions); } catch { currentReactions = []; }
+            }
+
+            let nextReactions;
+            const targetUserId = String(user.id);
+            const filterUserId = (r) => {
+                const rId = String(r.userId || r.user_id || r.reactor_id || '');
+                return rId !== targetUserId;
+            };
+
+            if (reaction) {
+                // Add/Update
+                const others = currentReactions.filter(filterUserId);
+                nextReactions = [{
+                    userId: user.id,
+                    reaction,
+                    username: user.username,
+                    display_name: user.display_name,
+                    avatar_thumb_url: user.avatar_thumb_url,
+                    created_at: new Date().toISOString()
+                }, ...others];
+            } else {
+                // Remove
+                nextReactions = currentReactions.filter(filterUserId);
+            }
+
+            // [FIX] Update official_last_message reactions if it matches the current message
+            if (room.official_last_message && String(room.official_last_message.id) === String(message.id)) {
+                let offReactions = room.official_last_message.reactions || [];
+                if (typeof offReactions === 'string') {
+                    try { offReactions = JSON.parse(offReactions); } catch { offReactions = []; }
+                }
+
+                if (reaction) {
+                    const others = offReactions.filter(filterUserId);
+                    room.official_last_message.reactions = [{
+                        userId: user.id,
+                        reaction,
+                        username: user.username,
+                        display_name: user.display_name,
+                        avatar_thumb_url: user.avatar_thumb_url,
+                        created_at: new Date().toISOString()
+                    }, ...others];
+                } else {
+                    room.official_last_message.reactions = offReactions.filter(filterUserId);
+                }
+            }
+
+            // Update room state
+            if (isLastMessage) {
+                if (reaction) {
+                    room.last_message_reactions = nextReactions;
+                    if (room.official_last_message && String(room.official_last_message.id) === String(message.id)) {
+                        room.official_last_message.reactions = nextReactions;
+                    }
+                } else {
+                    // Unreacting from current preview. Revert if promoted.
+                    const officialLatest = room.official_last_message;
+                    if (officialLatest && String(officialLatest.id) !== String(message.id)) {
+                        const off = { ...officialLatest };
+                        
+                        // [SCORCHED EARTH] Ensure our reaction is gone from official before reverting
+                        let offReactions = off.reactions || [];
+                        if (typeof offReactions === 'string') {
+                            try { offReactions = JSON.parse(offReactions); } catch { offReactions = []; }
+                        }
+                        off.reactions = offReactions.filter(filterUserId);
+
+                        room.last_message_id = off.id;
+                        room.last_message_content = off.content;
+                        room.last_message_type = off.type;
+                        room.last_message_ciphertext = off.ciphertext;
+                        room.last_message_iv = off.iv;
+                        room.last_message_salt = off.salt;
+                        room.last_message_key_version = off.key_version;
+                        room.last_message_temp_id = off.temp_id;
+                        room.last_message_reactions = off.reactions;
+                        room.last_message_at = off.created_at;
+                        room.last_message_sender_id = off.user_id;
+                        room.last_message_sender_name = off.sender_name;
+                        room.last_message_status = off.status;
+                        room.last_message_caption = off.caption;
+                        room.last_message_file_name = off.file_name;
+                        room.last_message_is_view_once = off.is_view_once;
+                        room.last_message_viewed_by = off.viewed_by;
+                        room.last_message_attachments_count = Array.isArray(off.attachments) ? off.attachments.length : 0;
+                        room.last_message_poll_question = off.poll_question;
+                        
+                        room.official_last_message = off;
+                    } else {
+                        // Official latest itself, apply filter
+                        room.last_message_reactions = nextReactions;
+                        if (room.official_last_message && String(room.official_last_message.id) === String(message.id)) {
+                            room.official_last_message.reactions = nextReactions;
+                        }
+                    }
+                }
+            } else if (reaction) {
+                // Promote old message
+                room.last_message_id = message.id;
+                room.last_message_content = message.content;
+                room.last_message_type = message.type || 'text';
+                room.last_message_ciphertext = message.ciphertext;
+                room.last_message_iv = message.iv;
+                room.last_message_salt = message.salt;
+                room.last_message_key_version = message.key_version;
+                room.last_message_temp_id = message.temp_id;
+                room.last_message_reactions = nextReactions;
+                room.last_message_at = new Date().toISOString();
+                room.last_message_sender_id = message.user_id;
+                room.last_message_sender_name = message.display_name || message.username;
+            } else {
+                // Unreact on old message that isn't the preview: do nothing to sidebar
+                const updated = [...prev];
+                updated[idx] = room;
+                return updated;
+            }
+
+            // [NEW] Update Active Room state to prevent re-hydration with stale data
+            setActiveRoom(prev => {
+                if (prev && String(prev.id) === String(roomId)) {
+                    const updatedRoom = { ...prev };
+                    
+                    // 1. Update initialMessages to include this reaction
+                    if (updatedRoom.initialMessages) {
+                        updatedRoom.initialMessages = updatedRoom.initialMessages.map(m => {
+                            if (String(m.id) === String(message.id)) {
+                                return { ...m, reactions: nextReactions };
+                            }
+                            return m;
+                        });
+                    }
+
+                    // 2. Update official_last_message if it matches
+                    if (updatedRoom.official_last_message && String(updatedRoom.official_last_message.id) === String(message.id)) {
+                        updatedRoom.official_last_message = {
+                            ...updatedRoom.official_last_message,
+                            reactions: nextReactions
+                        };
+                    }
+
+                    // [NEW] Sync localStorage cache
+                    const cacheKey = `chat_messages_${roomId}`;
+                    const cached = localStorage.getItem(cacheKey);
+                    if (cached) {
+                        try {
+                            const messages = JSON.parse(cached);
+                            const updatedCache = messages.map(m => {
+                                if (String(m.id) === String(message.id)) {
+                                    return { ...m, reactions: nextReactions };
+                                }
+                                return m;
+                            });
+                            localStorage.setItem(cacheKey, JSON.stringify(updatedCache));
+                        } catch (e) {
+                            console.error("Failed to sync localStorage reactions", e);
+                        }
+                    }
+
+                    return updatedRoom;
+                }
+                return prev;
+            });
+
+            const updated = [...prev];
+            updated.splice(idx, 1);
+            
+            // [NEW] Only bump to top if there is a reaction (new activity)
+            if (reaction) {
+                updated.unshift(room);
+            } else {
+                updated.splice(idx, 0, room); // Stay in same position
+            }
+            return updated;
+        });
     };
 
     return (
         <PresenceProvider socket={socket}>
             <AiChatProvider socket={socket}>
+                <CallProvider socket={socket}>
         {/* Notification Permission Banner */}
-        <NotificationPermissionBanner />
+        {!syncState.active && <NotificationPermissionBanner />}
         
         <div className={`fixed inset-0 h-[100dvh] w-full bg-gray-50 dark:bg-slate-950 text-slate-900 dark:text-white overflow-hidden flex ${isResizing ? 'select-none cursor-col-resize' : ''} animate-dashboard-entry transition-colors`}>
             {/* Mobile: Sidebar hidden if activeRoom exists OR pending unlock. Desktop: Always visible */}
@@ -1052,14 +1892,17 @@ export default function Dashboard() {
                 <Sidebar 
                     rooms={rooms} 
                     activeRoom={activeRoom} 
-                    onSelectRoom={handleSelectRoom} // [MODIFIED] Use new handler
-                    loadingRoomId={loadingRoomId}   // [NEW] Pass loading state
-                    isLoading={isLoadingRooms}      // [NEW] Pass initial loading state for skeletons
+                    onSelectRoom={handleSelectRoom} 
+                    loadingRoomId={loadingRoomId}   
+                    isLoading={isLoadingRooms}      
                     onCreateRoom={() => setShowCreateModal(true)}
                     onJoinRoom={() => setShowJoinModal(true)}
                     user={user}
-                    onRefresh={fetchRooms}           // [NEW] Pass refresh handler
+                    onRefresh={fetchRooms}           
+                    hasSkippedSync={hasSkippedSync} // [NEW]
                     onLogout={() => setShowLogoutModal(true)}
+                    onGoToMessage={handleGoToMessage} // [NEW] Pass global handler
+                    typingByRoom={typingByRoom} // [NEW] Pass typing status
                     onRoomLocked={(roomId) => {
                         // Close the chat if the locked room is currently active
                         if (activeRoom && String(activeRoom.id) === String(roomId)) {
@@ -1100,12 +1943,19 @@ export default function Dashboard() {
                             room={activeRoom} // contains initialMessages now
                             user={user} 
                             isLoading={loadingRoomId === activeRoom.id && !activeRoom.initialMessages}
+                            typingByRoom={typingByRoom} // [NEW]
                             onBack={() => setActiveRoom(null)}
                             showGroupInfo={showGroupInfo}
                             setShowGroupInfo={setShowGroupInfo}
                             highlightMessageId={highlightMessageId} // [NEW]
-                            onGoToMessage={handleGoToMessage} // [NEW]
-                            onRefresh={fetchRooms} // [NEW] Allow refreshing room list (e.g. after block)
+                            onGoToMessage={(msgId) => handleGoToMessage(activeRoom.id, msgId)} // [FIXED] Pass correct signature for local room usage
+                            onRefresh={fetchRooms} 
+                            onMessageSent={handleMessageSent} 
+                            onMessageStatusUpdate={handleMessageStatusUpdate}
+                            onOptimisticReaction={handleOptimisticReaction}
+                            justRestored={justRestored} // [NEW]
+                            hasSkippedSync={hasSkippedSync} // [NEW]
+                            onRestoreAnimationComplete={() => setJustRestored(false)} // [NEW]
                         />
                     )
                 ) : (
@@ -1207,7 +2057,8 @@ export default function Dashboard() {
                     room={activeRoom} 
                     socket={socket}
                     onClose={() => setShowGroupInfo(false)}
-                    onGoToMessage={handleGoToMessage} // [NEW]
+                    hasMessages={activeRoom.initialMessages && activeRoom.initialMessages.length > 0}
+                    onGoToMessage={(msgId) => handleGoToMessage(activeRoom.id, msgId)} // [FIXED]
                     onLeave={async () => {
                          try {
                              await fetch(`${import.meta.env.VITE_API_URL}/api/rooms/${activeRoom.id}/leave`, {
@@ -1222,7 +2073,193 @@ export default function Dashboard() {
                     // Kick would be handled within modal or via props if needed, but GroupInfoModal handles it internally mostly or via context
                 />
             )}
+
+            {/* [PHASE 1 & 2] Key Sync & Restore UI (Global) */}
+            {syncState.active && (
+                <div className="fixed inset-0 z-[1000] bg-slate-900/90 backdrop-blur-md flex flex-col items-center justify-center p-4 md:p-8 animate-in fade-in duration-300">
+                    <div className="w-full max-w-md bg-white dark:bg-slate-900 rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-800 overflow-hidden flex flex-col">
+                        
+                        {/* Tabs */}
+                        <div className="flex p-2 bg-slate-100 dark:bg-slate-950/50">
+                            <button 
+                                onClick={() => {
+                                    setSyncState(prev => ({ ...prev, mode: 'approve' }));
+                                    triggerSync();
+                                }}
+                                className={`flex-1 py-3 rounded-2xl text-sm font-bold transition-all ${syncState.mode === 'approve' ? 'bg-white dark:bg-slate-800 text-violet-600 dark:text-violet-400 shadow-sm' : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'}`}
+                            >
+                                <span className="flex items-center justify-center gap-2">
+                                    <span className="material-symbols-outlined text-lg">devices</span>
+                                    Wait for Approval
+                                </span>
+                            </button>
+                            <button 
+                                onClick={() => setSyncState(prev => ({ ...prev, mode: 'password' }))}
+                                className={`flex-1 py-3 rounded-2xl text-sm font-bold transition-all ${syncState.mode === 'password' ? 'bg-white dark:bg-slate-800 text-violet-600 dark:text-violet-400 shadow-sm' : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'}`}
+                            >
+                                <span className="flex items-center justify-center gap-2">
+                                    <span className="material-symbols-outlined text-lg">lock</span>
+                                    Backup Password
+                                </span>
+                            </button>
+                        </div>
+
+                        {/* Content */}
+                        <div className="p-8 text-center min-h-[350px] flex flex-col justify-center">
+                            {syncState.mode === 'approve' ? (
+                                <div className="animate-in fade-in slide-in-from-bottom-4 duration-500">
+                                    <div className="relative mb-6 mx-auto w-24 h-24">
+                                        <div className="absolute inset-0 border-4 border-slate-100 dark:border-slate-800 rounded-full"></div>
+                                        <div className="absolute inset-0 border-t-4 border-violet-500 rounded-full animate-spin"></div>
+                                        <div className="absolute inset-0 flex items-center justify-center">
+                                            <span className="material-symbols-outlined text-violet-500 text-3xl animate-pulse">sync</span>
+                                        </div>
+                                    </div>
+                                    <h3 className="text-2xl font-bold text-slate-900 dark:text-white mb-2">Syncing History</h3>
+                                    <p className="text-slate-500 dark:text-slate-400 text-sm max-w-xs mx-auto mb-8">
+                                        {syncState.status || "Waiting for your other device to approve this login..."}
+                                    </p>
+                                    <div className="space-y-4">
+                                        <div className="p-4 bg-violet-50 dark:bg-violet-900/20 rounded-2xl border border-violet-100 dark:border-violet-900/30">
+                                            <p className="text-xs font-medium text-violet-600 dark:text-violet-400">
+                                                Tip: Check your phone or another computer where you're already logged in.
+                                            </p>
+                                        </div>
+                                        <button 
+                                            onClick={handleSkipSync} // [UPDATED] Use dedicated handler
+                                            className="w-full py-4 rounded-2xl bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 font-bold hover:bg-slate-200 dark:hover:bg-slate-700 transition-all"
+                                        >
+                                            Cancel & No History
+                                        </button>
+                                    </div>
+                                </div>
+                            ) : (
+                                <form onSubmit={handleManualRestore} className="animate-in fade-in slide-in-from-bottom-4 duration-500 flex flex-col items-stretch">
+                                    <div className="w-16 h-16 bg-violet-100 dark:bg-violet-900/30 rounded-2xl flex items-center justify-center mx-auto mb-4">
+                                        <span className="material-symbols-outlined text-violet-600 dark:text-violet-400 text-3xl">key</span>
+                                    </div>
+                                    <h3 className="text-2xl font-bold text-slate-900 dark:text-white mb-2">History Password</h3>
+                                    <p className="text-slate-500 dark:text-slate-400 text-sm mb-8">
+                                        Enter your global backup password to decrypt your history from the cloud.
+                                    </p>
+                                    
+                                    <div className="text-left space-y-4">
+                                    <div className="relative">
+                                        <input 
+                                            type={showPassword ? "text" : "password"}
+                                            value={restorePassword}
+                                            onChange={(e) => setRestorePassword(e.target.value)}
+                                            placeholder="Enter backup password"
+                                            className="w-full px-5 py-4 rounded-2xl bg-slate-100 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-violet-500 transition-all pr-12"
+                                            required
+                                        />
+                                        <button
+                                            type="button"
+                                            onClick={() => setShowPassword(!showPassword)}
+                                            className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 transition-colors"
+                                        >
+                                            <span className="material-symbols-outlined text-xl">
+                                                {showPassword ? 'visibility_off' : 'visibility'}
+                                            </span>
+                                        </button>
+                                    </div>
+                                        
+                                        {restoreError && (
+                                            <div className="p-4 bg-red-50 dark:bg-red-900/20 border border-red-100 dark:border-red-900/30 rounded-2xl flex items-center gap-3 text-red-600 dark:text-red-400 text-sm font-medium">
+                                                <span className="material-symbols-outlined text-lg">error</span>
+                                                {restoreError}
+                                            </div>
+                                        )}
+                                        
+                                        <button 
+                                            type="submit"
+                                            disabled={isRestoring || !restorePassword}
+                                            className="w-full py-4 rounded-2xl bg-violet-600 hover:bg-violet-700 text-white font-bold transition-all shadow-lg shadow-violet-500/20 disabled:opacity-50 flex items-center justify-center gap-3"
+                                        >
+                                            {isRestoring ? (
+                                                <span className="material-symbols-outlined animate-spin">progress_activity</span>
+                                            ) : (
+                                                <>
+                                                    <span className="material-symbols-outlined">cloud_download</span>
+                                                    Decrypt History
+                                                </>
+                                            )}
+                                        </button>
+                                    </div>
+                                </form>
+                            )}
+                        </div>
+                    </div>
+                </div>
+            )}
+
+
+
+            {/* [NEW] Profile Panel */}
+            {showProfile && (
+                <div className="fixed inset-0 z-[70] flex items-stretch justify-end">
+                    <div className="absolute inset-0 bg-black/20 backdrop-blur-sm animate-fade-in" onClick={() => setShowProfile(false)} />
+                    <ProfilePanel 
+                        userId={user.id}
+                        onClose={() => setShowProfile(false)}
+                        onActionSuccess={() => fetchRooms()}
+                        onGoToMessage={(roomId, msgId) => handleGoToMessage(roomId, msgId)}
+                        showRestoreOption={hasSkippedSync} // [NEW] Only show if skipped
+                        onRequestSync={() => {
+                            // [NEW] Manual Sync Trigger
+                            setShowProfile(false); // Close panel
+                            setSyncState({ active: true, status: 'Initializing sync...', showBackupPrompt: false, mode: 'approve' });
+                            triggerSync(); // Restart sync
+                        }}
+                        socket={socket}
+                    />
+                </div>
+            )}
+
+            {/* [NEW] Sync Approval Modal (Global) */}
+            {pendingSyncRequest && (
+                <div className="fixed inset-0 z-[2000] flex items-center justify-center p-4">
+                    <div className="absolute inset-0 bg-slate-950/80 backdrop-blur-sm" onClick={() => setPendingSyncRequest(null)} />
+                    <div className="relative w-full max-w-sm bg-white dark:bg-slate-900 rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-800 overflow-hidden animate-modal-scale">
+                        <div className="p-6 text-center">
+                            <div className="w-16 h-16 bg-violet-100 dark:bg-violet-900/30 rounded-2xl flex items-center justify-center mx-auto mb-4">
+                                <span className="material-symbols-outlined text-violet-600 dark:text-violet-400 text-3xl">
+                                    devices_other
+                                </span>
+                            </div>
+                            <h3 className="text-xl font-bold text-slate-900 dark:text-white mb-2">New Device Detected</h3>
+                            <p className="text-xs font-medium text-violet-600 dark:text-violet-400 mb-2 px-3 py-1 bg-violet-50 dark:bg-violet-900/20 rounded-full inline-block">
+                                {pendingSyncRequest.deviceInfo || 'Unknown Device'}
+                            </p>
+                            <p className="text-sm text-slate-500 dark:text-slate-400 mb-6 leading-relaxed">
+                                A new session is requesting to sync your encrypted chat history. 
+                                <br />
+                                <span className="text-[10px] opacity-70 mt-2 block font-mono">
+                                    Device ID: {pendingSyncRequest.targetDeviceId.slice(0, 8)}...
+                                </span>
+                            </p>
+
+                            <div className="space-y-3">
+                                <button 
+                                    onClick={handleApproveSync}
+                                    className="w-full py-3 rounded-xl bg-violet-600 hover:bg-violet-700 text-white font-bold transition-all shadow-lg shadow-violet-500/20"
+                                >
+                                    Approve and Sync
+                                </button>
+                                <button 
+                                    onClick={handleDenySyncRequest}
+                                    className="w-full py-3 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 font-bold hover:bg-slate-200 dark:hover:bg-slate-700 transition-all font-bold"
+                                >
+                                    Deny Request
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
+        <CallModal />
+        </CallProvider>
         </AiChatProvider>
         </PresenceProvider>
     );

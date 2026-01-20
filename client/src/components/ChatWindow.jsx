@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { useLiveQuery } from 'dexie-react-hooks';
 import { useAuth } from '../context/AuthContext';
 import { usePresence } from '../context/PresenceContext';
+import { useCall } from '../context/CallContext';
 import MessageList from './MessageList';
 import MessageInput from './MessageInput';
 import ProfilePanel from './ProfilePanel';
@@ -13,8 +15,12 @@ import CreatePollModal from './CreatePollModal';
 import PinDurationModal from './PinDurationModal';
 import { linkifyText } from '../utils/linkify';
 import { renderTextWithEmojis } from '../utils/emojiRenderer';
-import { savePendingMessage, getPendingMessages, deletePendingMessage } from '../utils/db';
+import db, { saveLocalMessage, updateLocalMessage, deleteLocalMessage, saveFetchedMessages } from '../utils/db';
 import SelectionBar from './SelectionBar';
+import { cryptoManager } from '../lib/crypto/CryptoManager';
+import { decryptPayload, normalizeReplies } from '../utils/messageHydrator';
+import { useConfirm } from '../context/ConfirmationContext';
+import ChatSkeleton from './ChatSkeleton';
 
 // [NEW] Helper to convert blobs to PNG for Clipboard API compatibility
 const convertToPng = (blob) => {
@@ -120,23 +126,82 @@ const PrivilegedUsersModal = ({ isOpen, onClose, title, roomId, roleFilter, toke
     );
 };
 
-export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, setShowGroupInfo, isLoading, highlightMessageId, onGoToMessage, onRefresh }) {
+export default function ChatWindow({ 
+    socket, 
+    room, 
+    user, 
+    onBack, 
+    showGroupInfo, 
+    setShowGroupInfo, 
+    isLoading, 
+    highlightMessageId, 
+    onGoToMessage, 
+    onRefresh, 
+    onMessageSent, 
+    onMessageStatusUpdate, 
+    onOptimisticReaction, // [NEW]
+    justRestored, // [NEW]
+    hasSkippedSync, // [NEW]
+    onRestoreAnimationComplete, // [NEW]
+    typingByRoom // [NEW]
+}) {
     const { token } = useAuth();
     const { presenceMap, fetchStatuses } = usePresence();
     const { showNotification } = useNotification();
+    const { initiateCall } = useCall();
     const [showProfileCard, setShowProfileCard] = useState(false);
+
+    // [NEW] Capture restore state on mount
+    // We utilize the fact that ChatWindow is remounted on room change (key={room.id} in parent)
+    const [isRestoreAnimation, setIsRestoreAnimation] = useState(justRestored);
+
+    useEffect(() => {
+        if (justRestored && onRestoreAnimationComplete) {
+            // Clear global flag so subsequent room opens don't animate
+            onRestoreAnimationComplete();
+        }
+    }, []);
     
-    const [messages, setMessages] = useState([]);
+    // [DEXIE] messages comes from useLiveQuery
+    // [FIX] Removed '|| []' to distinguish between 'loading' (undefined) and 'empty' ([])
+    const messages = useLiveQuery(
+        () => db.messages.where('room_id').equals(String(room.id)).sortBy('created_at'),
+        [room.id]
+    );
+
+    // [NEW] Cache for Sender Signing Keys (deviceId -> publicKey)
+    const senderDeviceKeys = useRef(new Map());
+    // [NEW] Replay Protection
+    const seenMessages = useRef(new Set());
+    const deviceLastTimestamp = useRef(new Map());
     
     // [NEW] Chat Hydration Control - Prevents flash of old messages
-    const [isChatReady, setIsChatReady] = useState(false);
+    // [FIX] Start as NOT ready to ensure we wait for hydration/Dexie
+    const [isChatReady, setIsChatReady] = useState(false); 
     const activeChatIdRef = useRef(room.id);
-    const hasHydratedRef = useRef(false);
+    const hasHydratedRef = useRef(!!room.initialMessages);
+
+    // [CRITICAL] Hard Reset on Room Change - Prevents flash of old messages
+    useEffect(() => {
+        // Track current room ID for stale response detection
+        activeChatIdRef.current = room.id;
+        
+        // Always reset on room change
+        setIsChatReady(false);
+        
+        if (!room.initialMessages) {
+             hasHydratedRef.current = false;
+             // If we rely on existing Dexie data (no fresh sync), we are effectively "ready" regarding hydration,
+             // but we still wait for useLiveQuery (messages !== undefined) in render.
+             // We'll let the main hydration effect handle the ready flip for consistency.
+             setHasMore(true);
+             setLoadingMore(false);
+        }
+    }, [room.id]); // [FIX] Removed room.initialMessages dependency to prevent resets on prop updates
 
     const [isExpired, setIsExpired] = useState(false);
     const [replyTo, setReplyTo] = useState(null); 
     const [editingMessage, setEditingMessage] = useState(null);
-    const [typingUsers, setTypingUsers] = useState([]);
     const [selectedImages, setSelectedImages] = useState(null);
     const [selectedFiles, setSelectedFiles] = useState(null);
     const [showLocationPicker, setShowLocationPicker] = useState(false);
@@ -153,9 +218,28 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
     const [lastReadMessageId, setLastReadMessageId] = useState(room.last_read_message_id || null);
     const [isAtBottom, setIsAtBottom] = useState(true); // Default to true unless history loaded? Actually safest is false until confirmed
     
+    // [NEW] Frozen Divider - Snapshot logic to keep divider stable until user leaves chat
+    // This captures the lastReadMessageId on mount and doesn't update until room changes
+    const [frozenDividerMessageId, setFrozenDividerMessageId] = useState(room.last_read_message_id || null);
+    
     useEffect(() => {
         setLastReadMessageId(room.last_read_message_id || null);
-    }, [room.last_read_message_id, room.id]);
+        // [NEW] Reset frozen divider on room change (fresh snapshot)
+        setFrozenDividerMessageId(room.last_read_message_id || null);
+    }, [room.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+    // [FIX] Clear frozen divider if all messages have been read (handles stale prop issue)
+    // This runs once when messages load to check if there are actually any unread
+    useEffect(() => {
+        if (!messages || messages.length === 0 || !frozenDividerMessageId) return;
+        
+        const lastMsg = messages[messages.length - 1];
+        // If the frozen divider ID >= last message ID, there are no unread messages
+        // (This happens when user read everything but room.last_read_message_id prop is stale)
+        if (lastMsg && (frozenDividerMessageId >= lastMsg.id || String(frozenDividerMessageId) >= String(lastMsg.id))) {
+            setFrozenDividerMessageId(null); // No divider needed
+        }
+    }, [messages, frozenDividerMessageId]);
 
     useEffect(() => {
         if (!socket) return;
@@ -164,12 +248,28 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
                 setLastReadMessageId(newId);
             }
         };
+        
+        // [NEW] Handle Star/Unstar real-time updates
+        const handleStarUpdate = async ({ messageId, roomId, isStarred }) => {
+            console.log('[DEBUG-CLIENT] handleStarUpdate received:', { messageId, roomId, isStarred, currentRoomId: room.id });
+            if (String(roomId) === String(room.id)) {
+                 await updateLocalMessage(messageId, { is_starred: isStarred });
+            } else {
+                console.log('[DEBUG-CLIENT] Room ID mismatch:', roomId, room.id);
+            }
+        };
+
         socket.on('chat:read-update', handleReadUpdate);
-        return () => socket.off('chat:read-update', handleReadUpdate);
+        socket.on('message_starred', handleStarUpdate);
+        
+        return () => {
+            socket.off('chat:read-update', handleReadUpdate);
+            socket.off('message_starred', handleStarUpdate);
+        };
     }, [socket, room.id]);
 
     const markAsRead = useCallback(() => {
-         if (!messages.length) return;
+         if (!messages || !messages.length) return;
          const lastMsg = messages[messages.length - 1];
          // Only mark if we have a NEWER message than what we last read
          // and the last message is NOT mine (optional, but good for data cleanliness, though WhatsApp marks mine as read too implicitly)
@@ -281,40 +381,12 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
         }
     };
 
-    const hydrateMessages = (newMsgs, existingMsgs = []) => {
-        const all = [...newMsgs, ...existingMsgs];
-        const byId = new Map(all.map(m => [String(m.id), m]));
-        
-        return newMsgs.map(m => {
-             if (!m.reply_to_message_id) return m;
-             const original = byId.get(String(m.reply_to_message_id));
-             if (!original) return m;
 
-             const raw = original.content || "";
-             const normalized = raw.replace(/\s+/g, " ").trim();
-             const maxLen = 120;
-             const snippet = normalized.length > maxLen ? normalized.slice(0, maxLen) + "…" : normalized;
 
-             return {
-                 ...m,
-                 replyTo: {
-                     id: original.id,
-                     sender: original.display_name || original.username,
-                     text: snippet,
-                     type: original.type,
-                     is_view_once: original.is_view_once,
-                     audio_duration_ms: original.audio_duration_ms,
-                     file_name: original.file_name,
-                     caption: original.caption,
-                     poll_question: original.poll?.question,
-                     attachments: original.attachments // [NEW] Pass attachments
-                 }
-             };
-        });
-    };
+    // [DEPRECATED] use normalizeReplies from utils/messageHydrator
 
     const handleLoadOlderMessages = async () => {
-        if (loadingMore || !hasMore || messages.length === 0) return;
+        if (loadingMore || !hasMore || !messages || messages.length === 0) return;
 
         setLoadingMore(true);
         const oldestMsg = messages[0];
@@ -326,17 +398,21 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
             });
 
             if (res.ok) {
-                const newMessages = await res.json();
+                const rawMessages = await res.json();
                 
-                // Hydrate
-                const hydratedMessages = hydrateMessages(newMessages, messages);
+                // 1. Decrypt all
+                const decrypted = await Promise.all(rawMessages.map(m => decryptPayload(m)));
+                
+                // 2. Hydrate replies
+                const hydratedMessages = normalizeReplies(decrypted, messages);
                  
                 if (hydratedMessages.length < 50) {
                     setHasMore(false);
                 }
 
                 if (hydratedMessages.length > 0) {
-                    setMessages(prev => [...hydratedMessages, ...prev]);
+                    // 3. Persist to Dexie
+                    await saveFetchedMessages(hydratedMessages);
                 }
             }
         } catch (err) {
@@ -345,47 +421,6 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
             setLoadingMore(false);
         }
     };
-
-    // [NEW] Persist Cache (Latest 50)
-    useEffect(() => {
-        if (messages.length > 0) {
-            // [FIX] Guard against cache corruption: 
-            // Ensure the messages we are saving actually belong to the current room.
-            // This prevents race conditions where stale state from previous room overwrites new room's cache.
-            const sampleMsg = messages[messages.length - 1]; // Check last message
-            if (sampleMsg && String(sampleMsg.room_id) !== String(room.id)) {
-                console.warn('[Cache Guard] Prevented saving mismatched messages to cache', {
-                    currentRoomId: room.id,
-                    messageRoomId: sampleMsg.room_id
-                });
-                return;
-            }
-
-            const latest50 = messages.slice(-50);
-            localStorage.setItem(`chat_messages_${room.id}`, JSON.stringify(latest50));
-        }
-    }, [messages, room.id]);
-
-    // [CRITICAL] Hard Reset on Room Change - Prevents flash of old messages
-    useEffect(() => {
-        // Track current room ID for stale response detection
-        activeChatIdRef.current = room.id;
-        
-        // Reset hydration flag for new room
-        hasHydratedRef.current = false;
-        
-        // Hard reset state - NEVER show old messages
-        setIsChatReady(false);
-        setMessages([]);
-        setTypingUsers([]);
-        setHasMore(true);
-        setLoadingMore(false);
-        
-        // Do NOT call setIsChatReady(true) here!
-        // It will be called only after messages are actually loaded.
-    }, [room.id]);
-
-    const typingTimeoutsRef = useRef({});
 
     const headerRef = useRef(null);
 
@@ -414,7 +449,13 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
     };
 
     const handleLeave = async () => {
-        if (!confirm('Are you sure you want to leave this group?')) return;
+        const confirmed = await confirm({
+            title: 'Leave Group',
+            message: 'Are you sure you want to leave this group?',
+            type: 'danger',
+            confirmText: 'Leave'
+        });
+        if (!confirmed) return;
         
         try {
             await fetch(`${import.meta.env.VITE_API_URL}/api/rooms/${room.id}/leave`, {
@@ -427,69 +468,74 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
         }
     };
 
-    // [NEW] Scroll to validated message
+    // [NEW] Scroll to validated message with Retries
     useEffect(() => {
         if (highlightMessageId) {
-            // Small timeout to ensure DOM is ready if switching rooms
-            setTimeout(() => {
-                scrollToMatch(highlightMessageId);
-            }, 100);
+            let attempts = 0;
+            const maxAttempts = 15; // Try for ~3 seconds/
+            
+            const tryScroll = () => {
+                const element = document.getElementById(`msg-${highlightMessageId}`);
+                if (element) {
+                    console.log('[Nav] Found target message, scrolling...', highlightMessageId);
+                    scrollToMatch(highlightMessageId);
+                    // Also flash it again just in case
+                    return;
+                }
+                
+                attempts++;
+                if (attempts < maxAttempts) {
+                    console.log(`[Nav] Target ${highlightMessageId} not found, retrying... (${attempts})`);
+                    setTimeout(tryScroll, 200);
+                } else {
+                    console.warn('[Nav] Failed to find target message after retries:', highlightMessageId);
+                }
+            };
+
+            // Start trying immediately (next tick)
+            setTimeout(tryScroll, 100);
         }
     }, [highlightMessageId]);
 
-    // [CRITICAL] Single-Hydration Pattern - Prevents double hydration and scroll jumps
+    // [CRITICAL] Single-Hydration & Update Pattern
     useEffect(() => {
-        // Guard: Only hydrate once per room
-        if (hasHydratedRef.current) return;
-        
-        // Guard: Must have messages (or explicit empty array from fetch)
-        // [FIX] Allow empty array (new rooms) to proceed
-        if (!room.initialMessages) return;
-        
-        // Guard: Must match current room (prevent stale updates)
+        // [FIX] Robust ID comparison
         if (String(activeChatIdRef.current) !== String(room.id)) {
-            console.log('[Guard] Ignored stale initialMessages - room mismatch');
             return;
         }
         
-        // Validate first message belongs to this room
-        const sample = room.initialMessages[0];
-        if (sample && String(sample.room_id) !== String(room.id)) {
-            console.warn('[Guard] Prevented stale initialMessages - message room_id mismatch');
-            return;
+        // [NEW] Stale Guard for async decryption
+        let isStale = false;
+
+        // If we have initial messages, hydrate and save them
+        if (room.initialMessages) {
+            Promise.all(room.initialMessages.map(m => decryptPayload(m))).then(async (decrypted) => {
+                if (isStale) return; 
+
+                const hydrated = normalizeReplies(decrypted, []);
+                const toSave = hydrated.map(m => ({ 
+                    ...m, 
+                    room_id: String(room.id), 
+                    isDecrypted: true 
+                }));
+                
+                await saveFetchedMessages(toSave);
+                
+                // Mark as ready ONLY after hydration is done
+                if (!isStale) setIsChatReady(true);
+            });
+        } else {
+            // No hydration needed, ready immediately (but useLiveQuery may still be loading)
+            setIsChatReady(true);
         }
 
-        // Single hydration - only first valid data wins
-        setMessages(room.initialMessages);
-        hasHydratedRef.current = true;
-        
-        // NOW it's safe to mark as ready (after messages confirmed)
-        requestAnimationFrame(() => {
-            setIsChatReady(true);
-        });
+        return () => {
+             isStale = true;
+        };
     }, [room.initialMessages, room.id]);
 
     // [CRITICAL] Scroll ONLY after chat is ready - prevents scroll jumps
-    const scrolledOnceRef = useRef(false);
-    useEffect(() => {
-        // Reset scroll flag on room change
-        if (!isChatReady) {
-            scrolledOnceRef.current = false;
-            return;
-        }
-        
-        // Only scroll once per room
-        if (scrolledOnceRef.current) return;
-        scrolledOnceRef.current = true;
-        
-        // Use rAF to ensure DOM is painted before scrolling
-        requestAnimationFrame(() => {
-            const messageContainer = document.querySelector('[data-message-list]');
-            if (messageContainer) {
-                messageContainer.scrollTop = messageContainer.scrollHeight;
-            }
-        });
-    }, [isChatReady]);
+
 
     // [NEW] Fetch Chat Preferences & Listen for Updates
     useEffect(() => {
@@ -578,294 +624,133 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
 
         socket.emit('join_room', room.id);
 
-        const handleNewMessage = (msg) => {
-            // [CRITICAL] Use ref for latest room ID to prevent stale closure issues
-            if (String(msg.room_id) !== String(activeChatIdRef.current)) {
-                return; // Ignore messages for wrong room
-            }
+        const handleNewMessage = async (msg) => {
+            // [IGNORE] persistence logic here; Dashboard.jsx handles global saving to Dexie.
+            // This listener now ONLY handles ChatWindow-specific UI side effects.
+
+            if (String(msg.room_id) !== String(room.id)) return;
             
-            // [CRITICAL] Don't add messages before initial hydration is complete
-            if (!hasHydratedRef.current) {
-                return;
-            }
-                
-            // [NEW] Ignore messages from blocked users (use refs for latest value)
-            if (isBlockedByMeRef.current && String(msg.user_id) === String(otherUserIdRef.current)) {
-                console.log('Ignored message from blocked user');
-                return; 
-            }
+            // Replay protection (local check is still good for immediate feedback)
+            const gatekeeperId = msg.sender_device_id ? `${msg.sender_device_id}:${msg.temp_id}` : `unsigned:${msg.temp_id || msg.id}`;
+            if (seenMessages.current.has(gatekeeperId)) return;
+            seenMessages.current.add(gatekeeperId);
 
-                // [NEW] Emit delivered
-                if (msg.user_id !== user.id) {
-                    socket.emit('message_delivered', { messageId: msg.id, roomId: room.id });
-
-                    // [NEW] Instant Read Logic (Prevent Divider Flash)
-                    // If we are looking at the chat (at bottom) and it's active
-                    if (isAtBottomRef.current && document.visibilityState === 'visible') {
-                        socket.emit('chat:mark-read', { chatId: room.id, lastReadMessageId: msg.id });
-                        setLastReadMessageId(msg.id); // Optimistic update immediately
-                    }
-
-                    // [NEW] Show notification if window hidden OR message is for different room (handled by parent typically, but here for active room if hidden)
-                    if (document.visibilityState === 'hidden') {
-                        showNotification(msg.display_name || msg.username || 'New Message', {
-                            body: msg.type === 'text' ? msg.content : `Sent a ${msg.type}`,
-                            tag: `room-${room.id}`,
-                            data: { roomId: room.id }
-                        });
-                    }
+            // Mark as read if window is focused and at bottom
+            if (msg.user_id !== user.id) {
+                if (isAtBottomRef.current && document.visibilityState === 'visible') {
+                    socket.emit('chat:mark-read', { chatId: room.id, lastReadMessageId: msg.id });
+                    setLastReadMessageId(msg.id); 
                 }
-
-                setTypingUsers(prev => prev.filter(u => u.userId !== msg.user_id));
-                if (typingTimeoutsRef.current[msg.user_id]) {
-                    clearTimeout(typingTimeoutsRef.current[msg.user_id]);
-                    delete typingTimeoutsRef.current[msg.user_id];
-                }
-
-                setMessages(prev => {
-                    if (prev.some(m => String(m.id) === String(msg.id))) {
-                        return prev;
-                    }
-
-                    let processedMsg = { ...msg };
-                    if (!processedMsg.replyTo && processedMsg.reply_to_message_id) {
-                        const original = prev.find(m => String(m.id) === String(processedMsg.reply_to_message_id));
-                        if (original) {
-                            const raw = original.content || "";
-                            const normalized = raw.replace(/\s+/g, " ").trim();
-                            const maxLen = 120;
-                            const snippet = normalized.length > maxLen ? normalized.slice(0, maxLen) + "…" : normalized;
-                            processedMsg.replyTo = {
-                                id: original.id,
-                                sender: original.display_name || original.username,
-                                text: snippet,
-                                type: original.type,
-                                audio_duration_ms: original.audio_duration_ms,
-                                is_view_once: original.is_view_once,
-                                file_name: original.file_name,
-                                caption: original.caption,
-                                poll_question: original.poll?.question,
-                                attachments: original.attachments // [NEW] Pass attachments
-                            };
-                        }
-                    }
-
-                    let optimisticIndex = -1;
-
-                    if (processedMsg.tempId) {
-                         optimisticIndex = prev.findIndex(m => m.id === processedMsg.tempId);
-                    } else {
-                        const reversedIndex = [...prev].reverse().findIndex(m => 
-                            m.status === 'sending' && 
-                            m.content === processedMsg.content && 
-                            m.user_id === processedMsg.user_id
-                        );
-                        if (reversedIndex !== -1) {
-                            optimisticIndex = prev.length - 1 - reversedIndex;
-                        }
-                    }
-                    
-                    if (optimisticIndex !== -1) {
-                        const newMsgs = [...prev];
-                        const preservedMsg = { 
-                            ...processedMsg, 
-                            replyTo: processedMsg.replyTo || prev[optimisticIndex].replyTo,
-                            // [FIX] Preserve local image blob to prevent flickering/shrinking
-                            image_url: (prev[optimisticIndex].image_url && prev[optimisticIndex].image_url.startsWith('blob:')) 
-                                ? prev[optimisticIndex].image_url 
-                                : processedMsg.image_url,
-                            localBlob: prev[optimisticIndex].localBlob // Preserve the raw file if needed
-                        };
-                        newMsgs[optimisticIndex] = preservedMsg;
-                        return newMsgs;
-                    }
-                    return [...prev, processedMsg];
-                });
-        };
-
-        const handleStatusUpdate = ({ messageIds, status, roomId }) => {
-            if (String(roomId) === String(room.id)) {
-                setMessages(prev => prev.map(msg => 
-                    messageIds.some(id => String(id) === String(msg.id)) ? { ...msg, status } : msg
-                ));
             }
         };
 
-        const handleMessageDeleted = ({ messageId, is_deleted_for_everyone, content }) => {
-            setMessages(prev => prev.map(msg => 
-                String(msg.id) === String(messageId) ? { ...msg, is_deleted_for_everyone: true, content: "" } : msg
-            ));
-        };
+        const handleStatusUpdate = () => {}; // [DEPRECATED] Dashboard handles this
+        const handleMessageDelivered = () => {}; // [DEPRECATED] Dashboard handles this
+        const handleReadReceipt = () => {}; // [DEPRECATED] Dashboard handles this
+        const handleMessageDeleted = () => {}; // [DEPRECATED] Dashboard handles this
 
-        const handleMessageEdited = (updatedMsg) => {
-             if (String(updatedMsg.room_id) === String(room.id)) {
-                 setMessages(prev => prev.map(msg => {
-                     if (msg.id === updatedMsg.id) {
-                         return { 
-                             ...msg, 
-                             content: updatedMsg.content,
-                             caption: updatedMsg.caption !== undefined ? updatedMsg.caption : msg.caption, // [NEW] Update caption if present
-                             edited_at: updatedMsg.edited_at,
-                             edit_version: updatedMsg.edit_version
-                         };
-                     }
-                     return msg;
-                 }));
-             }
-        };
+        const handleMessageEdited = () => {}; // [DEPRECATED] Dashboard handles this
+        const handleMessageViewed = () => {}; // [DEPRECATED] Dashboard handles this
 
-        const handleMessageViewed = ({ id, userId, viewed_by, room_member_count }) => {
-            console.log("Socket message_viewed received:", id, userId);
-            setMessages(prev => prev.map(msg => {
-                if (String(msg.id) === String(id)) {
-                    const nextViewedBy = viewed_by || [...(msg.viewed_by || []), userId];
-                    return { 
-                        ...msg, 
-                        viewed_by: nextViewedBy,
-                        room_member_count: room_member_count || msg.room_member_count
-                    };
-                }
-                return msg;
-            }));
-        };
+        const handleReactionUpdate = () => {}; // [DEPRECATED] Dashboard handles this
 
-        const handleTypingStart = ({ room_id, user_id, user_name }) => {
-             if (String(room_id) !== String(room.id)) return;
-             
-             // [NEW] Ignore if blocked (use refs for latest value)
-             if (isBlockedByMeRef.current && String(user_id) === String(otherUserIdRef.current)) return;
+        socket.on('message:reaction_update', handleReactionUpdate);
 
-             if (typingTimeoutsRef.current[user_id]) {
-                 clearTimeout(typingTimeoutsRef.current[user_id]);
-             }
 
-             setTypingUsers(prev => {
-                 if (prev.some(u => u.userId === user_id)) return prev;
-                 return [...prev, { userId: user_id, name: user_name }];
-             });
 
-             typingTimeoutsRef.current[user_id] = setTimeout(() => {
-                 setTypingUsers(prev => prev.filter(u => u.userId !== user_id));
-                 delete typingTimeoutsRef.current[user_id];
-             }, 4000);
-        };
-
-        const handleTypingStop = ({ room_id, user_id }) => {
-             if (String(room_id) !== String(room.id)) return;
-             // [NEW] Ignore if blocked (use refs for latest value)
-             if (isBlockedByMeRef.current && String(user_id) === String(otherUserIdRef.current)) return; 
-             
-             if (typingTimeoutsRef.current[user_id]) {
-                 clearTimeout(typingTimeoutsRef.current[user_id]);
-                 delete typingTimeoutsRef.current[user_id];
-             }
-             setTypingUsers(prev => prev.filter(u => u.userId !== user_id));
-        };
-
-        const handleMessageDelivered = ({ messageId, roomId }) => {
-            if (String(roomId) === String(room.id)) {
-                setMessages(prev => prev.map(msg => 
-                    String(msg.id) === String(messageId) ? { ...msg, status: 'delivered' } : msg
-                ));
-            }
-        };
 
         socket.on('new_message', handleNewMessage);
         socket.on('messages_status_update', handleStatusUpdate);
         socket.on('message_deleted', handleMessageDeleted);
         socket.on('message_edited', handleMessageEdited);
         socket.on('message_viewed', handleMessageViewed);
-        socket.on('typing:start', handleTypingStart);
-        socket.on('typing:stop', handleTypingStop);
-        socket.on('message:delivered', handleMessageDelivered);
+
 
         // [NEW] Pin Events
-        socket.on('message_pinned', ({ messageId, roomId, pinnedBy }) => {
+        socket.on('message_pinned', async ({ messageId, roomId, pinnedBy }) => {
              if (String(roomId) === String(room.id)) {
-                 setMessages(prev => prev.map(m => 
-                     m.id === messageId ? { ...m, is_pinned: true, pinned_by: pinnedBy } : m
-                 ));
+                 await updateLocalMessage(messageId, { is_pinned: true, pinned_by: pinnedBy });
              }
         });
 
-        socket.on('message_unpinned', ({ messageId, roomId }) => {
+        socket.on('message_unpinned', async ({ messageId, roomId }) => {
              if (String(roomId) === String(room.id)) {
-                 setMessages(prev => prev.map(m => 
-                     m.id === messageId ? { ...m, is_pinned: false, pinned_by: null } : m
-                 ));
+                 await updateLocalMessage(messageId, { is_pinned: false, pinned_by: null });
              }
         });
 
 
-        socket.on('chat:cleared', ({ roomId }) => {
-            if (String(roomId) === String(room.id)) {
-                setMessages([]); 
-            }
-        });
+
 
         // Poll vote update - use named handler so cleanup doesn't remove Dashboard's listener
-        const handlePollVote = (data) => {
+        const handlePollVote = async (data) => {
             const { pollId, roomId, poll, voterId, voterName, pollQuestion, hasVoted } = data;
             if (String(roomId) === String(room.id)) {
-                setMessages(prev => prev.map(msg => {
-                    if (msg.poll && msg.poll.id === pollId) {
-                        // FIX: The poll object from the server contains user_votes relative to the VOTER.
-                        // If we blindly replace msg.poll with poll, we overwrite our own vote state with the voter's state.
-                        // So, we must only update user_votes if WE are the voter.
-                        // Otherwise, we keep our existing user_votes and only update the counts/options.
-                        
-                        let myUserVotes = msg.poll.user_votes;
-                        if (String(voterId) === String(user.id)) {
-                             // If I voted, the server's poll data has my correct new votes
-                             myUserVotes = poll.user_votes;
-                        } 
-                        // Else: keep my existing votes (myUserVotes remains msg.poll.user_votes)
-
-                        return { 
-                            ...msg, 
-                            poll: {
-                                ...poll,
-                                user_votes: myUserVotes
-                            }
-                        };
-                    }
-                    return msg;
-                }));
+                const msg = await db.messages.where('poll.id').equals(pollId).first();
+                if (msg) {
+                    let myUserVotes = msg.poll.user_votes;
+                    if (String(voterId) === String(user.id)) {
+                         myUserVotes = poll.user_votes;
+                    } 
+                    await updateLocalMessage(msg.id, { 
+                        poll: { ...poll, user_votes: myUserVotes }
+                    });
+                }
             }
         };
         socket.on('poll_vote', handlePollVote);
 
         // Poll closed - use named handler for proper cleanup
-        const handlePollClosed = ({ pollId, roomId, poll }) => {
+        const handlePollClosed = async ({ pollId, roomId, poll }) => {
             if (String(roomId) === String(room.id)) {
-                setMessages(prev => prev.map(msg => {
-                    if (msg.poll && msg.poll.id === pollId) {
-                        return { ...msg, poll };
-                    }
-                    return msg;
-                }));
+                const msg = await db.messages.where('poll.id').equals(pollId).first();
+                if (msg) await updateLocalMessage(msg.id, { poll });
             }
         };
         socket.on('poll_closed', handlePollClosed);
 
         // [NEW] Update messages when a user changes their display name
-        const handleProfileUpdate = ({ userId, display_name }) => {
-            setMessages(prev => prev.map(msg => {
-                if (String(msg.user_id) === String(userId)) {
-                    return { ...msg, display_name };
+        const handleProfileUpdate = async ({ userId, display_name }) => {
+            // Bulk update messages from this user in Dexie
+            await db.messages.where('user_id').equals(String(userId)).modify({ display_name });
+            
+            // Also need to update reactions potentially? 
+            // reactions are an array, Dexie modify is trickier for deep arrays without a full scan
+            // For now, let's focus on message sender name.
+            
+            setMembers(prev => prev.map(m => {
+                if (String(m.id) === String(userId) || String(m.user_id) === String(userId)) {
+                    return { ...m, display_name };
                 }
-                return msg;
+                return m;
             }));
+        };
 
-            setTypingUsers(prev => prev.map(u => {
-                if (String(u.userId) === String(userId)) {
-                    return { ...u, name: display_name };
+        const handleAvatarUpdate = async ({ userId, avatar_url, avatar_thumb_url }) => {
+            await db.messages.where('user_id').equals(String(userId)).modify({ avatar_url, avatar_thumb_url });
+
+            setMembers(prev => prev.map(m => {
+                if (String(m.id) === String(userId) || String(m.user_id) === String(userId)) {
+                    return { ...m, avatar_url, avatar_thumb_url };
                 }
-                return u;
+                return m;
+            }));
+        };
+
+        const handleAvatarDelete = async ({ userId }) => {
+            await db.messages.where('user_id').equals(String(userId)).modify({ avatar_url: null, avatar_thumb_url: null });
+
+            setMembers(prev => prev.map(m => {
+                if (String(m.id) === String(userId) || String(m.user_id) === String(userId)) {
+                    return { ...m, avatar_url: null, avatar_thumb_url: null };
+                }
+                return m;
             }));
         };
 
         socket.on('user:profile:updated', handleProfileUpdate);
+        socket.on('user:avatar:updated', handleAvatarUpdate);
+        socket.on('user:avatar:deleted', handleAvatarDelete);
 
         // [NEW] Handle member added - update members list for mentions
         const handleMemberAdded = async ({ groupId, userId }) => {
@@ -923,32 +808,77 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
             }
         };
 
+        // [NEW] Handle Chat Cleared
+        const handleChatCleared = async ({ roomId }) => {
+            if (String(roomId) === String(room.id)) {
+                console.log('[ChatWindow] Chat cleared, wiping local DB.');
+                await db.messages.where('room_id').equals(String(roomId)).delete();
+                setHasMore(false);
+                localStorage.removeItem(`chat_messages_${room.id}`);
+            }
+        };
+
+        // [NEW] Handle Key Arrival (Auto-decrypt waiting messages)
+        const handleNewKey = async ({ roomId, key, version }) => {
+            if (String(roomId) === String(room.id)) {
+                console.log('[ChatWindow] New key arrived, saving and retrying decryption...');
+                // Save key first
+                if (key && version) {
+                    try {
+                        const importedKey = await cryptoManager.importRoomKey(cryptoManager.base64ToArrayBuffer(key)); // Assume key is exported format? No, usually encrypted.
+                        // Wait, server usually sends encrypted key if it's dist? Or raw if it's my own?
+                        // Actually, 'room:key' event structure depends on server.
+                        // Assuming the event tells us TO FETCH, or sends the key.
+                        
+                        // If it's just a notification "New Key Available", we should fetch.
+                        // If it contains the key, we save.
+                        
+                        // Simplest approach: Just trigger a soft reload of messages which will re-fetch keys if needed.
+                        loadMessages(true); 
+                    } catch (e) {
+                         console.error('Auto-key save failed', e);
+                         loadMessages(true); // Retry anyway
+                    }
+                } else {
+                     loadMessages(true); 
+                }
+            }
+        };
+
         socket.on('you_are_blocked', handleYouAreBlocked);
         socket.on('you_are_unblocked', handleYouAreUnblocked);
+        socket.on('chat:cleared', handleChatCleared);
+        socket.on('room:key', handleNewKey);
+        socket.on('message:delivered', handleMessageDelivered); // [NEW]
+        socket.on('message:read_receipt', handleReadReceipt); // [NEW]
+        socket.on('message_viewed', handleMessageViewed); // [NEW]
 
         return () => {
             socket.off('new_message', handleNewMessage);
             socket.off('messages_status_update', handleStatusUpdate);
             socket.off('message_deleted', handleMessageDeleted);
             socket.off('message_edited', handleMessageEdited);
-            socket.off('typing:start', handleTypingStart);
-            socket.off('typing:stop', handleTypingStop);
             socket.off('message_viewed', handleMessageViewed);
-            socket.off('chat:cleared'); 
+            socket.off('chat:cleared', handleChatCleared); 
+            socket.off('room:key', handleNewKey); // [NEW] 
             socket.off('poll_vote', handlePollVote);
             socket.off('poll_closed', handlePollClosed);
             socket.off('user:profile:updated', handleProfileUpdate);
+            socket.off('user:avatar:updated', handleAvatarUpdate);
+            socket.off('user:avatar:deleted', handleAvatarDelete);
             socket.off('group:member:added', handleMemberAdded);
             socket.off('group:member:removed', handleMemberRemoved);
             socket.off('you_are_blocked', handleYouAreBlocked);
+            socket.off('you_are_blocked', handleYouAreBlocked);
             socket.off('you_are_unblocked', handleYouAreUnblocked);
-            
-            Object.values(typingTimeoutsRef.current).forEach(clearTimeout);
+            socket.off('message:reaction_update', handleReactionUpdate);
+            socket.off('message:read_receipt', handleReadReceipt); // [NEW]
+            socket.off('message_viewed', handleMessageViewed); // [NEW]
         };
     }, [socket, room, token]);
 
-    const handleLocalDelete = (messageId) => {
-        setMessages(prev => prev.filter(m => m.id !== messageId));
+    const handleLocalDelete = async (messageId) => {
+        await deleteLocalMessage(messageId);
     };
 
     // [NEW] Selection Mode Handlers
@@ -1122,7 +1052,9 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
             // If "Everyone", the `message_deleted` event will come and remove them/update content.
             // If "For Me", we need to remove them locally.
             if (!deleteForEveryone) {
-                 setMessages(prev => prev.filter(m => !selectedMessageIds.has(m.id)));
+                 for (const id of idsToCheck) {
+                     await deleteLocalMessage(id);
+                 }
             }
             
             handleCancelSelection();
@@ -1137,75 +1069,217 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
         handleCancelSelection();
     }, [room.id]);
 
-    // [NEW] Sync Offline Messages
-    const syncOfflineMessages = useCallback(async () => {
-        if (!navigator.onLine || !socket || !socket.connected) return;
 
-        try {
-            const pending = await getPendingMessages();
-            const myPending = pending.filter(m => String(m.room_id) === String(room.id) && m.user_id === user.id);
+    const handleReact = async (messageId, reaction) => {
+        const targetMsg = messages.find(m => String(m.id) === String(messageId));
+        if (!targetMsg) return;
 
-            for (const msg of myPending) {
-                console.log('[Offline Sync] Sending pending message:', msg.tempId);
-                socket.emit('send_message', {
-                    roomId: msg.room_id,
-                    content: msg.content,
-                    replyToMessageId: msg.replyTo ? msg.replyTo.id : null,
-                    tempId: msg.tempId
-                });
-                // Remove from DB once emitted (socket will handle the actual arrival/status update)
-                await deletePendingMessage(msg.tempId);
-            }
-        } catch (err) {
-            console.error('[Offline Sync] Failed to sync messages:', err);
+        const newReaction = {
+            userId: user.id,
+            reaction,
+            created_at: new Date().toISOString()
+        };
+
+        const otherReactions = (targetMsg.reactions || []).filter(r => String(r.userId) !== String(user.id) && String(r.user_id) !== String(user.id));
+        const nextReactions = [...otherReactions, newReaction];
+
+        // 1. Persist to DB (Optimistic) - Instantly updates UI via useLiveQuery
+        await updateLocalMessage(messageId, { reactions: nextReactions });
+
+        // 2. Optimistic Sidebar Update
+        if (onOptimisticReaction) {
+            onOptimisticReaction(room.id, targetMsg, reaction);
         }
-    }, [socket, room.id, user.id]);
 
-    useEffect(() => {
-        if (socket) {
-            socket.on('connect', syncOfflineMessages);
-            window.addEventListener('online', syncOfflineMessages);
-            syncOfflineMessages(); // Initial sync
-            return () => {
-                socket.off('connect', syncOfflineMessages);
-                window.removeEventListener('online', syncOfflineMessages);
-            };
+        // 3. Emit Socket Event
+        socket.emit('message:react', {
+            messageId,
+            roomId: room.id,
+            reaction
+        });
+    };
+
+    const handleUnreact = async (messageId) => {
+        const targetMsg = messages.find(m => String(m.id) === String(messageId));
+        if (!targetMsg) return;
+
+        const nextReactions = (targetMsg.reactions || []).filter(r => String(r.userId) !== String(user.id) && String(r.user_id) !== String(user.id));
+
+        // 1. Persist to DB (Optimistic)
+        await updateLocalMessage(messageId, { reactions: nextReactions });
+
+        // 2. Optimistic Sidebar Update
+        if (onOptimisticReaction) {
+            onOptimisticReaction(room.id, targetMsg, null);
         }
-    }, [socket, syncOfflineMessages]);
 
-    const handleSend = async (content, replyToMsg) => {
+        // 3. Emit Socket Event
+        socket.emit('message:unreact', {
+            messageId,
+            roomId: room.id
+        });
+    };
+
+    const handleSend = async (content, mention_user_ids, replyToMsg) => {
         if (!isExpired) {
             // [FIX] Use state replyTo if not passed as arg
             const finalReplyTo = replyToMsg || replyTo;
 
-            const tempId = `temp-${Date.now()}`;
+            // [NEW] Use UUID for Replay Protection
+            const tempId = crypto.randomUUID(); 
             const isOffline = !navigator.onLine;
+            const timestamp = new Date().toISOString();
             
+            // Optimistic UI: Show Plaintext locally!
             const tempMsg = {
-                id: tempId,
+                id: tempId, // Primary key fallback
+                tempId: tempId, // Explicit index for lookups
                 room_id: room.id,
                 user_id: user.id,
                 content,
                 replyTo: finalReplyTo || null,
-                created_at: new Date().toISOString(),
+                created_at: timestamp,
                 username: user.username,
                 display_name: user ? user.display_name : 'Me',
                 status: isOffline ? 'pending' : 'sending',
-                tempId // Explicitly set tempId for IndexedDB key
+                is_encrypted: false, // Local is plaintext
+                isDecrypted: true // Flag for UI to ignore decryption logic
             };
-            setMessages(prev => [...prev, tempMsg]);
+
+            // 1. SAVE TO DEXIE (Trigger Instant Render via useLiveQuery)
+            await saveLocalMessage(tempMsg);
+            
             setReplyTo(null);
             
+            // [NEW] Optimistic Sidebar Update - Immediate (Zero Latency)
+            if (onMessageSent) {
+                onMessageSent(room.id, tempMsg); 
+            }
+            
             if (isOffline) {
-                console.log('[Offline] Saving message to queue:', tempId);
-                await savePendingMessage(tempMsg);
+                console.log('[Offline] Message queued in Dexie:', tempId);
             } else {
-                socket.emit('send_message', { 
-                    roomId: room.id, 
-                    content,
-                    replyToMessageId: finalReplyTo ? finalReplyTo.id : null,
-                    tempId 
-                });
+                try {
+                    // --- E2EE START ---
+                    
+                    // 1. Get or Setup Room Key (Memory > DB > Server > Generate)
+                    let roomKeyData = await cryptoManager.getRoomKey(room.id);
+                    
+                    // Fetch device list for Distribution (needed for Piggybacking)
+                    const devRes = await fetch(`${import.meta.env.VITE_API_URL}/api/rooms/${room.id}/devices`, {
+                        headers: { Authorization: `Bearer ${token}` }
+                    });
+                    if (!devRes.ok) throw new Error('Failed to fetch devices');
+                    const devices = await devRes.json();
+                    
+                    const myDeviceId = await cryptoManager.init().then(i => i?.deviceId || cryptoManager.deviceId);
+
+                    if (!roomKeyData) {
+                        // A. Check Server for existing key for ME
+                        try {
+                            const res = await fetch(`${import.meta.env.VITE_API_URL}/api/rooms/${room.id}/keys/my?deviceId=${myDeviceId}`, {
+                                headers: { Authorization: `Bearer ${token}` }
+                            });
+                            if (res.ok) {
+                                const keyData = await res.json();
+                                if (keyData && keyData.encrypted_key) {
+                                    const decryptedKey = await cryptoManager.decryptRoomKey(keyData.encrypted_key);
+                                    await cryptoManager.saveRoomKey(room.id, decryptedKey, keyData.key_version);
+                                    roomKeyData = { key: decryptedKey, version: keyData.key_version };
+                                    console.log('[E2EE] Retrieved existing key v', keyData.key_version);
+                                }
+                            }
+                        } catch (e) { console.warn('[E2EE] Server key check failed', e); }
+                    }
+
+                    if (!roomKeyData) {
+                        // B. Check if key exists for ANYONE (Prevent split-brain)
+                        let keyExists = false;
+                        let latestVer = 0;
+                        try {
+                            const check = await fetch(`${import.meta.env.VITE_API_URL}/api/rooms/${room.id}/keys/exists`, { headers: { Authorization: `Bearer ${token}` } });
+                            if (check.ok) {
+                                const checkData = await check.json();
+                                if (checkData.exists) {
+                                    keyExists = true; 
+                                    latestVer = checkData.latestVersion;
+                                    console.warn(`[E2EE] Key v${latestVer} exists but I don't have it. Rotating (Self-Healing)...`);
+                                }
+                            }
+                        } catch(e) {}
+
+                        // C. Generate New Key (Rotation)
+                        console.log('[E2EE] Generating New Room Key...');
+                        const setup = await cryptoManager.generateAndEncryptRoomKey(room.id, devices);
+                        roomKeyData = { key: setup.roomKey, version: setup.version };
+                        
+                        // Upload Initial Batch to Server
+                        fetch(`${import.meta.env.VITE_API_URL}/api/rooms/${room.id}/keys`, {
+                             method: 'POST',
+                             headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+                             body: JSON.stringify({ keys: setup.encryptedKeys, keyVersion: setup.version, senderDeviceId: myDeviceId })
+                        }).catch(e => console.error('[E2EE] Background key upload failed', e));
+                    }
+
+                    // 2. Generate Piggyback Headers
+                    const distHeaders = await cryptoManager.getDistributionHeaders(
+                        room.id, 
+                        roomKeyData.key, 
+                        roomKeyData.version, 
+                        devices
+                    );
+                    
+                    // 3. Encrypt Content
+                    const { ciphertext, iv } = await cryptoManager.encryptMessage(content, roomKeyData.key, tempId);
+
+                    // 4. Sign Message
+                    const signature = await cryptoManager.signMessage(ciphertext, iv, tempId, roomKeyData.version);
+
+                    // 5. Send
+                    const payload = { 
+                        roomId: room.id, 
+                        content: '', 
+                        ciphertext,
+                        iv,
+                        keyVersion: roomKeyData.version,
+                        replyToMessageId: finalReplyTo ? finalReplyTo.id : null,
+                        tempId,
+                        signature,
+                        signatureVersion: 1, 
+                        senderDeviceId: myDeviceId,
+                        distribution_headers: distHeaders, 
+                        mention_user_ids,
+                        meta: { type: 'text' }
+                    };
+
+                    // 2. Try to Send with ACK
+                    if (socket.connected) {
+                         socket.emit('send_message', payload, async (response) => {
+                             if (response && response.status === 'ok') {
+                                 // UPDATE SUCCESS IN DEXIE
+                                 await updateLocalMessage(tempId, {
+                                     id: response.messageId || tempId,
+                                     status: 'sent'
+                                 });
+
+                                 // [NEW] Update Sidebar Tick
+                                 if (onMessageStatusUpdate) {
+                                     onMessageStatusUpdate(room.id, tempId, 'sent', response.messageId);
+                                 }
+                             } else {
+                                 // Error: Mark as failed in Dexie
+                                 await updateLocalMessage(tempId, { status: 'failed' });
+                             }
+                         });
+                    } else {
+                        // Mark as pending/offline in Dexie if socket disconnected mid-flight
+                        await updateLocalMessage(tempId, { status: 'pending' });
+                    }
+
+                } catch (e) {
+                    console.error('[E2EE] Encryption failed:', e);
+                    await updateLocalMessage(tempId, { status: 'failed' });
+                }
             }
         }
     };
@@ -1221,9 +1295,7 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
             xhr.upload.onprogress = (event) => {
                 if (event.lengthComputable) {
                     const percent = event.loaded / event.total;
-                    setMessages(prev => prev.map(m => 
-                        m.id === tempId ? { ...m, uploadProgress: percent } : m
-                    ));
+                    updateLocalMessage(tempId, { uploadProgress: percent }).catch(console.error);
                 }
             };
 
@@ -1246,8 +1318,10 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
         const finalReplyTo = replyToMsg || replyTo;
 
         const tempId = `temp-${Date.now()}`;
+        const timestamp = new Date().toISOString();
         const tempMsg = {
             id: tempId,
+            tempId: tempId,
             room_id: room.id,
             user_id: user.id,
             type: 'audio',
@@ -1256,16 +1330,25 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
             audio_duration_ms: durationMs,
             audio_waveform: waveform,
             replyTo: finalReplyTo || null,
-            created_at: new Date().toISOString(),
+            created_at: timestamp,
             username: user.username,
             display_name: user ? user.display_name : 'Me',
             status: 'sending',
             uploadStatus: 'uploading',
             uploadProgress: 0,
-            localBlob: blob 
+            localBlob: blob,
+            isDecrypted: true
         };
-        setMessages(prev => [...prev, tempMsg]);
+
+        // 1. SAVE TO DEXIE
+        await saveLocalMessage(tempMsg);
+        
         setReplyTo(null);
+
+        // [NEW] Optimistic Sidebar Update for Audio
+        if (onMessageSent) {
+            onMessageSent(room.id, tempMsg);
+        }
 
         const formData = new FormData();
         formData.append('audio', blob);
@@ -1276,26 +1359,34 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
         formData.append('tempId', tempId);
 
         try {
-            await uploadAudioWithProgress(formData, tempId);
+            const result = await uploadAudioWithProgress(formData, tempId);
+            // [FIX] Immediately reconcile optimistic message with server response
+            await updateLocalMessage(tempId, {
+                ...result,
+                id: result.id,
+                status: result.status || 'sent',
+                uploadStatus: null, // Clear uploading state
+                audio_url: tempMsg.audio_url?.startsWith('blob:') ? tempMsg.audio_url : result.audio_url
+            });
         } catch (err) {
             console.error(err);
-            setMessages(prev => prev.map(m => 
-                m.id === tempId ? { ...m, uploadStatus: 'failed', status: 'error' } : m
-            ));
+            await updateLocalMessage(tempId, { uploadStatus: 'failed', status: 'error' });
         }
     };
 
     const handleRetry = async (msg) => {
         if (!msg.localBlob) return;
         
-        setMessages(prev => prev.map(m => 
-            m.id === msg.id ? { ...m, uploadStatus: 'uploading', uploadProgress: 0, status: 'sending' } : m
-        ));
+        await updateLocalMessage(msg.tempId || msg.id, { 
+            uploadStatus: 'uploading', 
+            uploadProgress: 0, 
+            status: 'sending' 
+        });
 
         const formData = new FormData();
         formData.append('roomId', room.id);
         if (msg.replyTo) formData.append('replyToMessageId', msg.replyTo.id);
-        formData.append('tempId', msg.id);
+        formData.append('tempId', msg.tempId || msg.id);
 
         if (msg.type === 'audio') {
             formData.append('audio', msg.localBlob);
@@ -1303,66 +1394,90 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
             formData.append('waveform', JSON.stringify(msg.audio_waveform));
             
             try {
-                await uploadAudioWithProgress(formData, msg.id);
+                await uploadAudioWithProgress(formData, msg.tempId || msg.id);
             } catch (err) {
                 console.error(err);
-                setMessages(prev => prev.map(m => 
-                    m.id === msg.id ? { ...m, uploadStatus: 'failed', status: 'error' } : m
-                ));
+                await updateLocalMessage(msg.tempId || msg.id, { 
+                    uploadStatus: 'failed', 
+                    status: 'error' 
+                });
             }
         } else if (msg.type === 'image') {
-            // [FIX] Retry for multiple images? Complicated if single message has multiple.
-            // If message was created successfully but upload failed, we'd need to re-upload.
-            // If backend supports re-uploading to same ID? Or just new message?
-            // Current retry logic creates new upload request for the temp ID.
-            // If attachments, we need to handle that.
-            // For now, let's assume retry just re-sends the blob as a single image (fallback) or we need to store array of blobs.
-            // To simplify, if it's a multi-image message, `localBlob` should be an array or `localBlobs`.
-            
             if (msg.localBlobs && msg.localBlobs.length > 0) {
-                 const formData = new FormData();
                  msg.localBlobs.forEach(b => formData.append('images', b));
-                 // Append metadata if needed
             } else {
                  formData.append('images', msg.localBlob);
             }
             
             formData.append('caption', msg.caption || '');
-            // Retry logic might need more work for multiple images, keeping simple for now.
 
             try {
-                await uploadImageWithProgress(formData, msg.id);
+                await uploadImageWithProgress(formData, msg.tempId || msg.id);
             } catch (err) {
                  console.error(err);
-                 setMessages(prev => prev.map(m =>
-                    m.id === msg.id ? { ...m, status: 'error' } : m
-                ));
+                 await updateLocalMessage(msg.tempId || msg.id, { status: 'error' });
             }
         }
     };
 
-    const handleEditMessage = async (msgId, newContent) => {
-        setMessages(prev => prev.map(m => 
-            m.id === msgId 
-            ? { 
-                ...m, 
-                content: newContent, // Always update content (matches backend)
-                caption: m.type === 'image' ? newContent : m.caption, // [NEW] Update caption if image
-                edited_at: new Date().toISOString(), 
-                edit_version: (m.edit_version || 0) + 1 
-            } 
-            : m
-        ));
+    const handleEditMessage = async (msgId, newContent, mention_user_ids) => {
+        // [FIX] E2EE for Edit
+        // 1. Find message to get tempId for salt derivation (must match decryption logic)
+        const msg = messages.find(m => m.id === msgId);
+        let saltId = msgId;
+        if (msg) {
+             if (msg.tempId) saltId = msg.tempId;
+             else if (msg.temp_id) saltId = msg.temp_id;
+        }
+
+        let encryptedData = {};
+        let keyVersionUsed = null;
+        let signature = null; // [NEW] Signature
+
+        try {
+             // Get Latest Room Key to ensure all members (even new ones) can read it
+             const roomKeyData = await cryptoManager.getRoomKey(String(room.id));
+             if (roomKeyData) {
+                 const { ciphertext, iv } = await cryptoManager.encryptMessage(newContent, roomKeyData.key, saltId);
+                 
+                 // [FIX] Sign the new content
+                 try {
+                    signature = await cryptoManager.signMessage(ciphertext, iv, saltId, roomKeyData.version);
+                 } catch (sigErr) {
+                     console.warn('Signing failed for edit', sigErr);
+                 }
+
+                 encryptedData = { ciphertext, iv };
+                 keyVersionUsed = roomKeyData.version;
+             }
+        } catch (e) {
+             console.error("Encryption failed for edit", e);
+        }
+
+        await updateLocalMessage(msgId, { 
+            content: newContent, 
+            caption: msg?.type === 'image' ? newContent : msg?.caption, 
+            edited_at: new Date().toISOString(), 
+            edit_version: (msg?.edit_version || 0) + 1 
+        });
         setEditingMessage(null);
 
         try {
+            const body = { 
+                new_content: newContent, // Always send plaintext for backward compat / notifications if applicable
+                ...encryptedData,        // ciphertext, iv
+                key_version: keyVersionUsed,
+                signature, // [NEW] Send signature
+                mention_user_ids // [NEW] Track mentions in edits
+            };
+
             const res = await fetch(`${import.meta.env.VITE_API_URL}/api/messages/${msgId}/edit`, {
                 method: 'PUT',
                 headers: { 
                     'Content-Type': 'application/json',
                     Authorization: `Bearer ${token}` 
                 },
-                body: JSON.stringify({ new_content: newContent })
+                body: JSON.stringify(body)
             });
             if (!res.ok) {
                 console.error("Edit failed");
@@ -1372,36 +1487,37 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
         }
     };
 
-    const getTypingText = () => {
-        if (typingUsers.length === 0) return null;
-        if (room.type === 'direct') return "is typing...";
-        
-        if (typingUsers.length === 1) {
-            return (
-                <span className="truncate max-w-[200px] flex items-center gap-1">
-                    <span className="font-semibold truncate">{renderTextWithEmojis(typingUsers[0].name, '1.1em')}</span> 
-                    <span className="shrink-0">is typing...</span>
-                </span>
-            );
+    // [NEW] Star/Unstar Handlers
+    const handleStar = async (messageId) => {
+        // Optimistic Update Persistence (Dexie)
+        await updateLocalMessage(messageId, { is_starred: true });
+
+        // API Call
+        try {
+            await fetch(`${import.meta.env.VITE_API_URL}/api/messages/${messageId}/star`, {
+                method: 'POST',
+                headers: { Authorization: `Bearer ${token}` }
+            });
+        } catch (err) {
+            console.error("Failed to star message", err);
+            // Revert on error? Or just retry silently next time?
+            // For now, let's keep the optimistic state as offline-first approach usually prefers user intent.
         }
-        if (typingUsers.length === 2) {
-            return (
-                <span className="truncate max-w-[300px] flex items-center gap-1">
-                    <span className="font-semibold truncate">{renderTextWithEmojis(typingUsers[0].name, '1.1em')}</span> 
-                    <span className="shrink-0">and</span>
-                    <span className="font-semibold truncate">{renderTextWithEmojis(typingUsers[1].name, '1.1em')}</span> 
-                    <span className="shrink-0">are typing...</span>
-                </span>
-            );
+    };
+
+    const handleUnstar = async (messageId) => {
+        // Optimistic Update Persistence (Dexie)
+        await updateLocalMessage(messageId, { is_starred: false });
+
+        // API Call
+        try {
+            await fetch(`${import.meta.env.VITE_API_URL}/api/messages/${messageId}/star`, {
+                method: 'DELETE',
+                headers: { Authorization: `Bearer ${token}` }
+            });
+        } catch (err) {
+            console.error("Failed to unstar message", err);
         }
-        return (
-            <span className="truncate max-w-[300px] flex items-center gap-1">
-                <span className="font-semibold truncate">{renderTextWithEmojis(typingUsers[0].name, '1.1em')}</span>
-                <span className="shrink-0">,</span>
-                <span className="font-semibold truncate">{renderTextWithEmojis(typingUsers[1].name, '1.1em')}</span>
-                <span className="shrink-0">, and {typingUsers.length - 2} others are typing...</span>
-            </span>
-        );
     };
 
     const extractTextFromHtml = (html) => {
@@ -1459,10 +1575,12 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
     // Helper for Single Image Send (Splitted)
     const sendSingleImage = async (file, caption, width, height, isViewOnce) => {
         const tempId = `temp-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+        const timestamp = new Date().toISOString();
         
         // Optimistic
         const tempMsg = {
             id: tempId,
+            tempId: tempId,
             room_id: room.id,
             user_id: user.id,
             type: 'image',
@@ -1480,7 +1598,7 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
                 type: 'image' 
             }], 
             replyTo: replyTo || null,
-            created_at: new Date().toISOString(),
+            created_at: timestamp,
             username: user.username,
             display_name: user ? user.display_name : 'Me',
             status: 'sending',
@@ -1488,20 +1606,18 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
             uploadProgress: 0,
             localBlobs: [file],
             is_view_once: isViewOnce,
-            viewed_by: []
+            viewed_by: [],
+            isDecrypted: true
         };
         
-        setMessages(prev => [...prev, tempMsg]);
-        // Note: We don't clear replyTo here immediately if we are in a loop? 
-        // Actually, normally reply applies to the "batch". 
-        // If we split, presumably the first one (or all?) get the reply?
-        // Standard behavior: Reply applies to the context. If I send 5 images, do they all reply?
-        // Let's assume yes for now, or just the first.
-        // If I maintain `replyTo` in state, it might persist?
-        // `setReplyTo(null)` is called. If I call it after the first, subsequent won't have it.
-        // Let's clear it ONLY after the loop in `handleSendImages`? 
-        // Refactor: Pass replyTo snapshot to this function.
-        
+        // 1. SAVE TO DEXIE
+        await saveLocalMessage(tempMsg);
+
+        // [NEW] Optimistic Sidebar Update for Single Image
+        if (onMessageSent) {
+            onMessageSent(room.id, tempMsg);
+        }
+
         const formData = new FormData();
         formData.append('roomId', room.id);
         formData.append('caption', caption || '');
@@ -1513,16 +1629,26 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
         formData.append('images', file);
 
         try {
-            await uploadImageWithProgress(formData, tempId);
+            const result = await uploadImageWithProgress(formData, tempId);
+            // [FIX] Immediately reconcile optimistic message with server response
+            await updateLocalMessage(tempId, {
+                ...result,
+                id: result.id,
+                status: result.status || 'sent',
+                image_url: tempMsg.image_url?.startsWith('blob:') ? tempMsg.image_url : result.image_url,
+                // [FIX] Preserve viewed_by if already set
+                viewed_by: result.viewed_by
+            });
         } catch (err) {
             console.error(err);
-            setMessages(prev => prev.map(m => m.id === tempId ? { ...m, status: 'error' } : m));
+            await updateLocalMessage(tempId, { status: 'error' });
         }
     };
 
     // Helper for Group Send
     const sendImageGroup = async (items, groupCaption, isViewOnce) => {
         const tempId = `temp-${Date.now()}`;
+        const timestamp = new Date().toISOString();
         
         const attachments = items.map(item => ({
             url: URL.createObjectURL(item.file),
@@ -1534,6 +1660,7 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
 
         const tempMsg = {
             id: tempId,
+            tempId: tempId,
             room_id: room.id,
             user_id: user.id,
             type: 'image',
@@ -1546,7 +1673,7 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
             image_size: attachments[0].size,
             attachments: attachments, 
             replyTo: replyTo || null,
-            created_at: new Date().toISOString(),
+            created_at: timestamp,
             username: user.username,
             display_name: user ? user.display_name : 'Me',
             status: 'sending',
@@ -1554,11 +1681,18 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
             uploadProgress: 0,
             localBlobs: items.map(i => i.file),
             is_view_once: isViewOnce,
-            viewed_by: []
+            viewed_by: [],
+            isDecrypted: true
         };
         
-        setMessages(prev => [...prev, tempMsg]);
+        // 1. SAVE TO DEXIE
+        await saveLocalMessage(tempMsg);
         
+        // [NEW] Optimistic Sidebar Update for Group Images
+        if (onMessageSent) {
+            onMessageSent(room.id, tempMsg);
+        }
+
         const formData = new FormData();
         formData.append('roomId', room.id);
         formData.append('caption', groupCaption || '');
@@ -1573,10 +1707,18 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
         });
 
         try {
-            await uploadImageWithProgress(formData, tempId);
+            const result = await uploadImageWithProgress(formData, tempId);
+            // [FIX] Immediately reconcile optimistic message with server response
+            await updateLocalMessage(tempId, {
+                ...result,
+                id: result.id,
+                status: result.status || 'sent',
+                // [FIX] Preserve viewed_by if already set
+                viewed_by: result.viewed_by
+            });
         } catch (err) {
             console.error(err);
-            setMessages(prev => prev.map(m => m.id === tempId ? { ...m, status: 'error' } : m));
+            await updateLocalMessage(tempId, { status: 'error' });
         }
     };
 
@@ -1589,9 +1731,7 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
             xhr.upload.onprogress = (event) => {
                 if (event.lengthComputable) {
                     const percent = event.loaded / event.total;
-                    setMessages(prev => prev.map(m => 
-                        m.id === tempId ? { ...m, uploadProgress: percent } : m
-                    ));
+                    updateLocalMessage(tempId, { uploadProgress: percent }).catch(console.error);
                 }
             };
 
@@ -1644,9 +1784,7 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
             xhr.upload.onprogress = (event) => {
                 if (event.lengthComputable) {
                     const percent = event.loaded / event.total;
-                    setMessages(prev => prev.map(m => 
-                        m.id === tempId ? { ...m, uploadProgress: percent } : m
-                    ));
+                    updateLocalMessage(tempId, { uploadProgress: percent }).catch(console.error);
                 }
             };
 
@@ -1667,8 +1805,10 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
     const handleSendFile = async (file, caption) => {
         // [FIX] Use random suffix to prevent ID collision in fast loops
         const tempId = `temp-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+        const timestamp = new Date().toISOString();
         const tempMsg = {
             id: tempId,
+            tempId: tempId,
             room_id: room.id,
             user_id: user.id,
             type: 'file',
@@ -1677,43 +1817,54 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
             file_size: file.size,
             file_type: file.type,
             file_extension: file.name.split('.').pop(),
-            caption: caption || '', // [NEW]
+            caption: caption || '',
             replyTo: replyTo || null,
-            created_at: new Date().toISOString(),
+            created_at: timestamp,
             username: user.username,
             display_name: user ? user.display_name : 'Me',
             status: 'sending',
             uploadStatus: 'uploading',
             uploadProgress: 0,
-            localBlob: file
+            localBlob: file,
+            isDecrypted: true
         };
-        setMessages(prev => [...prev, tempMsg]);
+        
+        // 1. SAVE TO DEXIE
+        await saveLocalMessage(tempMsg);
+        
         setReplyTo(null);
 
         const formData = new FormData();
         formData.append('file', file);
         formData.append('roomId', room.id);
         formData.append('tempId', tempId);
-        formData.append('caption', caption || ''); // [NEW]
+        formData.append('caption', caption || '');
         if (replyTo) formData.append('replyToMessageId', replyTo.id);
 
         try {
-            await uploadFileWithProgress(formData, tempId);
+            const result = await uploadFileWithProgress(formData, tempId);
+            // [FIX] Immediately reconcile optimistic message with server response
+            await updateLocalMessage(tempId, {
+                ...result,
+                id: result.id,
+                status: result.status || 'sent',
+                uploadStatus: null // Clear uploading state
+            });
         } catch (err) {
             console.error(err);
-            setMessages(prev => prev.map(m =>
-                m.id === tempId ? { ...m, status: 'error', uploadStatus: 'failed' } : m
-            ));
+            await updateLocalMessage(tempId, { status: 'error', uploadStatus: 'failed' });
         }
     };
 
-    const handleSendGif = async (gif, caption) => {
+    const handleSendGif = async (gif, caption, mention_user_ids) => {
         const tempId = `temp-${Date.now()}`;
+        const timestamp = new Date().toISOString();
         const finalGifUrl = gif.mp4_url || gif.gif_url;
         const finalPreviewUrl = gif.preview_url || gif.gifpreview;
         
         const tempMsg = {
             id: tempId,
+            tempId: tempId,
             room_id: room.id,
             user_id: user.id,
             type: 'gif',
@@ -1722,17 +1873,19 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
             preview_url: finalPreviewUrl,
             width: gif.width,
             height: gif.height,
-            replyTo: replyTo || null, // Include replyTo context
-            created_at: new Date().toISOString(),
+            replyTo: replyTo || null,
+            created_at: timestamp,
             username: user.username,
             display_name: user ? user.display_name : 'Me',
-            status: 'sending'
+            status: 'sending',
+            isDecrypted: true
         };
-        setMessages(prev => [...prev, tempMsg]);
+
+        // 1. SAVE TO DEXIE
+        await saveLocalMessage(tempMsg);
         
-        // Capture replyTo locally before clearing state
         const replyToId = replyTo ? replyTo.id : null;
-        setReplyTo(null); // Clear reply state
+        setReplyTo(null);
 
         try {
             await fetch(`${import.meta.env.VITE_API_URL}/api/messages`, {
@@ -1749,15 +1902,14 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
                     preview_url: finalPreviewUrl,
                     width: gif.width,
                     height: gif.height,
-                    replyToMessageId: replyToId, // Send to backend
-                    tempId
+                    replyToMessageId: replyToId,
+                    tempId,
+                    mention_user_ids
                 })
             });
         } catch (err) {
             console.error(err);
-            setMessages(prev => prev.map(m => 
-                m.id === tempId ? { ...m, status: 'error' } : m
-            ));
+            await updateLocalMessage(tempId, { status: 'error' });
         }
     };
 
@@ -1835,8 +1987,29 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
         scrollToMatch(searchMatches[newIndex]);
     };
 
+    const handleRetryDecryption = async (msgId) => {
+        await updateLocalMessage(msgId, { isDecryptionRetrying: true });
+
+        try {
+            const msg = messages.find(m => String(m.id) === String(msgId));
+            if (!msg) return;
+
+            const decrypted = await decryptPayload(msg);
+            
+            await updateLocalMessage(msgId, { 
+                ...decrypted, 
+                isDecryptionRetrying: false,
+                isDecrypted: true
+            });
+
+        } catch (e) {
+            console.error("Retry failed", e);
+            await updateLocalMessage(msgId, { isDecryptionRetrying: false });
+        }
+    };
+
     return (
-        <div className="flex flex-col h-[100dvh] bg-gray-50 dark:bg-slate-950 relative overflow-hidden transition-colors chat-container"> {/* Added class for reference */}
+        <div className={`flex flex-col h-[100dvh] bg-gray-50 dark:bg-slate-950 relative overflow-hidden chat-container ${isChatReady ? 'transition-colors' : ''}`}> {/* Added class for reference */}
             {/* ... (Modal and Background remain same, but easier to just wrap MessageList) */}
             <PrivilegedUsersModal 
                 isOpen={showPrivilegedModal} 
@@ -1847,7 +2020,7 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
                 token={token}
             />
             {/* Background Pattern */}
-            <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top_right,_var(--tw-gradient-stops))] from-violet-200/40 via-gray-50 to-gray-50 dark:from-violet-900/20 dark:via-slate-950 dark:to-slate-950 pointer-events-none transition-colors" />
+            <div className={`absolute inset-0 bg-[radial-gradient(ellipse_at_top_right,_var(--tw-gradient-stops))] from-violet-200/40 via-gray-50 to-gray-50 dark:from-violet-900/20 dark:via-slate-950 dark:to-slate-950 pointer-events-none ${isChatReady ? 'transition-colors' : ''}`} />
             
             {/* Doodle Background Pattern */}
             <div 
@@ -1932,6 +2105,24 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
                     </div>
                         
                     <div className="flex items-center gap-1">
+                        {room.type === 'direct' && (
+                            <>
+                                <button 
+                                    onClick={() => initiateCall(room.other_user_id || otherUserId, room.id, 'audio', room.name, room.avatar_url || room.avatar_thumb_url)}
+                                    className="p-2 text-slate-400 hover:text-emerald-500 dark:hover:text-emerald-400 transition-all rounded-full"
+                                    title="Voice Call"
+                                >
+                                    <span className="material-symbols-outlined">call</span>
+                                </button>
+                                <button 
+                                    onClick={() => initiateCall(room.other_user_id || otherUserId, room.id, 'video', room.name, room.avatar_url || room.avatar_thumb_url)}
+                                    className="p-2 text-slate-400 hover:text-emerald-500 dark:hover:text-emerald-400 transition-all rounded-full"
+                                    title="Video Call"
+                                >
+                                    <span className="material-symbols-outlined">videocam</span>
+                                </button>
+                            </>
+                        )}
                         <button 
                             onClick={() => setShowSearch(!showSearch)}
                             className={`p-2 transition-all rounded-full ${showSearch ? 'text-violet-600 dark:text-violet-400' : 'text-slate-400 hover:text-slate-700 dark:hover:text-slate-200'}`}
@@ -2035,25 +2226,20 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
                         setTimeout(() => el.classList.remove('reply-highlight'), 2000);
                     }
                 }}
-                onUnpin={(msgId) => {
-                    setMessages(prev => prev.map(m => 
-                        m.id === msgId ? { ...m, is_pinned: false } : m
-                    ));
+                onUnpin={async (msgId) => {
+                    await updateLocalMessage(msgId, { is_pinned: false });
                 }}
                 socket={socket}
+                decryptMessage={decryptPayload} // [NEW] Pass decryption function
             />
 
-            {/* [CRITICAL] Gate MessageList behind isChatReady to prevent flash */}
-            {(isLoading || !isChatReady) ? (
-                <div className="flex-1 flex flex-col items-center justify-center gap-3 z-10">
-                     <span className="material-symbols-outlined text-4xl animate-spin text-violet-500">progress_activity</span>
-                     <p className="text-slate-500 dark:text-slate-400 font-medium animate-pulse">Loading messages...</p>
-                </div>
+            {/* [CRITICAL] Gate MessageList behind isChatReady AND messages loading state to prevent flash */}
+            {(isLoading || !isChatReady || !messages) ? (
+                <ChatSkeleton />
             ) : (
                 <MessageList 
                     key={room.id} /* Force clean remount on room change */
                     messages={messages} 
-                    setMessages={setMessages} 
                     currentUser={user} 
                     roomId={room.id} 
                     socket={socket} 
@@ -2061,6 +2247,8 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
                     onDelete={handleLocalDelete}
                     onRetry={handleRetry} 
                     onEdit={setEditingMessage}
+                    onReact={handleReact}
+                    onUnreact={handleUnreact}
                     onPin={(msg) => {
                         if (msg.is_pinned) {
                             // Unpin directly
@@ -2069,9 +2257,7 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
                                 { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } }
                             ).then(res => {
                                 if (res.ok) {
-                                    setMessages(prev => prev.map(m => 
-                                        m.id === msg.id ? { ...m, is_pinned: false } : m
-                                    ));
+                                    updateLocalMessage(msg.id, { is_pinned: false }).catch(console.error);
                                 }
                             }).catch(console.error);
                         } else {
@@ -2084,7 +2270,7 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
                     selectedMessageIds={selectedMessageIds}
                     onToggleMessageSelection={toggleMessageSelection}
                     onToggleSelectionMode={() => setIsSelectionMode(!isSelectionMode)}
-                    lastReadMessageId={lastReadMessageId} // [NEW]
+                    lastReadMessageId={frozenDividerMessageId} // [NEW] Use frozen snapshot for stable divider
                     onBottomInView={() => {
                         setIsAtBottom(true);
                         markAsRead();
@@ -2095,6 +2281,11 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
                     loadingMore={loadingMore}
                     isAiChat={room.other_user_id === 'ai-assistant' || room.id === 'ai-chat' || room.type === 'ai'}
                     chatPreferences={chatPreferences} // [NEW]
+                    onStar={handleStar}
+                    onUnstar={handleUnstar}
+                    // [NEW] Animation Prop
+                    isRestoreAnimation={isRestoreAnimation}
+                    hasSkippedSync={hasSkippedSync} // [NEW]
                 />
             )}
 
@@ -2102,10 +2293,14 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
 
             
             {/* Typing Indicator */}
-            {typingUsers.length > 0 && (
+            {typingByRoom[room.id] && typingByRoom[room.id].length > 0 && (
                 <div className="px-4 py-2 text-xs text-slate-500 dark:text-slate-400 font-medium italic animate-pulse flex items-center gap-1 z-10 bg-white/50 dark:bg-slate-900/30 backdrop-blur-sm transition-colors duration-300">
-                    <span className="material-symbols-outlined text-[14px] animate-bounce">more_horiz</span>
-                    {getTypingText()}
+                    {(() => {
+                        const users = typingByRoom[room.id];
+                        if (users.length === 1) return <>{renderTextWithEmojis(users[0].name)} is typing...</>;
+                        if (users.length === 2) return <>{renderTextWithEmojis(users[0].name)} and {renderTextWithEmojis(users[1].name)} are typing...</>;
+                        return <>{users.length} people are typing...</>;
+                    })()}
                 </div>
             )}
 
@@ -2219,8 +2414,10 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
                 onClose={() => setShowLocationPicker(false)}
                 onSend={async (location) => {
                     const tempId = `temp-${Date.now()}`;
+                    const timestamp = new Date().toISOString();
                     const tempMsg = {
                         id: tempId,
+                        tempId: tempId,
                         room_id: room.id,
                         user_id: user.id,
                         type: 'location',
@@ -2228,12 +2425,15 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
                         latitude: location.latitude,
                         longitude: location.longitude,
                         address: location.address,
-                        created_at: new Date().toISOString(),
+                        created_at: timestamp,
                         username: user.username,
                         display_name: user.display_name,
-                        status: 'sending'
+                        status: 'sending',
+                        isDecrypted: true
                     };
-                    setMessages(prev => [...prev, tempMsg]);
+                    
+                    // 1. SAVE TO DEXIE
+                    await saveLocalMessage(tempMsg);
 
                     try {
                         await fetch(`${import.meta.env.VITE_API_URL}/api/messages`, {
@@ -2253,9 +2453,7 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
                         });
                     } catch (err) {
                         console.error('Failed to send location:', err);
-                        setMessages(prev => prev.map(m => 
-                            m.id === tempId ? { ...m, status: 'error' } : m
-                        ));
+                        await updateLocalMessage(tempId, { status: 'error' });
                     }
                 }}
             />
@@ -2291,10 +2489,8 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
                 onClose={() => setPinToConfirm(null)}
                 message={pinToConfirm}
                 onPin={async (msg, durationHours) => {
-                    // Optimistic update - show pinned immediately
-                    setMessages(prev => prev.map(m => 
-                        m.id === msg.id ? { ...m, is_pinned: true, pinned_by: user.id } : m
-                    ));
+                    // Optimistic update - show pinned immediately (Dexie Source of Truth)
+                    await updateLocalMessage(msg.id, { is_pinned: true, pinned_by: user.id });
                     
                     try {
                         const res = await fetch(
@@ -2310,16 +2506,12 @@ export default function ChatWindow({ socket, room, user, onBack, showGroupInfo, 
                         );
                         if (!res.ok) {
                             // Revert on failure
-                            setMessages(prev => prev.map(m => 
-                                m.id === msg.id ? { ...m, is_pinned: false, pinned_by: null } : m
-                            ));
+                            await updateLocalMessage(msg.id, { is_pinned: false, pinned_by: null });
                         }
                     } catch (err) {
                         console.error('Failed to pin:', err);
                         // Revert on error
-                        setMessages(prev => prev.map(m => 
-                            m.id === msg.id ? { ...m, is_pinned: false, pinned_by: null } : m
-                        ));
+                        await updateLocalMessage(msg.id, { is_pinned: false, pinned_by: null });
                     }
                 }}
             />

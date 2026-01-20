@@ -6,6 +6,30 @@ const { Server } = require('socket.io');
 const cors = require('cors');
 const db = require('./db');
 const redisClient = require('./redis');
+const socketMap = require('./utils/socketMap');
+
+function getFriendlyDeviceInfo(ua) {
+    if (!ua) return 'Unknown Device';
+    
+    let browser = 'Unknown Browser';
+    let os = 'Unknown OS';
+
+    // Parse Browser
+    if (ua.includes('Edg/')) browser = 'Edge';
+    else if (ua.includes('Chrome/')) browser = 'Chrome';
+    else if (ua.includes('Firefox/')) browser = 'Firefox';
+    else if (ua.includes('Safari/') && !ua.includes('Chrome/')) browser = 'Safari';
+
+    // Parse OS
+    if (ua.includes('Windows NT 10.0')) os = 'Windows 10/11';
+    else if (ua.includes('Windows NT 6.1')) os = 'Windows 7';
+    else if (ua.includes('Macintosh')) os = 'macOS';
+    else if (ua.includes('iPhone') || ua.includes('iPad')) os = 'iOS';
+    else if (ua.includes('Android')) os = 'Android';
+    else if (ua.includes('Linux')) os = 'Linux';
+
+    return `${browser} on ${os}`;
+}
 
 // Connect Redis
 // Connect Redis
@@ -32,10 +56,10 @@ app.use(cors({
 }));
 app.use(express.json());
 
-app.use((req, res, next) => {
-    console.log(`${req.method} ${req.url}`);
-    next();
-});
+// app.use((req, res, next) => {
+//     console.log(`${req.method} ${req.url}`);
+//     next();
+// });
 
 const authRoutes = require('./auth');
 app.use('/api/auth', authRoutes);
@@ -68,11 +92,11 @@ app.get('/api/users/status', async (req, res) => {
         const ids = req.query.ids ? req.query.ids.split(',').map(id => parseInt(id)).filter(id => !isNaN(id)) : [];
         if (ids.length === 0) return res.json([]);
 
-        console.log(`[DEBUG] Fetching status for users: ${ids.join(',')}`);
+        // console.log(`[DEBUG] Fetching status for users: ${ids.join(',')}`);
 
         // Get Redis status
         const statuses = await redisClient.getOnlineStatus(ids);
-        console.log('[DEBUG] Redis statuses:', JSON.stringify(statuses));
+        // console.log('[DEBUG] Redis statuses:', JSON.stringify(statuses));
         
         // Get DB fallbacks and privacy settings for these users
         const dbRes = await db.query('SELECT id, last_seen, share_presence FROM users WHERE id = ANY($1::int[])', [ids]);
@@ -99,7 +123,7 @@ app.get('/api/users/status', async (req, res) => {
             return finalStatus;
         });
 
-        console.log('[DEBUG] Final status result:', JSON.stringify(result));
+        // console.log('[DEBUG] Final status result:', JSON.stringify(result));
         res.json(result);
     } catch (err) {
         console.error(err);
@@ -178,7 +202,15 @@ app.use((err, req, res, next) => {
     if (res.headersSent) {
         return next(err);
     }
-    res.status(500).json({ error: err.message || 'Internal Server Error' });
+    
+    // Sanitize DB Connection Errors
+    if (err.message.includes('getaddrinfo') || err.code === 'ENOTFOUND' || err.code === 'ECONNREFUSED') {
+        return res.status(503).json({ error: 'Unable to connect to server. Please check your internet connection.' });
+    }
+
+    // Generic fallback for production safety (optional, but requested behavior implies hiding raw errors)
+    // For now we keep msg for other errors unless they are sensitive, but "getaddrinfo" is the main culprit here.
+    res.status(500).json({ error: 'Internal Server Error' });
 });
 
 app.get('/api/health', async (req, res) => {
@@ -197,11 +229,15 @@ app.get('/', (req, res) => {
 });
 
 const jwt = require('jsonwebtoken');
+
 const JWT_SECRET = process.env.JWT_SECRET || 'supersecretkey';
+
+// [NEW] Track pending sync requests: userId -> { requesterDeviceId, senderPublicKey, deviceInfo }
+const pendingSyncs = new Map();
 
 // Socket Auth Middleware
 io.use(async (socket, next) => {
-    console.log(`[DEBUG] Handshake attempt: SocketID=${socket.id}`);
+    // console.log(`[DEBUG] Handshake attempt: SocketID=${socket.id}`);
     const token = socket.handshake.auth.token;
     
     if (!token) {
@@ -227,7 +263,7 @@ io.use(async (socket, next) => {
             return next(new Error('Authentication error - Legacy token'));
         }
 
-        console.log(`[DEBUG] Auth successful for user ${decoded.username} (${decoded.id}). Session=${decoded.sessionId} SocketID=${socket.id}`);
+        // console.log(`[DEBUG] Auth successful for user ${decoded.username} (${decoded.id}). Session=${decoded.sessionId} SocketID=${socket.id}`);
         next();
     } catch (err) {
         console.error(`[DEBUG] Socket connection rejected: Invalid token. SocketID=${socket.id} Error=${err.message}`);
@@ -242,10 +278,127 @@ io.engine.on("connection_error", (err) => {
 app.set('io', io);
 
 io.on('connection', async (socket) => {
-    console.log(`[DEBUG] io.on('connection') triggered for User: ${socket.user.username} (${socket.user.id}) SocketID=${socket.id}`);
+    const clientDeviceId = socket.handshake.query.deviceId || socket.handshake.auth.deviceId;
+    // console.log(`[DEBUG] io.on('connection') triggered for User: ${socket.user.username} (${socket.user.id}) SocketID=${socket.id}, DeviceID=${clientDeviceId}`);
     
     // Join user-specific channel for notifications
     socket.join(`user:${socket.user.id}`);
+
+    // [NEW] Register Device for Key Sync
+    if (clientDeviceId) {
+        socketMap.registerDevice(socket.user.id, clientDeviceId, socket.id);
+        socket.deviceId = clientDeviceId;
+
+        // [NEW] Check for PENDING sync requests targeted at this user
+        const uId = String(socket.user.id);
+        const pending = pendingSyncs.get(uId);
+
+        if (pending && pending.requesterDeviceId !== clientDeviceId) {
+            console.log(`[Sync] Found pending sync request for User ${uId}. Emitting to new connection in 500ms...`);
+            // [NEW] Delay to ensure client-side listeners are ready
+            setTimeout(() => {
+                socket.emit('request_key_sync', {
+                    targetDeviceId: pending.requesterDeviceId,
+                    senderPublicKey: pending.senderPublicKey,
+                    deviceInfo: pending.deviceInfo
+                });
+            }, 500);
+        }
+    } else {
+        console.warn(`[Sync] DeviceID missing in handshake for User ${socket.user.id}`);
+    }
+
+    // --- [PHASE 1] KEY SYNC LOGIC (Registered early to avoid async race) ---
+    socket.on('request_key_sync', (senderPublicKey) => {
+        const userId = socket.user.id;
+        const deviceId = socket.deviceId;
+        
+        if (!deviceId) return;
+
+        console.log(`[Sync] User ${userId} Device ${deviceId} requesting keys...`);
+
+        // Find other devices of the same user
+        const uId = String(userId);
+        const otherDevices = socketMap.getOtherDevices(uId, deviceId);
+        
+        // [NEW] Store the pending request for any future connections (refresh handling)
+        const deviceInfo = getFriendlyDeviceInfo(socket.request.headers['user-agent']);
+        
+        console.log(`[Sync] Storing pending sync for User ${uId}`);
+        pendingSyncs.set(uId, {
+            requesterDeviceId: deviceId,
+            senderPublicKey,
+            deviceInfo
+        });
+
+        if (otherDevices.length > 0) {
+            console.log(`[Sync] Found ${otherDevices.length} other online devices for user ${uId}:`, otherDevices.map(d => d.deviceId));
+            otherDevices.forEach(device => {
+                console.log(`[Sync] Forwarding request to Device ${device.deviceId}`);
+                io.to(device.socketId).emit('request_key_sync', {
+                    targetDeviceId: deviceId,
+                    senderPublicKey,
+                    deviceInfo
+                });
+            });
+        } else {
+            console.log(`[Sync] No other devices CURRENTLY online for user ${uId}. Request stored for potential future connections.`);
+        }
+
+        // [NEW] Notify requester of how many devices are actually online to approve
+        socket.emit('sync:target_count', { count: otherDevices.length });
+    });
+
+    socket.on('provide_key_sync', ({ targetDeviceId, encryptedBlob, senderPublicKey }) => {
+        const userId = socket.user.id;
+        const targetSocketId = socketMap.getSocketId(userId, targetDeviceId);
+
+        if (!targetSocketId) {
+            console.warn(`[Sync] Target device ${targetDeviceId} went offline while preparing sync.`);
+            return;
+        }
+
+        console.log(`[Sync] Forwarding key bundle from ${socket.deviceId} to ${targetDeviceId}`);
+        
+        io.to(targetSocketId).emit('provide_key_sync', {
+            encryptedBlob,
+            senderPublicKey 
+        });
+    });
+
+    socket.on('sync_canceled', () => {
+        const userId = socket.user.id;
+        const uId = String(userId);  // [FIX] Normalize to string
+        const deviceId = socket.deviceId;
+        console.log(`[Sync] Request canceled by requester ${deviceId}. Clearing pending state.`);
+        
+        // [NEW] Clear pending state
+        if (pendingSyncs.has(uId) && pendingSyncs.get(uId).requesterDeviceId === deviceId) {
+            pendingSyncs.delete(uId);
+        }
+
+        socket.broadcast.to(`user:${userId}`).emit('sync_canceled', { targetDeviceId: deviceId });
+    });
+
+    socket.on('sync_denied', ({ targetDeviceId }) => {
+        const userId = socket.user.id;
+        const targetSocketId = socketMap.getSocketId(userId, targetDeviceId);
+        if (targetSocketId) {
+            console.log(`[Sync] Forwarding denial to ${targetDeviceId}`);
+            io.to(targetSocketId).emit('sync_denied');
+        }
+    });
+
+    socket.on('sync_finished', () => {
+        console.log(`[Sync] Sync finished successfully. Clearing pending state.`);
+        const userId = socket.user.id;
+        const uId = String(userId);  // [FIX] Normalize to string
+        
+        // [NEW] Clear pending state
+        pendingSyncs.delete(uId);
+
+        socket.broadcast.to(`user:${userId}`).emit('sync_finished');
+    });
 
 
     // Auto-join all existing rooms to receive notifications
@@ -293,6 +446,12 @@ io.on('connection', async (socket) => {
                     ON CONFLICT DO NOTHING
                 `, [msg.id, userId, now]);
 
+                // [NEW] Update message status to 'delivered' if currently 'sent'
+                await db.query(`
+                    UPDATE messages SET status = 'delivered' 
+                    WHERE id = $1 AND status = 'sent'
+                `, [msg.id]);
+
                 // 3. Emit to sender if online
                 // We emit to specific user channel
                 io.to(`user:${msg.sender_id}`).emit('message:delivered', {
@@ -317,7 +476,7 @@ io.on('connection', async (socket) => {
             
             if (member) {
                 socket.join(`room:${roomId}`);
-                console.log(`User ${socket.user.username} joined room ${roomId}`);
+                // console.log(`User ${socket.user.username} joined room ${roomId}`);
             } else {
                 socket.emit('error', 'Not a member');
             }
@@ -330,11 +489,11 @@ io.on('connection', async (socket) => {
     // 1. Add session
     const sessionId = require('crypto').randomUUID();
     const sessionCount = await redisClient.addSession(socket.user.id, sessionId);
-    console.log(`[DEBUG] User ${socket.user.id} (${socket.user.username}) connected. Session count: ${sessionCount}`);
+    // console.log(`[DEBUG] User ${socket.user.id} (${socket.user.username}) connected. Session count: ${sessionCount}`);
     
     // 2. Broadcast online if first session
     if (sessionCount === 1) {
-        console.log(`[DEBUG] Broadcasting online for user ${socket.user.id}`);
+        // console.log(`[DEBUG] Broadcasting online for user ${socket.user.id}`);
         socket.broadcast.emit('presence:update', {
             userId: socket.user.id,
             online: true,
@@ -349,9 +508,15 @@ io.on('connection', async (socket) => {
 
     // Handle explicit disconnect
     socket.on('disconnect', async () => {
-        console.log('User disconnected:', socket.user.username);
+        // console.log('User disconnected:', socket.user.username);
+        
+        // [NEW] Unregister Device
+        if (socket.deviceId) {
+            socketMap.unregisterSocket(socket.user.id, socket.id);
+        }
+
         const remaining = await redisClient.removeSession(socket.user.id, sessionId);
-        console.log(`[DEBUG] User ${socket.user.id} disconnected. Remaining sessions: ${remaining}`);
+        // console.log(`[DEBUG] User ${socket.user.id} disconnected. Remaining sessions: ${remaining}`);
         
         if (remaining === 0) {
             const lastSeen = await redisClient.setLastSeen(socket.user.id);
@@ -372,15 +537,24 @@ io.on('connection', async (socket) => {
         }
     });
 
-    socket.on('send_message', async ({ roomId, content, replyToMessageId, tempId }) => {
+    // [UPDATED] Send Message with Acknowledgement Support
+    socket.on('send_message', async ({ roomId, content, replyToMessageId, tempId, ciphertext, iv, salt, keyVersion, meta, signature, signatureVersion, senderDeviceId, distribution_headers, mention_user_ids }, callback) => {
+        // Callback is optional (for backward compatibility), but required for offline sync.
+        const safeCallback = typeof callback === 'function' ? callback : () => {};
+
         try {
             // Verify membership and expiry
             const roomRes = await db.query('SELECT * FROM rooms WHERE id = $1', [roomId]);
             const room = roomRes.rows[0];
 
-            if (!room) return;
+            if (!room) {
+                 safeCallback({ status: 'error', error: 'Room not found' });
+                 return;
+            }
             if (room.expires_at && new Date(room.expires_at) < new Date()) {
-                return socket.emit('error', 'Room expired');
+                socket.emit('error', 'Room expired');
+                safeCallback({ status: 'error', error: 'Room expired' });
+                return;
             }
 
             const memberRes = await db.query('SELECT * FROM room_members WHERE room_id = $1 AND user_id = $2', [roomId, socket.user.id]);
@@ -392,10 +566,14 @@ io.on('connection', async (socket) => {
                 const sendMode = permRes.rows[0]?.send_mode || 'everyone';
                 
                 if (sendMode === 'admins_only' && !['admin', 'owner'].includes(member.role)) {
-                     return socket.emit('error', 'Only admins can send messages');
+                     socket.emit('error', 'Only admins can send messages');
+                     safeCallback({ status: 'error', error: 'Only admins can send messages' });
+                     return;
                 }
                 if (sendMode === 'owner_only' && member.role !== 'owner') {
-                     return socket.emit('error', 'Only owner can send messages');
+                     socket.emit('error', 'Only owner can send messages');
+                     safeCallback({ status: 'error', error: 'Only owner can send messages' });
+                     return;
                 }
 
                 // [NEW] Block check for direct chats
@@ -416,17 +594,111 @@ io.on('connection', async (socket) => {
                     }
                 }
 
-                const insertRes = await db.query(
-                    `INSERT INTO messages (room_id, user_id, content, reply_to_message_id, blocked_for_user_id) 
-                     VALUES ($1, $2, $3, $4, $5) 
-                     RETURNING id, status, reply_to_message_id, created_at`,
-                    [roomId, socket.user.id, content, replyToMessageId || null, blockerUserId || null]
-                );
-                const info = insertRes.rows[0];
+                let info;
+                try {
+                    const insertRes = await db.query(
+                        `INSERT INTO messages (room_id, user_id, content, reply_to_message_id, blocked_for_user_id, ciphertext, iv, salt, key_version, meta_type, temp_id, signature, signature_version, sender_device_id, distribution_headers, mention_user_ids) 
+                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16) 
+                        RETURNING id, status, reply_to_message_id, created_at`,
+                        [
+                            roomId, 
+                            socket.user.id, 
+                            content, 
+                            replyToMessageId || null, 
+                            blockerUserId || null,
+                            ciphertext || null,
+                            iv || null,
+                            salt || null,
+                            keyVersion || null,
+                            meta ? meta.type : null,
+                            tempId || null,
+                            signature || null,
+                            signatureVersion || 1,
+                            senderDeviceId || null,
+                            distribution_headers || null,
+                            mention_user_ids || null
+                        ]
+                    );
+                    info = insertRes.rows[0];
+
+                    // Send Success ACK
+                    safeCallback({ status: 'ok', messageId: info.id, tempId: tempId });
+
+                } catch (e) {
+                    if (e.code === '23505' && tempId) { // Unique violation on temp_id
+                        console.warn(`[Security/Sync] Duplicate Message via temp_id (Replay/Retry): ${tempId}`);
+                        // [CRITICAL] Return OK for duplicates so client stops retrying
+                        // We need the original ID though. Let's fetch it.
+                        try {
+                            const existing = await db.query('SELECT id FROM messages WHERE temp_id = $1 AND user_id = $2', [tempId, socket.user.id]);
+                            if (existing.rows[0]) {
+                                safeCallback({ status: 'ok', messageId: existing.rows[0].id, tempId: tempId }); 
+                            } else {
+                                safeCallback({ status: 'error', error: 'Duplicate temp_id but message not found' });
+                            }
+                        } catch (lookupErr) {
+                            safeCallback({ status: 'error', error: 'Database error handling duplicate' });
+                        }
+                        return;
+                    } else {
+                        throw e;
+                    }
+                }
+                
+                // Get User Display Name
                 
                 // Get User Display Name
                 const userRes = await db.query('SELECT display_name, avatar_thumb_url, avatar_url FROM users WHERE id = $1', [socket.user.id]);
                 const user = userRes.rows[0];
+
+                // [NEW] Fetch reply message metadata if this is a reply
+                let replyData = null;
+                if (info.reply_to_message_id) {
+                    try {
+                        const replyRes = await db.query(`
+                            SELECT m.id, m.content, m.type, m.caption, m.file_name, m.user_id, m.is_view_once,
+                                   u.display_name, u.username,
+                                   m.attachments, m.ciphertext, m.iv, m.salt, m.key_version, m.temp_id,
+                                   m.audio_duration_ms -- [FIX] Fetch duration
+                            FROM messages m
+                            JOIN users u ON m.user_id = u.id
+                            WHERE m.id = $1
+                        `, [info.reply_to_message_id]);
+                        
+                        if (replyRes.rows[0]) {
+                            const replyMsg = replyRes.rows[0];
+                            // Generate a preview text for the reply
+                            let preview = replyMsg.content || '';
+                            if (replyMsg.type === 'image') preview = replyMsg.caption || 'Photo';
+                            if (replyMsg.type === 'audio') preview = 'Voice message';
+                            if (replyMsg.type === 'file') preview = replyMsg.file_name || 'Document';
+                            if (replyMsg.type === 'gif') preview = 'GIF';
+                            if (replyMsg.type === 'location') preview = 'Location';
+                            if (replyMsg.type === 'poll') preview = 'Poll';
+                            if (replyMsg.is_view_once) preview = 'Photo';
+                            
+                            replyData = {
+                                id: replyMsg.id,
+                                sender: replyMsg.display_name || replyMsg.username || 'Unknown',
+                                text: preview.length > 80 ? preview.slice(0, 80) + '...' : preview,
+                                type: replyMsg.type || 'text',
+                                user_id: replyMsg.user_id,
+                                is_view_once: replyMsg.is_view_once,
+                                attachments: replyMsg.attachments,
+                                // [NEW] Include encryption fields for E2EE decryption on client
+                                ciphertext: replyMsg.ciphertext,
+                                iv: replyMsg.iv,
+                                salt: replyMsg.salt,
+                                key_version: replyMsg.key_version,
+                                temp_id: replyMsg.temp_id,
+                                content: replyMsg.content, // Include raw content for non-encrypted
+                                audio_duration_ms: replyMsg.audio_duration_ms // [FIX] Include duration for audio replies
+                            };
+                        }
+                    } catch (err) {
+                        console.error('[Reply Fetch Error]:', err);
+                    }
+                }
 
                 const message = {
                     id: info.id,
@@ -435,12 +707,25 @@ io.on('connection', async (socket) => {
                     content,
                     status: info.status,
                     reply_to_message_id: info.reply_to_message_id, // Send back explicitly
+                    replyTo: replyData, // [NEW] Include full reply context
                     created_at: info.created_at,
+                    // [FIX] Normalize keys for frontend (MessageItem expects display_name/username)
+                    display_name: user?.display_name,
                     username: socket.user.username,
-                    display_name: user ? user.display_name : socket.user.display_name,
-                    avatar_thumb_url: user ? user.avatar_thumb_url : null,
-                    avatar_url: user ? user.avatar_url : null,
-                    tempId: tempId // Return the tempId to the client
+                    avatar_thumb_url: user?.avatar_thumb_url || null,
+                    avatar_url: user?.avatar_url || null,
+                    
+                    sender_name: user?.display_name || socket.user.username,
+                    sender_profile_pic: user?.avatar_thumb_url || user?.avatar_url || null,
+                    sender_role: member.role,
+                    sender_color: member.color_preference,
+                    // [NEW] E2EE Fields
+                    ciphertext, iv, salt, key_version: keyVersion, temp_id: tempId,
+                    // [NEW] Sender Auth Fields
+                    signature, signature_version: signatureVersion, sender_device_id: senderDeviceId,
+                    distribution_headers,
+                    mention_user_ids: mention_user_ids || [], // [NEW] Broadcast mentions
+                    meta: meta || {}
                 };
 
                 // [NEW] If blocked, only emit to sender (not to room)
@@ -481,6 +766,7 @@ io.on('connection', async (socket) => {
                                  (SELECT u.display_name FROM users u WHERE u.id = r.created_by) as creator_name,
                                  (SELECT u.username FROM users u WHERE u.id = r.created_by) as creator_username,
                                  (SELECT COUNT(*) FROM messages m WHERE m.room_id = r.id AND m.created_at > COALESCE(rm.last_read_at, '1970-01-01')) as unread_count,
+                                 (SELECT COUNT(*) FROM messages m WHERE m.room_id = r.id AND m.created_at > COALESCE(rm.last_read_at, '1970-01-01') AND $1::integer = ANY(m.mention_user_ids)) as mention_count,
                                  gp.send_mode, gp.allow_name_change, gp.allow_description_change, gp.allow_add_members, gp.allow_remove_members
                                  FROM rooms r 
                                  JOIN room_members rm ON r.id = rm.room_id 
@@ -499,8 +785,9 @@ io.on('connection', async (socket) => {
                                      avatar_url: rawRoom.type === 'direct' ? rawRoom.other_user_avatar_url : rawRoom.avatar_url,
                                      creator_name: rawRoom.creator_name,
                                      creator_username: rawRoom.creator_username,
-                                     unread_count: parseInt(rawRoom.unread_count || 0)
-                                  };
+                                     unread_count: parseInt(rawRoom.unread_count || 0),
+                                     mention_count: parseInt(rawRoom.mention_count || 0) // [NEW] Real-time sync
+                                   };
                                   
                                   io.to(`user:${recipientId}`).emit('room_added', formattedRoom);
                               }
@@ -541,6 +828,12 @@ io.on('connection', async (socket) => {
                                     VALUES ($1, $2, NOW())
                                     ON CONFLICT DO NOTHING
                                 `, [message.id, row.user_id]);
+
+                                // [NEW] Update message status to 'delivered' if currently 'sent'
+                                await db.query(`
+                                    UPDATE messages SET status = 'delivered'
+                                    WHERE id = $1 AND status = 'sent'
+                                `, [message.id]);
 
                                 // 2. Notify Sender (that Recipient X got it)
                                 // We send { messageId, userId, ... }
@@ -630,6 +923,15 @@ io.on('connection', async (socket) => {
                     // Broadcast update only for fully read messages
                     io.to(`room:${roomId}`).emit('messages_status_update', { messageIds: fullyReadIds, status: 'seen', roomId });
                  }
+                 
+                 // [NEW] Broadcast Read Receipt (Real-time update for Message Info)
+                 // We emit to the room so everyone's "Message Info" updates
+                 io.to(`room:${roomId}`).emit('message:read_receipt', { 
+                     roomId, 
+                     messageIds: updatedMessages.map(m => m.id), 
+                     userId: socket.user.id,
+                     readAt: new Date().toISOString()
+                 });
             }
         } catch (err) {
             console.error('Error marking seen:', err);
@@ -660,6 +962,9 @@ io.on('connection', async (socket) => {
                 if (msg.status === 'sent') {
                     await db.query('UPDATE messages SET status = $1 WHERE id = $2', ['delivered', messageId]);
                     io.to(`room:${roomId}`).emit('messages_status_update', { messageIds: [messageId], status: 'delivered', roomId });
+                    
+                    // [NEW] Also emit explicit message:delivered for sender's tick update
+                    io.to(`user:${socket.user.id}`).emit('message:delivered', { messageId, roomId });
                 }
             }
         } catch (err) {
@@ -753,9 +1058,193 @@ io.on('connection', async (socket) => {
             console.error('Error in typing:stop:', err);
         }
     });
-    // Removed duplicate disconnect handler as we handled it above in presence block
+
+    // [NEW] Message Reactions
+    socket.on('message:react', async ({ messageId, reaction }, callback) => {
+        const safeCallback = typeof callback === 'function' ? callback : () => {};
+        try {
+            // Upsert reaction
+            const res = await db.query(`
+                INSERT INTO message_reactions (message_id, user_id, reaction)
+                VALUES ($1, $2, $3)
+                ON CONFLICT (message_id, user_id)
+                DO UPDATE SET reaction = EXCLUDED.reaction, created_at = NOW()
+                RETURNING message_id
+            `, [messageId, socket.user.id, reaction]);
+
+            if (res.rows[0]) {
+                const msgRes = await db.query(`
+                    SELECT room_id, content, type, ciphertext, iv, salt, key_version, temp_id 
+                    FROM messages WHERE id = $1
+                `, [messageId]);
+                const msgData = msgRes.rows[0];
+
+                if (msgData) {
+                    // [NEW] Update room's last_message_at to bring it to top
+                    await db.query('UPDATE rooms SET last_message_at = NOW() WHERE id = $1', [msgData.room_id]);
+
+                    const userRes = await db.query('SELECT username, display_name, avatar_thumb_url FROM users WHERE id = $1', [socket.user.id]);
+                    const userData = userRes.rows[0];
+
+                    // [NEW] Get absolute latest message for reference
+                    const officialLatest = await getLatestMessageMetadata(msgData.room_id);
+
+                    io.to(`room:${msgData.room_id}`).emit('message:reaction_update', {
+                        messageId,
+                        roomId: msgData.room_id,
+                        userId: socket.user.id,
+                        reaction,
+                        username: userData?.username,
+                        display_name: userData?.display_name,
+                        avatar_thumb_url: userData?.avatar_thumb_url,
+                        // [NEW] Message metadata for sidebar preview
+                        message_content: msgData.content,
+                        message_type: msgData.type,
+                        message_ciphertext: msgData.ciphertext,
+                        message_iv: msgData.iv,
+                        message_salt: msgData.salt,
+                        message_key_version: msgData.key_version,
+                        message_temp_id: msgData.temp_id,
+                        // [NEW] Official latest message for reversion
+                        official_latest_message: officialLatest
+                    });
+                }
+                safeCallback({ status: 'ok' });
+            } else {
+                safeCallback({ status: 'error', error: 'Message not found' });
+            }
+        } catch (err) {
+            console.error('[Reactions] Error adding reaction:', err);
+            safeCallback({ status: 'error', error: 'Server error' });
+        }
+    });
+
+    socket.on('message:unreact', async ({ messageId }, callback) => {
+        const safeCallback = typeof callback === 'function' ? callback : () => {};
+        try {
+            const res = await db.query(`
+                DELETE FROM message_reactions 
+                WHERE message_id = $1 AND user_id = $2
+                RETURNING message_id
+            `, [messageId, socket.user.id]);
+
+            if (res.rows.length > 0) {
+                const msgRes = await db.query(`
+                    SELECT room_id, content, type, ciphertext, iv, salt, key_version, temp_id 
+                    FROM messages WHERE id = $1
+                `, [messageId]);
+                const msgData = msgRes.rows[0];
+
+                if (msgData) {
+                    // [NEW] Get absolute latest message for reference
+                    const officialLatest = await getLatestMessageMetadata(msgData.room_id);
+
+                    io.to(`room:${msgData.room_id}`).emit('message:reaction_update', {
+                        messageId,
+                        roomId: msgData.room_id,
+                        userId: socket.user.id,
+                        reaction: null,
+                        // [NEW] Metadata even for unreact (can be used to restore message preview)
+                        message_content: msgData.content,
+                        message_type: msgData.type,
+                        message_ciphertext: msgData.ciphertext,
+                        message_iv: msgData.iv,
+                        message_salt: msgData.salt,
+                        message_key_version: msgData.key_version,
+                        message_temp_id: msgData.temp_id,
+                        // [NEW] Official latest message for reversion
+                        official_latest_message: officialLatest
+                    });
+                }
+                safeCallback({ status: 'ok' });
+            } else {
+                safeCallback({ status: 'ok' });
+            }
+        } catch (err) {
+            console.error('[Reactions] Error removing reaction:', err);
+            safeCallback({ status: 'error', error: 'Server error' });
+        }
+    });
+
+    // --- VOICE/VIDEO CALL SIGNALING ---
+    socket.on('call:invite', ({ to, signal, type, roomId, callerName, callerAvatar }) => {
+        console.log(`[Call] Invite from ${socket.user.id} to ${to}`);
+        io.to(`user:${to}`).emit('call:invite', {
+            from: socket.user.id,
+            signal,
+            type,
+            roomId,
+            callerName,
+            callerAvatar
+        });
+    });
+
+    socket.on('call:accept', ({ to, signal }) => {
+        console.log(`[Call] Accepted by ${socket.user.id} for ${to}`);
+        io.to(`user:${to}`).emit('call:accepted', {
+            signal,
+            from: socket.user.id
+        });
+    });
+
+    socket.on('call:busy', ({ to }) => {
+        console.log(`[Call] User ${socket.user.id} is busy, notifying ${to}`);
+        io.to(`user:${to}`).emit('call:busy', {
+            from: socket.user.id
+        });
+    });
+
+    socket.on('call:end', ({ to }) => {
+        console.log(`[Call] Ended by ${socket.user.id}, notifying ${to}`);
+        io.to(`user:${to}`).emit('call:ended', {
+            from: socket.user.id
+        });
+    });
+
+    socket.on('disconnect', () => {
+        const userId = socket.user.id;
+        console.log(`[DEBUG] Socket disconnected: User=${socket.user.username} (${userId}) SocketID=${socket.id} DeviceID=${socket.deviceId || 'N/A'}`);
+        
+        if (socket.deviceId) {
+            socketMap.unregisterSocket(userId, socket.id);
+            // NOTE: We no longer clear pendingSyncs on disconnect.
+            // This allows the sync request to survive tab refreshes.
+            // It will be cleared explicitly on sync_finished or sync_canceled.
+        }
+    });
 
 });
+
+const TENOR_API_KEY = process.env.TENOR_API_KEY;
+
+// [NEW] Helper to get latest message metadata for a room
+async function getLatestMessageMetadata(roomId) {
+    const res = await db.query(`
+        SELECT m.id, m.content, m.type, m.ciphertext, m.iv, m.salt, m.key_version, m.temp_id, 
+               m.status, m.caption, m.file_name, m.is_view_once, m.viewed_by, m.attachments,
+               m.created_at, m.user_id, u.display_name as sender_name, p.question as poll_question,
+               COALESCE(
+                   (SELECT json_agg(json_build_object(
+                       'userId', r2.user_id, 
+                       'reaction', r2.reaction,
+                       'username', u_react.username,
+                       'display_name', u_react.display_name,
+                       'avatar_thumb_url', u_react.avatar_thumb_url
+                    ))
+                    FROM message_reactions r2 
+                    JOIN users u_react ON r2.user_id = u_react.id
+                    WHERE r2.message_id = m.id),
+                   '[]'
+               ) as reactions
+        FROM messages m
+        LEFT JOIN users u ON m.user_id = u.id
+        LEFT JOIN polls p ON m.poll_id = p.id
+        WHERE m.room_id = $1
+        ORDER BY m.created_at DESC
+        LIMIT 1
+    `, [roomId]);
+    return res.rows[0];
+}
 
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
