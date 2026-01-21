@@ -75,7 +75,25 @@ export default function Dashboard() {
     const [showGroupInfo, setShowGroupInfo] = useState(false);
     const [highlightMessageId, setHighlightMessageId] = useState(null); 
     const [showLogoutModal, setShowLogoutModal] = useState(false);
-    const [showProfile, setShowProfile] = useState(false); // [NEW]
+    const [profileState, setProfileState] = useState({ 
+        isOpen: false, 
+        userId: null, 
+        roomId: null, 
+        showRestoreOption: false 
+    }); // [NEW] Centralized profile state
+
+    const handleOpenProfile = useCallback((userId, roomId = null, showRestore = false) => {
+        setProfileState({
+            isOpen: true,
+            userId: userId,
+            roomId: roomId,
+            showRestoreOption: showRestore
+        });
+    }, []);
+
+    const handleCloseProfile = useCallback(() => {
+        setProfileState(prev => ({ ...prev, isOpen: false }));
+    }, []);
 
     const [syncState, setSyncState] = useState({ 
         active: false, 
@@ -97,6 +115,7 @@ export default function Dashboard() {
 
     // [NEW] Track if user skipped sync (to show manual restore option)
     const [hasSkippedSync, setHasSkippedSync] = useState(() => localStorage.getItem('skipped_sync') === 'true');
+    const [showRestoreModal, setShowRestoreModal] = useState(false); // [NEW] For profile-triggered restore
     const [showPassword, setShowPassword] = useState(false); // [NEW] Password visibility toggle
     const seenMessages = useRef(new Set()); // [NEW] Global Replay Protection
     const [typingByRoom, setTypingByRoom] = useState({}); // [NEW] { roomId: [{ userId, name }] }
@@ -127,6 +146,9 @@ export default function Dashboard() {
 
             // 3. Import keys
             await cryptoManager.importKeysSync(bundle);
+
+            // [NEW] Enable auto-backup so future room keys are automatically backed up
+            await cryptoManager.enableAutoBackup(restorePassword, data.salt, token);
 
             // 4. Notify others to clear popups
             socket?.emit('sync_finished');
@@ -264,10 +286,12 @@ export default function Dashboard() {
     const sortRooms = (roomsToSort) => {
         return [...roomsToSort].sort((a, b) => {
             // 1. Pinned
-            if (a.is_pinned && !b.is_pinned) return -1;
-            if (!a.is_pinned && b.is_pinned) return 1;
+            const isPinnedA = !!a.is_pinned;
+            const isPinnedB = !!b.is_pinned;
+            if (isPinnedA && !isPinnedB) return -1;
+            if (!isPinnedA && isPinnedB) return 1;
 
-            if (a.is_pinned && b.is_pinned) {
+            if (isPinnedA && isPinnedB) {
                  // Sort by pin time (desc) - "Stack" behavior
                  const pinTimeA = a.pinned_at ? new Date(a.pinned_at).getTime() : 0;
                  const pinTimeB = b.pinned_at ? new Date(b.pinned_at).getTime() : 0;
@@ -279,8 +303,10 @@ export default function Dashboard() {
             }
 
             // 2. Archived (Though archived usually hidden or filtered, we sort them last just in case)
-            if (a.is_archived && !b.is_archived) return 1;
-            if (!a.is_archived && b.is_archived) return -1;
+            const isArchivedA = !!a.is_archived;
+            const isArchivedB = !!b.is_archived;
+            if (isArchivedA && !isArchivedB) return 1;
+            if (!isArchivedA && isArchivedB) return -1;
             
             // 3. Time (desc)
             const timeA = new Date(a.last_message_at || a.created_at).getTime();
@@ -1645,12 +1671,11 @@ export default function Dashboard() {
                 room.last_message_type = message.type;
                 room.last_message_sender_id = user.id;
                 room.last_message_status = 'sending'; 
-                room.last_message_created_at = new Date().toISOString();
+                room.last_message_at = new Date().toISOString(); 
                 room.last_message_id = message.tempId || message.id; 
                 
-                updated.splice(idx, 1);
-                updated.unshift(room);
-                return updated;
+                updated[idx] = room;
+                return sortRooms(updated);
             }
             return prev;
         });
@@ -1860,15 +1885,15 @@ export default function Dashboard() {
             });
 
             const updated = [...prev];
-            updated.splice(idx, 1);
+            updated[idx] = room;
             
-            // [NEW] Only bump to top if there is a reaction (new activity)
+            // [NEW] Only bump to top (sort) if there is a reaction (new activity)
             if (reaction) {
-                updated.unshift(room);
+                room.last_message_at = new Date().toISOString();
+                return sortRooms(updated);
             } else {
-                updated.splice(idx, 0, room); // Stay in same position
+                return updated; // Stay in same position (roughly)
             }
-            return updated;
         });
     };
 
@@ -1909,6 +1934,7 @@ export default function Dashboard() {
                             setActiveRoom(null);
                         }
                     }}
+                    onShowProfile={() => handleOpenProfile(user.id, null, hasSkippedSync)}
                 />
             </div>
 
@@ -1955,7 +1981,12 @@ export default function Dashboard() {
                             onOptimisticReaction={handleOptimisticReaction}
                             justRestored={justRestored} // [NEW]
                             hasSkippedSync={hasSkippedSync} // [NEW]
-                            onRestoreAnimationComplete={() => setJustRestored(false)} // [NEW]
+                            onRestoreAnimationComplete={() => {
+                                setJustRestored(false);
+                                setShowRestoreModal(false); // [NEW] Close modal after animation
+                            }} // [NEW]
+                            onOpenMainProfile={() => handleOpenProfile(user.id, null, true)} // [NEW] Always show Restore in main profile
+                            onOpenProfile={handleOpenProfile} // [NEW] Centralized profile opener
                         />
                     )
                 ) : (
@@ -2195,25 +2226,30 @@ export default function Dashboard() {
 
 
 
-            {/* [NEW] Profile Panel */}
-            {showProfile && (
-                <div className="fixed inset-0 z-[70] flex items-stretch justify-end">
-                    <div className="absolute inset-0 bg-black/20 backdrop-blur-sm animate-fade-in" onClick={() => setShowProfile(false)} />
-                    <ProfilePanel 
-                        userId={user.id}
-                        onClose={() => setShowProfile(false)}
-                        onActionSuccess={() => fetchRooms()}
-                        onGoToMessage={(roomId, msgId) => handleGoToMessage(roomId, msgId)}
-                        showRestoreOption={hasSkippedSync} // [NEW] Only show if skipped
-                        onRequestSync={() => {
-                            // [NEW] Manual Sync Trigger
-                            setShowProfile(false); // Close panel
-                            setSyncState({ active: true, status: 'Initializing sync...', showBackupPrompt: false, mode: 'approve' });
-                            triggerSync(); // Restart sync
-                        }}
-                        socket={socket}
-                    />
-                </div>
+            {/* [NEW] Centralized Profile Panel */}
+            {profileState.isOpen && (
+                <ProfilePanel 
+                    userId={profileState.userId}
+                    isOpen={profileState.isOpen}
+                    roomId={profileState.roomId}
+                    onClose={handleCloseProfile}
+                    onActionSuccess={(action) => {
+                        if (action === 'delete') {
+                            setActiveRoom(null);
+                        }
+                        fetchRooms();
+                    }}
+                    onGoToMessage={(msgId) => {
+                        handleCloseProfile();
+                        handleGoToMessage(profileState.roomId, msgId);
+                    }}
+                    showRestoreOption={profileState.showRestoreOption}
+                    onRequestSync={() => {
+                        handleCloseProfile();
+                        setShowRestoreModal(true);
+                    }}
+                    socket={socket}
+                />
             )}
 
             {/* [NEW] Sync Approval Modal (Global) */}
@@ -2258,6 +2294,22 @@ export default function Dashboard() {
                 </div>
             )}
         </div>
+        
+        {/* [NEW] Profile-triggered Restore Modal */}
+        <RestoreModal 
+            isOpen={showRestoreModal}
+            onClose={() => setShowRestoreModal(false)}
+            onRestoreSuccess={() => {
+                // [MODIFIED] Don't close immediately, wait for animation
+                localStorage.removeItem('skipped_sync');
+                setHasSkippedSync(false);
+                setJustRestored(true); // Trigger background animation
+                showNotification('Chat history restored!', 'success');
+                fetchRooms();
+            }}
+            token={token}
+        />
+        
         <CallModal />
         </CallProvider>
         </AiChatProvider>

@@ -271,10 +271,6 @@ html:not(.dark) .spoiler-message.inline-flex::before {
 }
 
 /* Fully revealed state */
-.message-bubble .spoiler-message.inline-flex.spoiler-revealed {
-  /* Margin stays to avoid jumps */
-}
-
 .message-bubble .spoiler-message.inline-flex.spoiler-revealed .spoiler-content,
 .spoiler-message.inline-flex.spoiler-revealed .spoiler-content {
   filter: none;
@@ -400,16 +396,18 @@ html.landing-scroll {
     box-shadow: 0 0 20px rgba(0, 255, 0, 0.6), 0 0 40px rgba(138, 43, 226, 0.4), 0 0 60px rgba(0, 255, 0, 0.2);
   }
   
-  /* Skeleton shimmer animation */
+  /* Premium Skeleton shimmer animation (Gemini style) */
   .animate-shimmer {
-    animation: shimmer 1.5s ease-in-out infinite;
+    animation: shimmer 2s linear infinite;
     background: linear-gradient(
       90deg,
       rgba(148, 163, 184, 0.1) 0%,
-      rgba(148, 163, 184, 0.3) 50%,
+      rgba(148, 163, 184, 0.2) 20%,
+      rgba(139, 92, 246, 0.15) 50%,
+      rgba(148, 163, 184, 0.2) 80%,
       rgba(148, 163, 184, 0.1) 100%
     );
-    background-size: 200% 100%;
+    background-size: 1000px 100%;
   }
 
   /* Custom Entrance/Exit Animations */
@@ -651,6 +649,23 @@ html.landing-scroll {
   position: relative;
 }
 
+@keyframes messageSendIn {
+  from { 
+    opacity: 0; 
+    transform: translateY(30px) scale(0.95);
+    filter: blur(4px);
+  }
+  to { 
+    opacity: 1; 
+    transform: translateY(0) scale(1);
+    filter: blur(0);
+  }
+}
+
+.animate-message-send {
+  animation: messageSendIn 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
 @keyframes fadeInUp {
   from {
     opacity: 0;
@@ -660,6 +675,15 @@ html.landing-scroll {
     opacity: 1;
     transform: translateY(0);
   }
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.animate-fade-in {
+  animation: fadeIn 0.5s ease-out forwards;
 }
 
 .animate-fade-in-up {
@@ -681,6 +705,16 @@ html.landing-scroll {
 
 .animate-dashboard-entry {
   animation: dashboardReveal 0.8s cubic-bezier(0.2, 0.8, 0.2, 1) forwards;
+}
+
+@keyframes checkPop {
+  0% { transform: scale(0.5); opacity: 0; }
+  50% { transform: scale(1.2); }
+  100% { transform: scale(1); opacity: 1; }
+}
+
+.animate-check-pop {
+  animation: checkPop 0.6s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
 }
 
 @keyframes slideInUp {
@@ -967,4 +1001,17 @@ html.locked-no-scroll body {
   fill: rgba(74, 222, 128, 0.3); /* Subtle glare */
   stroke: none;
 }
+@keyframes dot-wave {
+  0%, 100% {
+    transform: translateY(0);
+    opacity: 0.35;
+  }
+  50% {
+    transform: translateY(-5px);
+    opacity: 1;
+  }
+}
 
+.animate-dot-wave {
+  animation: dot-wave 1.4s cubic-bezier(0.45, 0, 0.55, 1) infinite;
+}

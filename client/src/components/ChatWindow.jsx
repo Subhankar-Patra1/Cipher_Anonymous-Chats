@@ -143,24 +143,20 @@ export default function ChatWindow({
     justRestored, // [NEW]
     hasSkippedSync, // [NEW]
     onRestoreAnimationComplete, // [NEW]
-    typingByRoom // [NEW]
+
+    typingByRoom, // [NEW]
+    onOpenMainProfile, // [NEW]
+    onOpenProfile, // [NEW]
 }) {
     const { token } = useAuth();
     const { presenceMap, fetchStatuses } = usePresence();
     const { showNotification } = useNotification();
     const { initiateCall } = useCall();
-    const [showProfileCard, setShowProfileCard] = useState(false);
+
 
     // [NEW] Capture restore state on mount
     // We utilize the fact that ChatWindow is remounted on room change (key={room.id} in parent)
     const [isRestoreAnimation, setIsRestoreAnimation] = useState(justRestored);
-
-    useEffect(() => {
-        if (justRestored && onRestoreAnimationComplete) {
-            // Clear global flag so subsequent room opens don't animate
-            onRestoreAnimationComplete();
-        }
-    }, []);
     
     // [DEXIE] messages comes from useLiveQuery
     // [FIX] Removed '|| []' to distinguish between 'loading' (undefined) and 'empty' ([])
@@ -171,22 +167,39 @@ export default function ChatWindow({
 
     // [NEW] Cache for Sender Signing Keys (deviceId -> publicKey)
     const senderDeviceKeys = useRef(new Map());
+    const lastTimestampRef = useRef(0); // [NEW] For strictly monotonic optimistic timestamps
     // [NEW] Replay Protection
     const seenMessages = useRef(new Set());
     const deviceLastTimestamp = useRef(new Map());
     
+    // [NEW] Caches to prevent "chaining" and redundant fetches
+    const roomDevicesCache = useRef(new Map()); // roomId -> { devices, timestamp }
+    const roomKeyExistsCache = useRef(new Map()); // roomId -> { exists, latestVersion, timestamp }
+    const roomMyKeyCache = useRef(new Map()); // roomId -> { keyData, timestamp }
+    
     // [NEW] Chat Hydration Control - Prevents flash of old messages
     // [FIX] Start as NOT ready to ensure we wait for hydration/Dexie
-    const [isChatReady, setIsChatReady] = useState(false); 
+    const [isChatReady, setIsChatReady] = useState(false);
     const activeChatIdRef = useRef(room.id);
     const hasHydratedRef = useRef(!!room.initialMessages);
+
+    useEffect(() => {
+        if (justRestored && isChatReady && onRestoreAnimationComplete) {
+            // [MODIFIED] Only clear/complete once messages are decrypted and ready
+            // We add a tiny extra delay for the modal to show "Success" state
+            const timer = setTimeout(() => {
+                onRestoreAnimationComplete();
+            }, 1000);
+            return () => clearTimeout(timer);
+        }
+    }, [justRestored, isChatReady, onRestoreAnimationComplete]);
 
     // [CRITICAL] Hard Reset on Room Change - Prevents flash of old messages
     useEffect(() => {
         // Track current room ID for stale response detection
         activeChatIdRef.current = room.id;
         
-        // Always reset on room change
+        // [FIX] Reset ready state to false on room change
         setIsChatReady(false);
         
         if (!room.initialMessages) {
@@ -524,6 +537,27 @@ export default function ChatWindow({
                 // Mark as ready ONLY after hydration is done
                 if (!isStale) setIsChatReady(true);
             });
+        } else if (justRestored) {
+            // [NEW] If we just restored keys, re-decrypt the messages in the current room
+            (async () => {
+                try {
+                    const localMsgs = await db.messages.where('room_id').equals(String(room.id)).toArray();
+                    const encrypted = localMsgs.filter(m => !m.isDecrypted);
+                    
+                    if (encrypted.length > 0) {
+                        console.log(`[Restore] Re-decrypting ${encrypted.length} messages for room ${room.id}`);
+                        const decrypted = await Promise.all(encrypted.map(async (m) => {
+                            const d = await decryptPayload(m);
+                            return { ...m, ...d, isDecrypted: true }; // Ensure we keep original fields like id
+                        }));
+                        await db.messages.bulkPut(decrypted);
+                    }
+                } catch (err) {
+                    console.error('[Restore] Re-decryption failed:', err);
+                } finally {
+                    if (!isStale) setIsChatReady(true);
+                }
+            })();
         } else {
             // No hydration needed, ready immediately (but useLiveQuery may still be loading)
             setIsChatReady(true);
@@ -532,7 +566,7 @@ export default function ChatWindow({
         return () => {
              isStale = true;
         };
-    }, [room.initialMessages, room.id]);
+    }, [room.initialMessages, room.id, justRestored]); // [FIX] Added justRestored dependency
 
     // [CRITICAL] Scroll ONLY after chat is ready - prevents scroll jumps
 
@@ -1128,7 +1162,12 @@ export default function ChatWindow({
             // [NEW] Use UUID for Replay Protection
             const tempId = crypto.randomUUID(); 
             const isOffline = !navigator.onLine;
-            const timestamp = new Date().toISOString();
+
+            // [FIX] Strictly Monotonic Timestamp for ordering
+            const now = Date.now();
+            const nextTime = Math.max(now, lastTimestampRef.current + 1);
+            lastTimestampRef.current = nextTime;
+            const timestamp = new Date(nextTime).toISOString();
             
             // Optimistic UI: Show Plaintext locally!
             const tempMsg = {
@@ -1165,60 +1204,86 @@ export default function ChatWindow({
                     // 1. Get or Setup Room Key (Memory > DB > Server > Generate)
                     let roomKeyData = await cryptoManager.getRoomKey(room.id);
                     
-                    // Fetch device list for Distribution (needed for Piggybacking)
-                    const devRes = await fetch(`${import.meta.env.VITE_API_URL}/api/rooms/${room.id}/devices`, {
-                        headers: { Authorization: `Bearer ${token}` }
-                    });
-                    if (!devRes.ok) throw new Error('Failed to fetch devices');
-                    const devices = await devRes.json();
+                    // [OPTIMIZED] Cache Device List (1 min TTL)
+                    const now_ts = Date.now();
+                    const cachedDevices = roomDevicesCache.current.get(room.id);
+                    let devices;
+                    if (cachedDevices && now_ts - cachedDevices.timestamp < 60000) {
+                        devices = cachedDevices.devices;
+                    } else {
+                        const devRes = await fetch(`${import.meta.env.VITE_API_URL}/api/rooms/${room.id}/devices`, {
+                            headers: { Authorization: `Bearer ${token}` }
+                        });
+                        if (!devRes.ok) throw new Error('Failed to fetch devices');
+                        devices = await devRes.json();
+                        roomDevicesCache.current.set(room.id, { devices, timestamp: now_ts });
+                    }
                     
                     const myDeviceId = await cryptoManager.init().then(i => i?.deviceId || cryptoManager.deviceId);
 
                     if (!roomKeyData) {
-                        // A. Check Server for existing key for ME
-                        try {
-                            const res = await fetch(`${import.meta.env.VITE_API_URL}/api/rooms/${room.id}/keys/my?deviceId=${myDeviceId}`, {
-                                headers: { Authorization: `Bearer ${token}` }
-                            });
-                            if (res.ok) {
-                                const keyData = await res.json();
-                                if (keyData && keyData.encrypted_key) {
-                                    const decryptedKey = await cryptoManager.decryptRoomKey(keyData.encrypted_key);
-                                    await cryptoManager.saveRoomKey(room.id, decryptedKey, keyData.key_version);
-                                    roomKeyData = { key: decryptedKey, version: keyData.key_version };
-                                    console.log('[E2EE] Retrieved existing key v', keyData.key_version);
+                        // [OPTIMIZED] Cache My Key Check
+                        const cachedMyKey = roomMyKeyCache.current.get(room.id);
+                        if (cachedMyKey && now_ts - cachedMyKey.timestamp < 30000) {
+                             if (cachedMyKey.keyData) roomKeyData = cachedMyKey.keyData;
+                        } else {
+                            try {
+                                const res = await fetch(`${import.meta.env.VITE_API_URL}/api/rooms/${room.id}/keys/my?deviceId=${myDeviceId}`, {
+                                    headers: { Authorization: `Bearer ${token}` }
+                                });
+                                if (res.ok) {
+                                    const keyData = await res.json();
+                                    if (keyData && keyData.encrypted_key) {
+                                        const decryptedKey = await cryptoManager.decryptRoomKey(keyData.encrypted_key);
+                                        await cryptoManager.saveRoomKey(room.id, decryptedKey, keyData.key_version);
+                                        roomKeyData = { key: decryptedKey, version: keyData.key_version };
+                                        console.log('[E2EE] Retrieved existing key v', keyData.key_version);
+                                        roomMyKeyCache.current.set(room.id, { keyData: roomKeyData, timestamp: now_ts });
+                                    } else {
+                                        roomMyKeyCache.current.set(room.id, { keyData: null, timestamp: now_ts });
+                                    }
                                 }
-                            }
-                        } catch (e) { console.warn('[E2EE] Server key check failed', e); }
+                            } catch (e) { console.warn('[E2EE] Server key check failed', e); }
+                        }
                     }
 
                     if (!roomKeyData) {
-                        // B. Check if key exists for ANYONE (Prevent split-brain)
+                        // [OPTIMIZED] Cache Key Exists Check
                         let keyExists = false;
                         let latestVer = 0;
-                        try {
-                            const check = await fetch(`${import.meta.env.VITE_API_URL}/api/rooms/${room.id}/keys/exists`, { headers: { Authorization: `Bearer ${token}` } });
-                            if (check.ok) {
-                                const checkData = await check.json();
-                                if (checkData.exists) {
-                                    keyExists = true; 
+                        const cachedExists = roomKeyExistsCache.current.get(room.id);
+                        if (cachedExists && now_ts - cachedExists.timestamp < 30000) {
+                            keyExists = cachedExists.exists;
+                            latestVer = cachedExists.latestVersion;
+                        } else {
+                            try {
+                                const check = await fetch(`${import.meta.env.VITE_API_URL}/api/rooms/${room.id}/keys/exists`, { headers: { Authorization: `Bearer ${token}` } });
+                                if (check.ok) {
+                                    const checkData = await check.json();
+                                    keyExists = checkData.exists;
                                     latestVer = checkData.latestVersion;
-                                    console.warn(`[E2EE] Key v${latestVer} exists but I don't have it. Rotating (Self-Healing)...`);
+                                    roomKeyExistsCache.current.set(room.id, { exists: keyExists, latestVersion: latestVer, timestamp: now_ts });
+                                    if (keyExists) console.warn(`[E2EE] Key v${latestVer} exists but I don't have it.`);
                                 }
-                            }
-                        } catch(e) {}
-
-                        // C. Generate New Key (Rotation)
-                        console.log('[E2EE] Generating New Room Key...');
-                        const setup = await cryptoManager.generateAndEncryptRoomKey(room.id, devices);
-                        roomKeyData = { key: setup.roomKey, version: setup.version };
+                            } catch(e) {}
+                        }
                         
-                        // Upload Initial Batch to Server
-                        fetch(`${import.meta.env.VITE_API_URL}/api/rooms/${room.id}/keys`, {
-                             method: 'POST',
-                             headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-                             body: JSON.stringify({ keys: setup.encryptedKeys, keyVersion: setup.version, senderDeviceId: myDeviceId })
-                        }).catch(e => console.error('[E2EE] Background key upload failed', e));
+                        if (!roomKeyData) {
+                             // C. Generate New Key (Rotation)
+                             console.log('[E2EE] Generating New Room Key...');
+                             const setup = await cryptoManager.generateAndEncryptRoomKey(room.id, devices);
+                             roomKeyData = { key: setup.roomKey, version: setup.version };
+                             
+                             // Update Cache
+                             roomMyKeyCache.current.set(room.id, { keyData: roomKeyData, timestamp: now_ts });
+                             
+                             // Upload Initial Batch to Server
+                             fetch(`${import.meta.env.VITE_API_URL}/api/rooms/${room.id}/keys`, {
+                                  method: 'POST',
+                                  headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+                                  body: JSON.stringify({ keys: setup.encryptedKeys, keyVersion: setup.version, senderDeviceId: myDeviceId })
+                             }).catch(e => console.error('[E2EE] Background key upload failed', e));
+                        }
                     }
 
                     // 2. Generate Piggyback Headers
@@ -1317,8 +1382,12 @@ export default function ChatWindow({
         // [FIX] Use state fallback
         const finalReplyTo = replyToMsg || replyTo;
 
-        const tempId = `temp-${Date.now()}`;
-        const timestamp = new Date().toISOString();
+        // [FIX] Strictly Monotonic Timestamp
+        const now = Date.now();
+        const nextTime = Math.max(now, lastTimestampRef.current + 1);
+        lastTimestampRef.current = nextTime;
+        const tempId = `temp-${nextTime}`;
+        const timestamp = new Date(nextTime).toISOString();
         const tempMsg = {
             id: tempId,
             tempId: tempId,
@@ -1560,22 +1629,26 @@ export default function ChatWindow({
         const shouldSplit = nonEmptyCount > 1;
 
         if (shouldSplit) {
-            // SEND INDIVIDUALLY
-            for (const item of processedItems) {
-                await sendSingleImage(item.file, item.plainCaption, item.width, item.height, isViewOnce);
-            }
-        } else {
-            // SEND AS GROUP
-            // Find the single caption if it exists
-            const groupCaption = processedItems.find(i => i.plainCaption.length > 0)?.plainCaption || "";
-            await sendImageGroup(processedItems, groupCaption, isViewOnce);
-        }
+        // [FIX] SEND INDIVIDUALLY IN PARALLEL (No await in loop)
+        processedItems.forEach(item => {
+            sendSingleImage(item.file, item.plainCaption, item.width, item.height, isViewOnce);
+        });
+    } else {
+        // [FIX] SEND AS GROUP (No await needed here either as handleSendImages is usually fire-and-forget)
+        // Find the single caption if it exists
+        const groupCaption = processedItems.find(i => i.plainCaption.length > 0)?.plainCaption || "";
+        sendImageGroup(processedItems, groupCaption, isViewOnce);
+    }
     };
 
     // Helper for Single Image Send (Splitted)
     const sendSingleImage = async (file, caption, width, height, isViewOnce) => {
-        const tempId = `temp-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-        const timestamp = new Date().toISOString();
+        // [FIX] Strictly Monotonic Timestamp
+        const now = Date.now();
+        const nextTime = Math.max(now, lastTimestampRef.current + 1);
+        lastTimestampRef.current = nextTime;
+        const tempId = `temp-${nextTime}-${Math.random().toString(36).substr(2, 9)}`;
+        const timestamp = new Date(nextTime).toISOString();
         
         // Optimistic
         const tempMsg = {
@@ -1647,8 +1720,12 @@ export default function ChatWindow({
 
     // Helper for Group Send
     const sendImageGroup = async (items, groupCaption, isViewOnce) => {
-        const tempId = `temp-${Date.now()}`;
-        const timestamp = new Date().toISOString();
+        // [FIX] Strictly Monotonic Timestamp
+        const now = Date.now();
+        const nextTime = Math.max(now, lastTimestampRef.current + 1);
+        lastTimestampRef.current = nextTime;
+        const tempId = `temp-${nextTime}`;
+        const timestamp = new Date(nextTime).toISOString();
         
         const attachments = items.map(item => ({
             url: URL.createObjectURL(item.file),
@@ -1803,9 +1880,12 @@ export default function ChatWindow({
     };
 
     const handleSendFile = async (file, caption) => {
-        // [FIX] Use random suffix to prevent ID collision in fast loops
-        const tempId = `temp-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-        const timestamp = new Date().toISOString();
+        // [FIX] Strictly Monotonic Timestamp
+        const now = Date.now();
+        const nextTime = Math.max(now, lastTimestampRef.current + 1);
+        lastTimestampRef.current = nextTime;
+        const tempId = `temp-${nextTime}-${Math.random().toString(36).substr(2, 9)}`;
+        const timestamp = new Date(nextTime).toISOString();
         const tempMsg = {
             id: tempId,
             tempId: tempId,
@@ -1857,8 +1937,12 @@ export default function ChatWindow({
     };
 
     const handleSendGif = async (gif, caption, mention_user_ids) => {
-        const tempId = `temp-${Date.now()}`;
-        const timestamp = new Date().toISOString();
+        // [FIX] Strictly Monotonic Timestamp
+        const now = Date.now();
+        const nextTime = Math.max(now, lastTimestampRef.current + 1);
+        lastTimestampRef.current = nextTime;
+        const tempId = `temp-${nextTime}`;
+        const timestamp = new Date(nextTime).toISOString();
         const finalGifUrl = gif.mp4_url || gif.gif_url;
         const finalPreviewUrl = gif.preview_url || gif.gifpreview;
         
@@ -2048,7 +2132,7 @@ export default function ChatWindow({
                         ref={headerRef}
                         className="flex-1 min-w-0 cursor-pointer flex items-center gap-3" 
                         onClick={() => {
-                            if (room.type === 'direct') setShowProfileCard(!showProfileCard);
+                            if (room.type === 'direct') onOpenProfile(room.other_user_id, room.id, hasSkippedSync);
                             else setShowGroupInfo(true);
                         }}
                     >
@@ -2233,13 +2317,13 @@ export default function ChatWindow({
                 decryptMessage={decryptPayload} // [NEW] Pass decryption function
             />
 
-            {/* [CRITICAL] Gate MessageList behind isChatReady AND messages loading state to prevent flash */}
-            {(isLoading || !isChatReady || !messages) ? (
+            {/* [OPTIMIZATION] Only show skeleton if we truly have no data (neither fresh nor cached) AND we're loading */}
+            {(isLoading && (!messages || messages.length === 0) && (!room.initialMessages || room.initialMessages.length === 0)) ? (
                 <ChatSkeleton />
             ) : (
                 <MessageList 
                     key={room.id} /* Force clean remount on room change */
-                    messages={messages} 
+                    messages={messages || []}
                     currentUser={user} 
                     roomId={room.id} 
                     socket={socket} 
@@ -2286,6 +2370,18 @@ export default function ChatWindow({
                     // [NEW] Animation Prop
                     isRestoreAnimation={isRestoreAnimation}
                     hasSkippedSync={hasSkippedSync} // [NEW]
+                    onOpenProfile={(uid, rid, sync) => {
+                        if (uid) {
+                            onOpenProfile(uid, rid || room.id, sync);
+                        } else {
+                            if (onOpenMainProfile) return onOpenMainProfile();
+                            if (room.type === 'direct') {
+                                onOpenProfile(room.other_user_id, room.id, hasSkippedSync);
+                            } else {
+                                setShowGroupInfo(true);
+                            }
+                        }
+                    }}
                 />
             )}
 
@@ -2360,28 +2456,7 @@ export default function ChatWindow({
                 </div>
             )}
 
-            {showProfileCard && room.type === 'direct' && (
-                <ProfilePanel 
-                    userId={room.other_user_id}
-                    roomId={room.id}
-                    onClose={() => setShowProfileCard(false)}
-                    onActionSuccess={(action) => {
-                        if (action === 'delete') {
-                            onBack(); // Go back to empty state
-                        } else if (action === 'block') {
-                            setIsBlockedByMe(true);
-                            if (onRefresh) onRefresh();
-                        } else if (action === 'unblock') {
-                            setIsBlockedByMe(false);
-                            if (onRefresh) onRefresh();
-                        }
-                    }}
-                    onGoToMessage={(msgId) => {
-                        setShowProfileCard(false);
-                        if (onGoToMessage) onGoToMessage(msgId);
-                    }}
-                />
-            )}
+
 
             {/* [NEW] Scoped Image Preview Modal */}
             {selectedImages && (
@@ -2413,8 +2488,12 @@ export default function ChatWindow({
                 isOpen={showLocationPicker}
                 onClose={() => setShowLocationPicker(false)}
                 onSend={async (location) => {
-                    const tempId = `temp-${Date.now()}`;
-                    const timestamp = new Date().toISOString();
+                    // [FIX] Strictly Monotonic Timestamp
+                    const now = Date.now();
+                    const nextTime = Math.max(now, lastTimestampRef.current + 1);
+                    lastTimestampRef.current = nextTime;
+                    const tempId = `temp-${nextTime}`;
+                    const timestamp = new Date(nextTime).toISOString();
                     const tempMsg = {
                         id: tempId,
                         tempId: tempId,

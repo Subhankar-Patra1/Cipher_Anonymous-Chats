@@ -76,7 +76,7 @@ const AppLockSetting = () => {
     );
 };
 
-export default function ProfilePanel({ userId, roomId, onClose, onActionSuccess, onGoToMessage, onRequestSync, showRestoreOption, socket }) {
+export default function ProfilePanel({ isOpen = true, userId, roomId, onClose, onActionSuccess, onGoToMessage, onRequestSync, showRestoreOption, socket }) {
     const { token, user: currentUser, updateUser, logout } = useAuth();
     const { presenceMap, fetchStatuses } = usePresence();
     const { 
@@ -580,6 +580,7 @@ export default function ProfilePanel({ userId, roomId, onClose, onActionSuccess,
         }
     };
 
+    if (!isOpen) return null;
     if (loading) {
         return createPortal(
             <div className="fixed inset-y-0 right-0 w-full md:w-[360px] bg-white dark:bg-slate-900 shadow-2xl z-[60] flex items-center justify-center border-l border-slate-200 dark:border-slate-800 transition-colors duration-300">
@@ -1157,7 +1158,7 @@ export default function ProfilePanel({ userId, roomId, onClose, onActionSuccess,
                                     <span className="material-symbols-outlined text-slate-400 group-hover:text-blue-500 transition-colors text-[20px]">chevron_right</span>
                                 </button>
                                 
-                                {showRestoreOption && (
+                                 {showRestoreOption && (
                                     <button 
                                         onClick={onRequestSync}
                                         className="w-full flex items-center justify-between group"
@@ -1173,7 +1174,9 @@ export default function ProfilePanel({ userId, roomId, onClose, onActionSuccess,
                                         </div>
                                         <span className="material-symbols-outlined text-slate-400 group-hover:text-indigo-500 transition-colors text-[20px]">chevron_right</span>
                                     </button>
-                                )}
+                                 )}
+                                
+
                             </div>
                         </div>
                     )}
@@ -1262,6 +1265,28 @@ export default function ProfilePanel({ userId, roomId, onClose, onActionSuccess,
                         )}
                     </div>
 
+
+
+                     {/* [NEW] Restore Option (Visible on all profiles if skipped sync) - Removed redundant duplicate for non-me as it should ideally be in one place or logic unified */}
+                    {!isMe && showRestoreOption && (
+                        <div className="p-4 border-b border-slate-100 dark:border-slate-800">
+                            <button 
+                                onClick={onRequestSync}
+                                className="w-full flex items-center justify-between group p-2 hover:bg-slate-50 dark:hover:bg-slate-800/50 rounded-lg transition-colors"
+                            >
+                                <div className="flex items-center gap-3">
+                                    <div className="w-10 h-10 rounded-full bg-indigo-100 dark:bg-indigo-900/30 flex items-center justify-center text-indigo-600 dark:text-indigo-400">
+                                        <span className="material-symbols-outlined text-[20px]">sync_lock</span>
+                                    </div>
+                                    <div className="text-left">
+                                        <p className="text-sm font-semibold text-slate-700 dark:text-slate-200">Restore Chat History</p>
+                                        <p className="text-xs text-slate-400">Sync from another device</p>
+                                    </div>
+                                </div>
+                                <span className="material-symbols-outlined text-slate-400 group-hover:text-indigo-500 transition-colors">chevron_right</span>
+                            </button>
+                        </div>
+                    )}
 
                     {/* Actions */}
                     <div className="p-4 space-y-1">

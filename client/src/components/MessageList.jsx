@@ -141,7 +141,7 @@ const getContrastColor = (hexColor) => {
     return yiq >= 128 ? 'text-slate-900' : 'text-white';
 };
 
-export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone, onRetry, onRetryDecryption, onMarkHeard, onEdit, onImageLoad, onRegenerate, onPin, onStar, onUnstar, searchTerm, scrollToMessage, onImageClick, isSelectionMode, isSelected, onToggleSelection, onEnableSelectionMode, bubbleColor, onBottomInView, onViewInfo, isRestoreAnimation, animationDelay, onReact, onUnreact, onViewReactions, hasSkippedSync }) => { // [MODIFIED] Added hasSkippedSync
+export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone, onRetry, onRetryDecryption, onMarkHeard, onEdit, onImageLoad, onRegenerate, onPin, onStar, onUnstar, searchTerm, scrollToMessage, onImageClick, isSelectionMode, isSelected, onToggleSelection, onEnableSelectionMode, bubbleColor, onBottomInView, onViewInfo, isRestoreAnimation, animationDelay, onReact, onUnreact, onViewReactions, hasSkippedSync, onOpenProfile }) => { // [MODIFIED] Added onOpenProfile
  // [MODIFIED] Added onImageClick
     const [showMenu, setShowMenu] = useState(false);
     const [menuClosing, setMenuClosing] = useState(false); // [NEW] For close animation
@@ -391,7 +391,10 @@ export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone,
             className={`
                 flex ${isMe ? 'justify-end' : 'justify-start'} group ${isSelectionMode ? 'w-[calc(100%+2rem)] sm:w-[calc(100%+3rem)]' : 'max-w-full'} ${showMenu ? 'z-[100] relative' : ''}
                 ${isSelectionMode ? 'cursor-pointer hover:bg-black/5 dark:hover:bg-white/5 transition-colors -mx-4 px-4 sm:-mx-6 sm:px-6 py-0.5' : ''}
-                ${isRestoreAnimation ? 'animate-in fade-in slide-in-from-bottom-8 duration-700 fill-mode-backwards' : ''}
+                ${isRestoreAnimation 
+                    ? `animate-in fade-in duration-700 fill-mode-backwards ${isMe ? 'slide-in-from-right-16' : 'slide-in-from-left-16'}` 
+                    : ''}
+                ${!isRestoreAnimation && isMe && (msg.status === 'sending' || msg.tempId) ? 'animate-message-send' : ''}
             `}
             style={{
                 ...(isMe && bubbleColor ? { backgroundColor: bubbleColor, borderColor: 'transparent' } : {}),
@@ -436,7 +439,13 @@ export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone,
                 
                 {!isMe && (
                     <div className="flex items-center gap-2 mb-1 ml-1 select-none">
-                        <div className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] text-white font-bold overflow-hidden ${isAi ? 'bg-fuchsia-50 dark:bg-fuchsia-900/10 border border-fuchsia-100 dark:border-fuchsia-800/30' : (!msg.avatar_thumb_url ? 'bg-gradient-to-br from-indigo-500 to-violet-600' : 'bg-slate-200 dark:bg-slate-800')}`}>
+                        <div 
+                            onClick={(e) => {
+                                e.stopPropagation();
+                                if (!isAi && onOpenProfile) onOpenProfile(msg.user_id);
+                            }}
+                            className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] text-white font-bold overflow-hidden cursor-pointer hover:opacity-80 transition-opacity ${isAi ? 'bg-fuchsia-50 dark:bg-fuchsia-900/10 border border-fuchsia-100 dark:border-fuchsia-800/30' : (!msg.avatar_thumb_url ? 'bg-gradient-to-br from-indigo-500 to-violet-600' : 'bg-slate-200 dark:bg-slate-800')}`}
+                        >
                             {isAi ? (
                                 <SparkleLogo className="w-3.5 h-3.5" />
                             ) : msg.avatar_thumb_url ? (
@@ -446,7 +455,13 @@ export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone,
                             )}
                         </div>
 
-                        <span className={`text-xs font-medium transition-colors ${isAi ? 'text-transparent bg-clip-text bg-gradient-to-r from-fuchsia-500 to-purple-600 font-bold' : 'text-slate-500 dark:text-slate-400'}`}>
+                        <span 
+                            onClick={(e) => {
+                                e.stopPropagation();
+                                if (!isAi && onOpenProfile) onOpenProfile(msg.user_id);
+                            }}
+                            className={`text-xs font-medium cursor-pointer hover:underline transition-colors ${isAi ? 'text-transparent bg-clip-text bg-gradient-to-r from-fuchsia-500 to-purple-600 font-bold' : 'text-slate-500 dark:text-slate-400'}`}
+                        >
                             {renderTextWithEmojis(isAi ? (msg.display_name && msg.display_name !== 'Assistant' ? msg.display_name : 'Sparkle AI') : (msg.display_name || msg.username || 'Unknown User'))}
                         </span>
                     </div>
@@ -472,7 +487,7 @@ export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone,
                     `}
                     style={isMe && bubbleColor ? { backgroundColor: bubbleColor, borderColor: 'transparent' } : {}}
                     >
-                        {msg.isSkeleton ? (
+                        {(msg.isSkeleton || (!msg.isDecrypted && msg.ciphertext && !msg.content && msg.type !== 'system')) ? (
                             <div className="flex gap-1 py-1">
                                 <span className="w-2 h-2 rounded-full bg-slate-400 dark:bg-slate-500 animate-[bounce_1.4s_infinite_0ms]"></span>
                                 <span className="w-2 h-2 rounded-full bg-slate-400 dark:bg-slate-500 animate-[bounce_1.4s_infinite_200ms]"></span>
@@ -1250,6 +1265,12 @@ export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone,
                                         </div>
                                     )}
                                 </div>
+                            ) : msg.isSkeleton ? (
+                                <div className="flex items-center gap-1.5 py-3 px-1 ml-1">
+                                    <div className="w-1.5 h-1.5 rounded-full bg-fuchsia-400/60 animate-dot-wave" />
+                                    <div className="w-1.5 h-1.5 rounded-full bg-fuchsia-500/60 animate-dot-wave [animation-delay:0.2s]" />
+                                    <div className="w-1.5 h-1.5 rounded-full bg-fuchsia-600/60 animate-dot-wave [animation-delay:0.4s]" />
+                                </div>
                             ) : (
                             <div className={`pr-2 ${!isMe && isAi ? 'markdown-content' : 'pr-6'}`}>
                                 {isAi && !isMe ? (
@@ -1883,7 +1904,8 @@ export default function MessageList({
     onReact, // [NEW]
     onUnreact, // [NEW]
     isRestoreAnimation, // [NEW]
-    hasSkippedSync // [NEW]
+    hasSkippedSync, // [NEW]
+    onOpenProfile // [NEW]
 }) { // [MODIFIED] Added props // [MODIFIED] Added onPin
     const { token } = useAuth();
     const [confirmDeleteMessage, setConfirmDeleteMessage] = useState(null);
@@ -1901,11 +1923,22 @@ export default function MessageList({
     // [NEW] Smart Scroll - Scroll to divider on initial load (with timing fix for async Dexie)
     const hasInitialScrolledRef = useRef(false);
     const [newMessageCount, setNewMessageCount] = useState(0); // [NEW] Live message counter when scrolled up
+    const [isScrolled, setIsScrolled] = useState(false); // [NEW] Track if initial scroll is done
+    const [isInitialLoadComplete, setIsInitialLoadComplete] = useState(false); // [NEW] Delay empty state
     
     // Reset scroll flag and new message count when switching rooms
     useEffect(() => {
         hasInitialScrolledRef.current = false;
+        setIsScrolled(false);
         setNewMessageCount(0);
+        setIsInitialLoadComplete(false); // [NEW] Reset on room switch
+        
+        // [NEW] Delay showing empty state to allow hydration to complete
+        const timer = setTimeout(() => {
+            setIsInitialLoadComplete(true);
+        }, 300); // 300ms delay to allow messages to load/hydrate
+        
+        return () => clearTimeout(timer);
     }, [roomId]);
     
     // [NEW] Pagination Refs
@@ -2089,6 +2122,7 @@ export default function MessageList({
         }
         
         hasInitialScrolledRef.current = true;
+        setIsScrolled(true);
         shouldScrollToBottom.current = false;
     }, [messages]);
 
@@ -2247,8 +2281,17 @@ export default function MessageList({
     }).length > 0;
 
     // [NEW] Unread Divider Logic
-    // 1. Sort messages chronologically (safety)
-    const sortedMessages = [...messages].sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
+    // 1. Sort messages chronologically (safety) with stable tie-breaker
+    const sortedMessages = [...messages].sort((a, b) => {
+        if (a.created_at !== b.created_at) {
+            return a.created_at < b.created_at ? -1 : 1;
+        }
+        // Tie-breaker for identical timestamps (optimistic messages or clock skew)
+        // Use localId (Dexie-assigned) or id (Server/UUID) or tempId
+        const idA = a.localId || a.id || a.tempId || '';
+        const idB = b.localId || b.id || b.tempId || '';
+        return String(idA).localeCompare(String(idB));
+    });
 
     // 2. Calculate Unread Count (Exclude own messages and system messages)
     // Only count messages strictly AFTER the lastReadMessageId
@@ -2305,8 +2348,8 @@ export default function MessageList({
         >
             {/* Doodle Background Pattern */}
 
-            {/* Empty State - outside scroll container */}
-            {!hasMessages && (
+            {/* Empty State - outside scroll container, only show after initial load delay */}
+            {!hasMessages && isInitialLoadComplete && (
                 <div className="absolute inset-0 flex items-center justify-center z-10">
                     <NoMessages />
                 </div>
@@ -2316,9 +2359,9 @@ export default function MessageList({
             <div 
                 ref={scrollRef}
                 data-message-list
-                className={`absolute inset-0 p-4 sm:p-6 space-y-1 sm:space-y-1.5 custom-scrollbar z-[1] ${
+                className={`absolute inset-0 p-4 sm:p-6 space-y-1 sm:space-y-1.5 custom-scrollbar z-[1] transition-opacity duration-300 ${
                     hasMessages ? 'overflow-y-auto overflow-x-hidden' : 'overflow-hidden'
-                }`}
+                } ${isScrolled ? 'opacity-100' : 'opacity-0'}`}
                 onScroll={handleScroll}
             >
                 {loadingMore && (
@@ -2337,22 +2380,32 @@ export default function MessageList({
 
                 {hasMessages && (
                     <>
-                    {hasSkippedSync && messages.some(msg => msg.content === '🔒 Waiting for key...' || msg.content === '🔒 Decryption Failed') && (
-                        <div className="flex justify-center my-6 animate-in fade-in slide-in-from-top-4 duration-700">
-                            <div className="bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800/50 rounded-2xl p-4 max-w-sm shadow-sm flex flex-col items-center text-center gap-2">
-                                <div className="w-10 h-10 rounded-full bg-amber-100 dark:bg-amber-800/30 flex items-center justify-center text-amber-600 dark:text-amber-400">
-                                    <span className="material-symbols-outlined">history_toggle_off</span>
-                                </div>
-                                <div>
-                                    <h3 className="text-sm font-bold text-amber-900 dark:text-amber-200">History Hidden</h3>
-                                    <p className="text-xs text-amber-700 dark:text-amber-400 leading-relaxed">
-                                        Previous messages are hidden because encryption keys are missing. Restore them anytime in Settings.
-                                    </p>
-                                </div>
-                            </div>
+                    {hasSkippedSync && (
+                        <div className="flex flex-col items-center justify-center py-12 px-4 animate-in fade-in slide-in-from-top-4 duration-700">
+                             <div className="w-16 h-16 bg-slate-100 dark:bg-slate-800 rounded-full flex items-center justify-center mb-4">
+                                <span className="material-symbols-outlined text-slate-400 text-3xl">lock_clock</span>
+                             </div>
+                             <h3 className="text-lg font-bold text-slate-700 dark:text-slate-200 mb-2">Chat History Hidden</h3>
+                             <p className="text-sm text-slate-500 text-center max-w-xs mb-4">
+                                 Previous messages are hidden. You can restore them anytime.
+                             </p>
+                             <button
+                                onClick={() => {
+                                    if (onOpenProfile) onOpenProfile(currentUser.id, null, true);
+                                }}
+                                className="text-violet-600 dark:text-violet-400 text-sm font-bold hover:underline"
+                             >
+                                 Go to Profile to Restore
+                             </button>
                         </div>
                     )}
                     {visibleMessages.map((msg, index) => {
+                    // [NEW] Strict Hide for Skipped Sync
+                    if (hasSkippedSync) {
+                        const isEncrypted = !msg.content || msg.content === '🔒 Waiting for key...' || msg.content === '🔒 Decryption Failed';
+                        if (isEncrypted) return null;
+                    }
+
                     // [FIX] AI messages might have same user_id but are NOT 'me' for display purposes
                     const isAi = msg.user_id === 'ai-assistant' || msg.author_name === 'Assistant' || (msg.meta && msg.meta.ai) || msg.isStreaming;
                     const isMe = msg.user_id == currentUser.id && !isAi;
@@ -2472,11 +2525,12 @@ export default function MessageList({
                             onUnstar={onUnstar}
                             // [NEW] Animation Props
                             isRestoreAnimation={isRestoreAnimation}
-                            animationDelay={`${index * 50}ms`}
+                            animationDelay={isRestoreAnimation ? `${index * 50}ms` : '0ms'}
                             onReact={onReact}
                             onUnreact={onUnreact}
                             onViewReactions={(m, rect) => setReactionMenu({ messageId: m.id, anchorRect: rect })} // [NEW]
                             hasSkippedSync={hasSkippedSync}
+                            onOpenProfile={onOpenProfile}
                         />
                         </React.Fragment>
                     );
