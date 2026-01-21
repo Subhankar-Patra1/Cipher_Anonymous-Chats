@@ -2120,7 +2120,7 @@ export default function ChatWindow({
             {/* Header */}
             <div className="sticky top-0 z-50 border-b border-slate-200/50 dark:border-slate-800/50 bg-white/50 dark:bg-slate-900/50 backdrop-blur-md flex flex-col shadow-sm transition-colors">
                 {/* Main Header Row */}
-                <div className="p-4 flex items-center gap-4">
+                <div className="py-2.5 px-4 flex items-center gap-4">
                     <button 
                         onClick={onBack}
                         className="p-2 -ml-2 text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white transition-colors"
@@ -2137,7 +2137,7 @@ export default function ChatWindow({
                         }}
                     >
                         {/* Header Avatar */}
-                        <div className={`w-10 h-10 rounded-full flex items-center justify-center text-sm font-bold text-white shadow-lg shrink-0 overflow-hidden ${!room.avatar_url && !room.avatar_thumb_url ? 'bg-gradient-to-br from-violet-500 to-indigo-600' : 'bg-slate-200 dark:bg-slate-800'}`}>
+                        <div className={`w-9 h-9 rounded-full flex items-center justify-center text-sm font-bold text-white shadow-lg shrink-0 overflow-hidden ${!room.avatar_url && !room.avatar_thumb_url ? 'bg-gradient-to-br from-violet-500 to-indigo-600' : 'bg-slate-200 dark:bg-slate-800'}`}>
                             {(room.avatar_url || room.avatar_thumb_url) ? (
                                 <img src={room.avatar_url || room.avatar_thumb_url} alt={room.name} className="w-full h-full object-cover" />
                             ) : (
@@ -2148,7 +2148,7 @@ export default function ChatWindow({
                         </div>
 
                         <div className="min-w-0">
-                            <h2 className="text-lg font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2 truncate transition-colors duration-300">
+                            <h2 className="text-base font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2 truncate transition-colors duration-300">
                                 {room.type === 'group' && (
                                     <span className="material-symbols-outlined text-violet-500 dark:text-violet-400 shrink-0">tag</span>
                                 )}
@@ -2166,7 +2166,7 @@ export default function ChatWindow({
                             )}
                             
                             {room.type === 'direct' && otherUserStatus && !isBlockedByMe && !isBlockedByThem && (
-                                <div className="text-xs font-medium mt-0.5">
+                                <div className="text-[11px] font-medium leading-tight">
                                     {otherUserStatus.online ? (
                                         <span className="text-green-500 dark:text-green-400">Online now</span>
                                     ) : otherUserStatus.last_seen ? (

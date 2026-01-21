@@ -962,6 +962,11 @@ export default function Dashboard() {
                 }
                 return r;
             }));
+
+            // [NEW] Update Active Room state if it matches
+            if (activeRoomRef.current && String(activeRoomRef.current.id) === String(roomId)) {
+                setActiveRoom(prev => ({ ...prev })); // Trigger re-render to pick up Dexie changes
+            }
         });
 
         // [NEW] Real-time Delivery Receipt
@@ -977,6 +982,11 @@ export default function Dashboard() {
                 }
                 return r;
             }));
+
+            // [NEW] Update Active Room state if it matches
+            if (activeRoomRef.current && String(activeRoomRef.current.id) === String(roomId)) {
+                setActiveRoom(prev => ({ ...prev })); // Trigger re-render
+            }
         });
 
         // [NEW] Sync read status to room state (fixes stale divider on re-entry)
@@ -1004,6 +1014,11 @@ export default function Dashboard() {
                 }
                 return r;
             }));
+
+            // [NEW] Update Active Room state if it matches
+            if (activeRoomRef.current && String(activeRoomRef.current.id) === String(roomId)) {
+                setActiveRoom(prev => ({ ...prev })); // Trigger re-render
+            }
         });
 
         newSocket.on('chat:cleared', ({ roomId }) => {

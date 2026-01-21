@@ -1,0 +1,15 @@
+[2026-01-20T19:47:50.006Z] Generation Error: Request failed with status code 402
+Stack: AxiosError: Request failed with status code 402
+    at settle (E:\Cipher(No_Login_Chats)\server\node_modules\axios\dist\node\axios.cjs:2106:12)
+    at RedirectableRequest.handleResponse (E:\Cipher(No_Login_Chats)\server\node_modules\axios\dist\node\axios.cjs:3439:9)
+    at RedirectableRequest.emit (node:events:519:28)
+    at RedirectableRequest._processResponse (E:\Cipher(No_Login_Chats)\server\node_modules\follow-redirects\index.js:409:10)
+    at RedirectableRequest._onNativeResponse (E:\Cipher(No_Login_Chats)\server\node_modules\follow-redirects\index.js:102:12)
+    at Object.onceWrapper (node:events:634:26)
+    at ClientRequest.emit (node:events:519:28)
+    at HTTPParser.parserOnIncomingClient [as onIncoming] (node:_http_client:716:27)
+    at HTTPParser.parserOnHeadersComplete (node:_http_common:121:17)
+    at TLSSocket.socketOnData (node:_http_client:558:22)
+    at Axios.request (E:\Cipher(No_Login_Chats)\server\node_modules\axios\dist\node\axios.cjs:4731:41)
+    at process.processTicksAndRejections (node:internal/process/task_queues:105:5)
+    at async generateResponse (E:\Cipher(No_Login_Chats)\server\ai.js:286:26)

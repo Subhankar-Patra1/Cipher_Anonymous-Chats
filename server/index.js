@@ -953,7 +953,7 @@ io.on('connection', async (socket) => {
                   AND room_id = $3
                   AND NOT ($1 = ANY(COALESCE(delivered_to, '{}')))
                   AND user_id NOT IN (SELECT blocked_id FROM blocked_users WHERE blocker_id = $1)
-                RETURNING id, status
+                RETURNING id, status, user_id
             `, [userId, messageId, roomId, now]);
 
             if (updateRes.rowCount > 0) {
@@ -963,8 +963,8 @@ io.on('connection', async (socket) => {
                     await db.query('UPDATE messages SET status = $1 WHERE id = $2', ['delivered', messageId]);
                     io.to(`room:${roomId}`).emit('messages_status_update', { messageIds: [messageId], status: 'delivered', roomId });
                     
-                    // [NEW] Also emit explicit message:delivered for sender's tick update
-                    io.to(`user:${socket.user.id}`).emit('message:delivered', { messageId, roomId });
+                    // [FIX] Emit explicit message:delivered for sender's tick update (msg.user_id is the sender)
+                    io.to(`user:${msg.user_id}`).emit('message:delivered', { messageId, roomId });
                 }
             }
         } catch (err) {
