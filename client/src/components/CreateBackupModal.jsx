@@ -124,6 +124,9 @@ export default function CreateBackupModal({ isOpen, onClose, token, onBackupSucc
 
             if (!res.ok) throw new Error('Failed to upload backup');
 
+            // [NEW] Enable auto-backup so future room keys are automatically backed up
+            await cryptoManager.enableAutoBackup(password, backup.salt, token);
+
             if (onBackupSuccess) onBackupSuccess();
             setShowSuccess(true);
             setTimeout(() => {

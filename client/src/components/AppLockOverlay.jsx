@@ -188,6 +188,8 @@ export default function AppLockOverlay() {
         buttonIcon = 'fingerprint';
     }
 
+    const isTyping = code.some(digit => digit !== '');
+
     return (
         <div 
             className={`fixed inset-0 z-[9999] bg-slate-900/95 backdrop-blur-xl flex flex-col items-center justify-center p-4 text-center transition-all duration-300 ease-out transform ${exiting ? 'opacity-0 scale-105 pointer-events-none' : 'opacity-100 scale-100'}`}
@@ -236,16 +238,8 @@ export default function AppLockOverlay() {
                     </button>
                 )}
 
-                {/* Show Toggle Button IF user has both methods enabled */}
-                {/* Logic: 
-                    If isEnabled (Biometric) AND hasPasscode are BOTH true:
-                        Show button to switch modes.
-                    If IsEnabled is FALSE:
-                        We are already in Passcode mode (default), NO Biometric option available. Hide button.
-                    If hasPasscode is FALSE:
-                        We are in Biometric mode, NO Passcode option available. Hide button.
-                */}
-                {isEnabled && hasPasscode && !displayingSuccess && (
+                {/* Show Toggle Button IF user has both methods enabled AND is not currently authenticating */}
+                {isEnabled && hasPasscode && !displayingSuccess && !isVerifying && !isTyping && (
                      <button 
                         onClick={() => setShowPasscode(!showPasscode)}
                         className="w-full py-3 px-6 rounded-xl font-medium text-slate-400 hover:text-white hover:bg-slate-700 transition-colors flex items-center justify-center gap-2"

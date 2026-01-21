@@ -5,7 +5,6 @@ import { useChatLock } from '../context/ChatLockContext';
 import { useTheme } from '../context/ThemeContext';
 import StatusDot from './StatusDot';
 import ProfileShareModal from './ProfileShareModal';
-import ProfilePanel from './ProfilePanel';
 import ChatLockModal from './ChatLockModal';
 import { linkifyText } from '../utils/linkify';
 import SparkleLogo from './icons/SparkleLogo';
@@ -27,31 +26,55 @@ const LastMessagePreview = ({ room, user, hasSkippedSync }) => {
         // Sync with room prop
         if (room.last_message_plaintext) {
             setLocalPlaintext(room.last_message_plaintext);
-        } else if (room.last_message_id) {
-            // Background fetch from IndexedDB if UI state is missing it
-            db.messages.where('id').equals(String(room.last_message_id)).first().then(msg => {
-                if (msg?.plaintext_content) {
-                    setLocalPlaintext(msg.plaintext_content);
-                }
-            });
+            return;
         }
-    }, [room.last_message_id, room.last_message_plaintext]);
+        
+        // [FIX] Check Dexie rooms cache first (instant load on second visit)
+        db.rooms.get(room.id).then(cached => {
+            if (cached?.last_message_plaintext) {
+                setLocalPlaintext(cached.last_message_plaintext);
+                return;
+            }
+            
+            // Fallback: Check messages table for plaintext_content
+            if (room.last_message_id) {
+                db.messages.where('id').equals(String(room.last_message_id)).first().then(msg => {
+                    if (msg?.plaintext_content) {
+                        setLocalPlaintext(msg.plaintext_content);
+                    }
+                });
+            }
+        }).catch(() => {
+            // Dexie not ready, fallback to messages table
+            if (room.last_message_id) {
+                db.messages.where('id').equals(String(room.last_message_id)).first().then(msg => {
+                    if (msg?.plaintext_content) {
+                        setLocalPlaintext(msg.plaintext_content);
+                    }
+                });
+            }
+        });
+    }, [room.id, room.last_message_id, room.last_message_plaintext]);
 
-    const content = localPlaintext || room.last_message_plaintext || room.last_message_content || '';
+    // [FIX] Compute content, handling special markers for failed decryption
+    const rawContent = localPlaintext || room.last_message_plaintext || room.last_message_content || '';
+    const isDecryptionFailed = rawContent === '__NO_KEY__' || rawContent === '__DECRYPT_FAILED__';
+    const content = isDecryptionFailed ? '' : rawContent; // Empty string triggers fallback
 
     // [NEW] Helper to render preview with mentions highlighted
     const renderPreviewRaw = (rawContent) => {
-        if (!rawContent || rawContent === 'Waiting for key...' || rawContent === 'Decryption Error') {
-            if (hasSkippedSync && rawContent) return 'History hidden';
+        // [FIX] Handle special markers and empty content
+        if (!rawContent || rawContent === 'Waiting for key...' || rawContent === 'Decryption Error' || isDecryptionFailed) {
+            if (hasSkippedSync) return 'History hidden';
             
             // [FIX] Better fallbacks for E2EE messages on reload
-            if (!rawContent && room.last_message_id) {
+            if (room.last_message_id) {
                 if (room.last_message_ciphertext) return '🔒 Encrypted Message';
                 if (room.last_message_type === 'image') return 'Photo';
                 if (room.last_message_type === 'file') return 'File';
                 return 'Message';
             }
-            return rawContent || 'No messages here';
+            return 'No messages here';
         }
         
         // [NEW] Mask spoilers with dots (no reveal in sidebar - Telegram behavior)
@@ -91,15 +114,74 @@ const LastMessagePreview = ({ room, user, hasSkippedSync }) => {
         });
     };
 
-    // [NEW] Background healer for old messages without plaintext
+    // [FIX] Track if we already tried decryption to prevent infinite loops
+    const decryptAttemptedRef = useRef(false);
+
+    // [NEW] Direct decryption from room data (bypasses IndexedDB) with caching
     useEffect(() => {
-        // If we have ciphertext but no plaintext, trigger background healing
-        if (!room.last_message_plaintext && room.last_message_ciphertext && room.last_message_id) {
-            import('../utils/dbHealer').then(({ healMessage }) => {
-                healMessage(room.id, room.last_message_id);
-            });
-        }
-    }, [room.last_message_id, room.last_message_plaintext, room.last_message_ciphertext, room.id]);
+        // Reset attempt tracking when room changes
+        decryptAttemptedRef.current = false;
+    }, [room.id, room.last_message_id]);
+
+    useEffect(() => {
+        const decryptFromRoom = async () => {
+            // Skip if already have plaintext
+            if (localPlaintext || room.last_message_plaintext) return;
+            // Skip if no encrypted data
+            if (!room.last_message_ciphertext || !room.last_message_iv) return;
+            // Skip if user doesn't have keys (skipped sync)
+            if (hasSkippedSync) return;
+            // [FIX] Skip if already attempted for this message
+            if (decryptAttemptedRef.current) return;
+            
+            decryptAttemptedRef.current = true; // Mark as attempted
+            
+            try {
+                const roomId = String(room.id);
+                const keyVersion = room.last_message_key_version;
+                const salt = room.last_message_temp_id || room.last_message_id;
+                
+                // Get key from CryptoManager
+                const keyData = await cryptoManager.getRoomKey(roomId, keyVersion);
+                if (!keyData?.key) {
+                    // [FIX] When no key available, set special marker to show encrypted fallback
+                    setLocalPlaintext('__NO_KEY__');
+                    return;
+                }
+                
+                // Decrypt directly from room data
+                const decrypted = await cryptoManager.decryptMessage(
+                    room.last_message_ciphertext,
+                    room.last_message_iv,
+                    salt,
+                    keyData.key,
+                    null,
+                    roomId,
+                    keyVersion
+                );
+                
+                // [FIX] Only set if decrypted has actual content (not empty string)
+                if (decrypted && decrypted.trim()) {
+                    setLocalPlaintext(decrypted);
+                    
+                    // [OPTIMIZATION] Cache to Dexie - prevents re-decryption on reload
+                    try {
+                        db.rooms.put({ id: room.id, last_message_plaintext: decrypted });
+                    } catch (e) { /* Ignore write errors */ }
+                } else {
+                    setLocalPlaintext('__DECRYPT_FAILED__');
+                }
+            } catch (err) {
+                console.warn('[Sidebar] Direct decryption failed:', err);
+                setLocalPlaintext('__DECRYPT_FAILED__');
+            }
+        };
+        
+        decryptFromRoom();
+    }, [room.id, room.last_message_ciphertext, room.last_message_iv, 
+        room.last_message_key_version, room.last_message_plaintext, 
+        room.last_message_temp_id, room.last_message_id,
+        localPlaintext, hasSkippedSync]);
 
     // [NEW] Reaction Summary
     const reactionSummary = useMemo(() => {
@@ -269,7 +351,7 @@ const LastMessagePreview = ({ room, user, hasSkippedSync }) => {
     );
 };
 
-export default function Sidebar({ rooms, activeRoom, onSelectRoom, loadingRoomId, isLoading, onCreateRoom, onJoinRoom, user, onLogout, onRefresh, onRoomLocked, onGoToMessage, hasSkippedSync, typingByRoom }) { // [MODIFIED] Added typingByRoom
+export default function Sidebar({ rooms, activeRoom, onSelectRoom, loadingRoomId, isLoading, onCreateRoom, onJoinRoom, user, onLogout, onRefresh, onRoomLocked, onGoToMessage, hasSkippedSync, typingByRoom, onShowProfile }) { // [MODIFIED] Added onShowProfile
 
     const { presenceMap, fetchStatuses } = usePresence();
     const { hasPasscode, lockApp } = useAppLock();
@@ -279,11 +361,8 @@ export default function Sidebar({ rooms, activeRoom, onSelectRoom, loadingRoomId
     const [searchQuery, setSearchQuery] = useState('');
     const [archivedSearchQuery, setArchivedSearchQuery] = useState('');
     const [showShareProfile, setShowShareProfile] = useState(false);
-    const [showMyProfile, setShowMyProfile] = useState(false);
     const [showChatLockModal, setShowChatLockModal] = useState(null); // room to lock/unlock
 
-    const myProfileRef = useRef(null);
-    
     // [NEW] Archived State
     const [viewArchived, setViewArchived] = useState(false);
     const [contextMenu, setContextMenu] = useState({ visible: false, x: 0, y: 0, room: null });
@@ -431,8 +510,7 @@ export default function Sidebar({ rooms, activeRoom, onSelectRoom, loadingRoomId
                 <div className="flex items-center gap-3 flex-1 min-w-0 mr-2">
                     <div 
                         className="flex items-center gap-3 cursor-pointer min-w-0"
-                        ref={myProfileRef}
-                        onClick={() => setShowMyProfile(!showMyProfile)}
+                        onClick={onShowProfile}
                     >
                         <div className={`w-10 h-10 rounded-full flex items-center justify-center text-white font-bold text-lg shadow-lg shadow-violet-500/20 overflow-hidden shrink-0 ${!user.avatar_thumb_url ? 'bg-gradient-to-br from-violet-500 to-indigo-600' : 'bg-slate-200 dark:bg-slate-800'}`}>
                             {user.avatar_thumb_url ? (
@@ -1207,13 +1285,7 @@ export default function Sidebar({ rooms, activeRoom, onSelectRoom, loadingRoomId
                 />
             )}
 
-            {showMyProfile && (
-                <ProfilePanel
-                    userId={user.id}
-                    onClose={() => setShowMyProfile(false)}
-                    onGoToMessage={onGoToMessage}
-                />
-            )}
+
 
             {/* Chat Lock Modal */}
             {showChatLockModal && (

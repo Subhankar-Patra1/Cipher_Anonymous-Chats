@@ -9,9 +9,11 @@ export const AppLockProvider = ({ children }) => {
         return localStorage.getItem('app_lock_enabled') === 'true';
     });
     
-    // Default to locked if enabled, otherwise unlocked
+    // Default to locked if either biometric OR passcode lock is on
     const [isLocked, setIsLocked] = useState(() => {
-        return localStorage.getItem('app_lock_enabled') === 'true';
+        const lockEnabled = localStorage.getItem('app_lock_enabled') === 'true';
+        const hasPasscode = !!localStorage.getItem('app_passcode');
+        return lockEnabled || hasPasscode;
     });
 
     const [isSupported, setIsSupported] = useState(false);
@@ -73,8 +75,6 @@ export const AppLockProvider = ({ children }) => {
     const setPasscode = (code) => {
         localStorage.setItem('app_passcode', code);
         _setPasscode(code);
-        setIsEnabled(true); // Auto-enable when set
-        localStorage.setItem('app_lock_enabled', 'true');
     };
 
     const removePasscode = () => {
@@ -117,7 +117,7 @@ export const AppLockProvider = ({ children }) => {
     };
 
     const lockApp = () => {
-        if (hasPasscode) {
+        if (isEnabled || hasPasscode) {
             setIsLocked(true);
         }
     };

@@ -9,18 +9,11 @@ const pool = new Pool({
 async function check() {
     try {
         const res = await pool.query(`
-            SELECT column_name, data_type 
+            SELECT count(*) 
             FROM information_schema.columns 
-            WHERE table_name = 'rooms' AND column_name = 'id';
+            WHERE table_name = 'users' AND column_name = 'public_key';
         `);
-        console.log('rooms.id type:', res.rows[0]);
-        
-        const res2 = await pool.query(`
-            SELECT column_name, data_type 
-            FROM information_schema.columns 
-            WHERE table_name = 'ai_sessions' AND column_name = 'room_id';
-        `);
-        console.log('ai_sessions.room_id type:', res2.rows[0]);
+        console.log('public_key count:', res.rows[0].count);
     } catch (e) {
         console.error(e);
     } finally {

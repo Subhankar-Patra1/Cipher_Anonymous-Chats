@@ -65,7 +65,10 @@ export const AuthProvider = ({ children }) => {
         }
     }, [token]);
 
-    const login = async (newToken, newUser) => {
+    const login = async (newToken, newUser, isNew = false) => {
+        if (isNew) {
+            localStorage.setItem('skipped_sync', 'true');
+        }
         localStorage.setItem('token', newToken);
         setToken(newToken);
         setUser(newUser);
