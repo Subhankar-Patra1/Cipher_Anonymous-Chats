@@ -14,7 +14,7 @@ export default defineConfig({
       registerType: 'autoUpdate',
       includeAssets: ['logo.png', 'robots.txt', 'sitemap.xml'],
       workbox: {
-        maximumFileSizeToCacheInBytes: 3000000 // 3MB
+        maximumFileSizeToCacheInBytes: 30000000 // 30MB
       },
       manifestFilename: 'manifest.json',
       manifest: {
