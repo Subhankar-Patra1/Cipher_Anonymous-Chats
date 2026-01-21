@@ -12,6 +12,14 @@ db.version(3).stores({
   pending_queue: '++localId, room_id'
 });
 
+// [NEW] Version 4: Add rooms table for caching decrypted sidebar preview
+db.version(4).stores({
+  messages: '++localId, id, room_id, created_at, tempId, status', 
+  keys: 'room_id',
+  pending_queue: '++localId, room_id',
+  rooms: 'id' // Cache last_message_plaintext for sidebar
+});
+
 // [CRITICAL] Handle "UpgradeError: Not yet support for changing primary key"
 // This happens during refactoring when primary keys are modified.
 db.open().catch(err => {

@@ -146,7 +146,7 @@ export default function Auth() {
                 return;
             }
 
-            login(data.token, data.user);
+            login(data.token, data.user, view === 'signup');
 
             // Check for pending invite logic...
             const pendingInvite = localStorage.getItem('pendingInvite');
@@ -362,7 +362,7 @@ export default function Auth() {
                                     if (pendingLogin) {
                                         setIsLoading(true);
                                         setTimeout(() => {
-                                            login(pendingLogin.token, pendingLogin.user);
+                                            login(pendingLogin.token, pendingLogin.user, true);
                                             // Navigation handled by PublicRoute in App.jsx
                                         }, 2000);
                                     } else {

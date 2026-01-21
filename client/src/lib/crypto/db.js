@@ -1,7 +1,7 @@
 import { openDB } from 'idb';
 
 const DB_NAME = 'CipherE2EE';
-const DB_VERSION = 2; // Bumped for TOFU store
+const DB_VERSION = 3; // Bumped for backup_config store
 
 export const initDB = async () => {
     return openDB(DB_NAME, DB_VERSION, {
@@ -21,6 +21,11 @@ export const initDB = async () => {
             // Key: deviceId, Value: signing_public_key
             if (!db.objectStoreNames.contains('trusted_keys')) {
                 db.createObjectStore('trusted_keys', { keyPath: 'deviceId' });
+            }
+
+            // [NEW] Store backup configuration for auto-backup
+            if (!db.objectStoreNames.contains('backup_config')) {
+                db.createObjectStore('backup_config', { keyPath: 'id' });
             }
         },
     });
@@ -115,4 +120,32 @@ export const saveBulkTrustedKeys = async (keys) => {
     const tx = db.transaction('trusted_keys', 'readwrite');
     await Promise.all(keys.map(k => tx.store.put(k)));
     await tx.done;
+};
+
+// --- Auto-Backup Config ---
+
+/**
+ * Save backup configuration for auto-backup
+ * Stores the salt and IV (not the password or derived key for security)
+ * The derived key will be kept in memory only during the session
+ */
+export const saveBackupConfig = async (config) => {
+    const db = await initDB();
+    await db.put('backup_config', {
+        id: 'current',
+        salt: config.salt,
+        iv: config.iv,
+        enabled: true,
+        updatedAt: Date.now()
+    });
+};
+
+export const getBackupConfig = async () => {
+    const db = await initDB();
+    return await db.get('backup_config', 'current');
+};
+
+export const clearBackupConfig = async () => {
+    const db = await initDB();
+    await db.delete('backup_config', 'current');
 };

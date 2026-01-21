@@ -1,6 +1,7 @@
 import { 
     saveDeviceIdentity, getDeviceIdentity, saveRoomKey, getRoomKey, getLatestRoomKey, 
-    saveTrustedKey, getTrustedKey, getAllRoomKeys, getAllTrustedKeys, saveBulkRoomKeys, saveBulkTrustedKeys 
+    saveTrustedKey, getTrustedKey, getAllRoomKeys, getAllTrustedKeys, saveBulkRoomKeys, saveBulkTrustedKeys,
+    saveBackupConfig, getBackupConfig
 } from './db';
 
 /**
@@ -16,6 +17,12 @@ class CryptoManager {
         this.signingKeyPair = null; // Ed25519 { publicKey, privateKey }
         this.roomKeyCache = new Map(); // [NEW] Cache for room keys
         this.keyDistributionLog = new Map(); // [NEW] roomId:version -> Set<deviceId> (Track who we sent keys to)
+        
+        // [NEW] Auto-backup properties
+        this.autoBackupDerivedKey = null; // In-memory derived key (not persisted for security)
+        this.autoBackupSalt = null;
+        this.autoBackupTimeout = null; // Debounce timer
+        this.autoBackupToken = null; // Auth token for API calls
     }
 
     // --- 1. Initialization ---
@@ -181,6 +188,9 @@ class CryptoManager {
         const data = { key, version };
         this.roomKeyCache.set(`${roomId}:${version}`, data);
         this.roomKeyCache.set(roomId, data); // Assume newest is now latest
+        
+        // [NEW] Trigger auto-backup (debounced)
+        this.triggerAutoBackup();
     }
 
     /**
@@ -853,6 +863,113 @@ class CryptoManager {
             bytes[i] = binary_string.charCodeAt(i);
         }
         return bytes.buffer;
+    }
+
+    // --- 6. Auto-Backup ---
+
+    /**
+     * Enable auto-backup by storing the derived key and salt.
+     * Called after successful backup creation.
+     */
+    async enableAutoBackup(password, salt, token) {
+        try {
+            // Derive key from password (same as encryptBackup)
+            const saltBuffer = this.base64ToArrayBuffer(salt);
+            this.autoBackupDerivedKey = await this.deriveKeyFromPassword(password, saltBuffer);
+            this.autoBackupSalt = salt;
+            this.autoBackupToken = token;
+            
+            // Store salt in DB (not the derived key for security)
+            await saveBackupConfig({ salt });
+            
+            console.log('[Crypto] Auto-backup enabled');
+            return true;
+        } catch (err) {
+            console.error('[Crypto] Failed to enable auto-backup:', err);
+            return false;
+        }
+    }
+
+    /**
+     * Set auth token for auto-backup (called on login)
+     */
+    setAutoBackupToken(token) {
+        this.autoBackupToken = token;
+    }
+
+    /**
+     * Check if auto-backup is available (derived key in memory)
+     */
+    isAutoBackupEnabled() {
+        return !!this.autoBackupDerivedKey && !!this.autoBackupToken;
+    }
+
+    /**
+     * Trigger auto-backup with debouncing (5 second delay).
+     * Called after saveRoomKey.
+     */
+    triggerAutoBackup() {
+        if (!this.isAutoBackupEnabled()) return;
+        
+        // Debounce: clear existing timeout and set new one
+        if (this.autoBackupTimeout) {
+            clearTimeout(this.autoBackupTimeout);
+        }
+        
+        this.autoBackupTimeout = setTimeout(() => {
+            this.performAutoBackup();
+        }, 5000); // 5 second delay
+    }
+
+    /**
+     * Perform the actual auto-backup.
+     * Re-exports all keys, encrypts with stored derived key, and uploads.
+     */
+    async performAutoBackup() {
+        if (!this.autoBackupDerivedKey || !this.autoBackupToken) {
+            console.log('[Crypto] Auto-backup skipped: not enabled');
+            return;
+        }
+
+        try {
+            console.log('[Crypto] Performing auto-backup...');
+            
+            // 1. Export all keys
+            const bundle = await this.exportAllKeysSync();
+            
+            // 2. Encrypt with stored derived key
+            const iv = window.crypto.getRandomValues(new Uint8Array(12));
+            const encrypted = await window.crypto.subtle.encrypt(
+                { name: "AES-GCM", iv },
+                this.autoBackupDerivedKey,
+                new TextEncoder().encode(bundle)
+            );
+            
+            const encryptedBlob = this.arrayBufferToBase64(encrypted);
+            const ivBase64 = this.arrayBufferToBase64(iv);
+            
+            // 3. Upload to server (using existing salt)
+            const res = await fetch(`${import.meta.env.VITE_API_URL}/api/auth/backup`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    Authorization: `Bearer ${this.autoBackupToken}`
+                },
+                body: JSON.stringify({
+                    encryptedBlob,
+                    salt: this.autoBackupSalt,
+                    iv: ivBase64
+                })
+            });
+            
+            if (res.ok) {
+                console.log('[Crypto] Auto-backup completed successfully');
+            } else {
+                console.error('[Crypto] Auto-backup upload failed:', res.status);
+            }
+        } catch (err) {
+            console.error('[Crypto] Auto-backup failed:', err);
+        }
     }
 }
 
