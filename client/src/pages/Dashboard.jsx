@@ -394,8 +394,29 @@ export default function Dashboard() {
                             poll_question: room.last_message_poll_question
                         }
                     }));
+                    
+                    // [NEW] Attempt to decrypt sidebar previews immediately
+                    // This handles the "I just restored keys but sidebar is still encrypted" case
+                    const decryptedRooms = await Promise.all(enriched.map(async (room) => {
+                        if (room.last_message_ciphertext && !room.last_message_plaintext) {
+                             const decrypted = await cryptoManager.decryptMessage(
+                                 room.last_message_ciphertext,
+                                 room.last_message_iv,
+                                 room.last_message_id, // Use ID as salt source as per new protocol
+                                 null, // No room key yet
+                                 null, // No headers yet (could fetch if needed but expensive for list)
+                                 room.id,
+                                 room.last_message_key_version
+                             );
+                             if (decrypted && decrypted !== '[Decryption Error]') {
+                                 return { ...room, last_message_plaintext: decrypted };
+                             }
+                        }
+                        return room;
+                    }));
+
                     setRooms(prev => {
-                        return enriched.map(newRoom => {
+                        return decryptedRooms.map(newRoom => {
                             const existing = prev.find(r => String(r.id) === String(newRoom.id));
                             if (existing) {
                                 // [NEW] Preserve plaintext from UI state if not in server response
