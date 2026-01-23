@@ -147,10 +147,27 @@ export default function Auth() {
 
             const endpoint = view === 'login' ? '/api/auth/login' : '/api/auth/signup';
             
+            // [OPTIMIZATION] Bundle Device Identity with Login
+            let identityPayload = {};
+            if (view === 'login') {
+                try {
+                    // Keys should be pre-warmed by AuthContext, so this is fast
+                    const deviceId = cryptoManager.deviceId;
+                    const publicKey = await cryptoManager.getPublicKey();
+                    const signingPublicKey = await cryptoManager.getSigningPublicKey();
+                    
+                    if (deviceId && publicKey) {
+                        identityPayload = { deviceId, publicKey, signingPublicKey };
+                    }
+                } catch (e) {
+                    console.warn('[Login] Failed to bundle identity:', e);
+                }
+            }
+
             const res = await fetch(`${import.meta.env.VITE_API_URL}${endpoint}`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(formData)
+                body: JSON.stringify({ ...formData, ...identityPayload }) // Bundle it!
             });
             
             const data = await res.json();

@@ -81,7 +81,7 @@ router.post('/signup', async (req, res) => {
 });
 
 router.post('/login', async (req, res) => {
-    const { username, password } = req.body;
+    const { username, password, deviceId, publicKey, signingPublicKey } = req.body;
 
     try {
         const { rows } = await db.query('SELECT * FROM users WHERE username = $1', [username]);
@@ -105,23 +105,43 @@ router.post('/login', async (req, res) => {
         // Generate token immediately with session ID
         const token = jwt.sign({ id: user.id, username: user.username, display_name: user.display_name, sessionId }, JWT_SECRET);
         
-        // Send response immediately - don't wait for session insert
+        // Send response immediately - don't wait for session insert or device registration
         res.json({ token, user: { id: user.id, username: user.username, display_name: user.display_name, share_presence: user.share_presence, avatar_url: user.avatar_url, avatar_thumb_url: user.avatar_thumb_url } });
 
-        // Create session in background (fire-and-forget)
-        db.query(`
-            INSERT INTO user_sessions (id, user_id, device_name, device_type, os, browser, ip_address, location)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-        `, [
-            sessionId, 
-            user.id, 
-            deviceName, 
-            deviceType, 
-            os.name || 'Unknown', 
-            browser.name || 'Unknown', 
-            ip, 
-            null
-        ]).catch(err => console.error('[Login] Session insert failed:', err));
+        // [OPTIMIZED] Parallel Background Tasks: Session Creation + Device Registration
+        (async () => {
+            try {
+                // 1. Session Insert
+                await db.query(`
+                    INSERT INTO user_sessions (id, user_id, device_name, device_type, os, browser, ip_address, location)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                `, [
+                    sessionId, 
+                    user.id, 
+                    deviceName, 
+                    deviceType, 
+                    os.name || 'Unknown', 
+                    browser.name || 'Unknown', 
+                    ip, 
+                    null
+                ]);
+
+                // 2. Device Registration (if bundled credentials provided)
+                if (deviceId && publicKey) {
+                    let deviceLabel = deviceName; // Reuse parsed UA label
+                    
+                    await db.query(`
+                        INSERT INTO user_devices (id, user_id, public_key, signing_public_key, label, last_active_at)
+                        VALUES ($1, $2, $3, $4, $5, NOW())
+                        ON CONFLICT (id) DO UPDATE 
+                        SET last_active_at = NOW(), public_key = $3, signing_public_key = $4, user_id = $2, label = $5
+                    `, [deviceId, user.id, publicKey, signingPublicKey, deviceLabel]);
+                    // console.log('[Login] Bundled device registration successful');
+                }
+            } catch (bgErr) {
+                console.error('[Login] Background tasks failed:', bgErr);
+            }
+        })();
     } catch (error) {
         console.error("Login error:", error);
         

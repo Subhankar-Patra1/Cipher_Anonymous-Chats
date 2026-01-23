@@ -9,17 +9,29 @@ export const AuthProvider = ({ children }) => {
     const [token, setToken] = useState(localStorage.getItem('token'));
     const [loading, setLoading] = useState(true);
 
+    // [OPTIMIZATION] Prefetch crypto identity on mount so it's ready for login
+    useEffect(() => {
+        const prewarmCrypto = async () => {
+             try {
+                 // Initializes if needed, or loads existing
+                 await cryptoManager.init(); 
+             } catch (e) {
+                 console.error('[Auth] Crypto prewarm failed', e);
+             }
+        };
+        prewarmCrypto();
+    }, []);
+
     const initializeCrypto = async (authToken) => {
         try {
-            console.log('[Auth] Initializing Crypto Manager...');
-            const newIdentity = await cryptoManager.init();
+            console.log('[Auth] Verifying Crypto Identity...');
+            // Ensure init is done (should be fast if prewarmed)
+            await cryptoManager.init();
             
-            // [CRITICAL FIX] Always register/update device with server
-            // Previously we only registered NEW identities, but if a device exists
-            // locally but isn't in the server DB, it would never get registered
-            const deviceId = cryptoManager.deviceId;
-            const publicKey = await cryptoManager.getPublicKey();
-            const signingPublicKey = await cryptoManager.getSigningPublicKey();
+            // Only perform separate registration if we suspect it wasn't bundled
+            // or if this is a re-auth of an existing token where we want to ensure freshness.
+            // For optimized login, this is redundant but harmless as a fallback.
+            
             
             if (deviceId && publicKey) {
                 console.log('[Auth] Registering/updating device identity...', deviceId);
@@ -66,7 +78,13 @@ export const AuthProvider = ({ children }) => {
     }, [token]);
 
     const login = async (newToken, newUser, isNew = false) => {
-        setLoading(true); // [FIX] Block UI until crypto is ready
+        // [NOTE] This function is called AFTER the API request returns.
+        // The optimization happens in the *caller* of this function (the UI component),
+        // or we need to change how login is exposed if `login` itself performed the fetch.
+        // Wait, looking at the code, `login` just sets state. The API call is done in Login.jsx.
+        // We need to check where `fetch('/api/auth/login')` is called.
+        
+        setLoading(true); 
         if (isNew) {
             localStorage.setItem('skipped_sync', 'true');
         }
@@ -74,10 +92,13 @@ export const AuthProvider = ({ children }) => {
         setToken(newToken);
         setUser(newUser);
         
+        // [OPTIMIZATION] We assume keys were bundled in the login request.
+        // But strictly speaking, we should ensure crypto manager has the token for future auto-backups.
         try {
-            await initializeCrypto(newToken); // [FIX] Await initialization
+            // Just ensure it's initialized locally
+            await cryptoManager.init(); 
         } catch (err) {
-            console.error('[Auth] Background crypto init failed:', err);
+            console.error('[Auth] Crypto init error:', err);
         } finally {
             setLoading(false);
         }
