@@ -15,6 +15,27 @@ export const CallProvider = ({ children, socket }) => {
     const [callDetails, setCallDetails] = useState(null); // { callerId, callerName, type, roomId }
     const [remoteMediaStatus, setRemoteMediaStatus] = useState({ audio: true, video: true });
     const [currentFacingMode, setCurrentFacingMode] = useState('user');
+    const [hasMultipleCameras, setHasMultipleCameras] = useState(false);
+    
+    // Check for multiple cameras on mount
+    useEffect(() => {
+        const checkCameras = async () => {
+            try {
+                const devices = await navigator.mediaDevices.enumerateDevices();
+                const videoDevices = devices.filter(device => device.kind === 'videoinput');
+                setHasMultipleCameras(videoDevices.length > 1);
+            } catch (err) {
+                console.warn("Error checking cameras:", err);
+                setHasMultipleCameras(false);
+            }
+        };
+        
+        checkCameras();
+        
+        // Listen for device changes
+        navigator.mediaDevices.addEventListener('devicechange', checkCameras);
+        return () => navigator.mediaDevices.removeEventListener('devicechange', checkCameras);
+    }, []);
     
     // Refs for mutable state in callbacks
     const connectionRef = useRef(null);
@@ -362,7 +383,8 @@ export const CallProvider = ({ children, socket }) => {
             toggleVideo,
             switchCamera,
             remoteMediaStatus,
-            currentFacingMode
+            currentFacingMode,
+            hasMultipleCameras
         }}>
             {children}
         </CallContext.Provider>

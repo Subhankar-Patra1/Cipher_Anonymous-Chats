@@ -113,6 +113,9 @@ const LastMessagePreview = ({ room, user, hasSkippedSync }) => {
 
     // [NEW] Helper to render preview with mentions highlighted
     const renderPreviewRaw = (rawContent) => {
+        // [FIX] Handle retry delay state explicitly
+        if (rawContent === '__RETRY_DELAY__') return 'Waiting for keys...';
+
         // [FIX] Handle special markers and empty content
         if (!rawContent || rawContent === 'Waiting for key...' || rawContent === 'Decryption Error' || isDecryptionFailed) {
             if (hasSkippedSync) return 'History hidden';

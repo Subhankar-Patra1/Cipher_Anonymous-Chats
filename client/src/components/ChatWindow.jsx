@@ -2304,7 +2304,7 @@ export default function ChatWindow({
 
                     <div 
                         ref={headerRef}
-                        className="flex-1 min-w-0 cursor-pointer flex items-center gap-3" 
+                        className="flex-1 min-w-0 flex items-center gap-3 cursor-pointer"
                         onClick={() => {
                             if (room.type === 'direct') onOpenProfile(room.other_user_id, room.id, hasSkippedSync);
                             else setShowGroupInfo(true);
@@ -2366,16 +2366,28 @@ export default function ChatWindow({
                         {room.type === 'direct' && (
                             <>
                                 <button 
-                                    onClick={() => initiateCall(room.other_user_id || otherUserId, room.id, 'audio', room.name, room.avatar_url || room.avatar_thumb_url)}
-                                    className="p-2 text-slate-400 hover:text-emerald-500 dark:hover:text-emerald-400 transition-all rounded-full"
-                                    title="Voice Call"
+                                    onClick={() => {
+                                        const isUnknown = room.type === 'direct' && !room.username && !room.display_name;
+                                        if (!isUnknown) {
+                                            initiateCall(room.other_user_id || otherUserId, room.id, 'audio', room.name, room.avatar_url || room.avatar_thumb_url);
+                                        }
+                                    }}
+                                    className={`p-2 transition-all rounded-full ${(!room.username && !room.display_name) ? 'text-slate-300 dark:text-slate-700 cursor-not-allowed' : 'text-slate-400 hover:text-emerald-500 dark:hover:text-emerald-400'}`}
+                                    title={(!room.username && !room.display_name) ? "Cannot call deleted account" : "Voice Call"}
+                                    disabled={!room.username && !room.display_name}
                                 >
                                     <span className="material-symbols-outlined">call</span>
                                 </button>
                                 <button 
-                                    onClick={() => initiateCall(room.other_user_id || otherUserId, room.id, 'video', room.name, room.avatar_url || room.avatar_thumb_url)}
-                                    className="p-2 text-slate-400 hover:text-emerald-500 dark:hover:text-emerald-400 transition-all rounded-full"
-                                    title="Video Call"
+                                    onClick={() => {
+                                        const isUnknown = room.type === 'direct' && !room.username && !room.display_name;
+                                        if (!isUnknown) {
+                                            initiateCall(room.other_user_id || otherUserId, room.id, 'video', room.name, room.avatar_url || room.avatar_thumb_url);
+                                        }
+                                    }}
+                                    className={`p-2 transition-all rounded-full ${(!room.username && !room.display_name) ? 'text-slate-300 dark:text-slate-700 cursor-not-allowed' : 'text-slate-400 hover:text-emerald-500 dark:hover:text-emerald-400'}`}
+                                    title={(!room.username && !room.display_name) ? "Cannot call deleted account" : "Video Call"}
+                                    disabled={!room.username && !room.display_name}
                                 >
                                     <span className="material-symbols-outlined">videocam</span>
                                 </button>

@@ -21,6 +21,8 @@ import CreateBackupModal from './CreateBackupModal';
 import PhotoGalleryModal from './PhotoGalleryModal';
 
 
+
+
 const timeAgo = (dateString) => {
     if (!dateString) return '';
     const date = new Date(dateString);
@@ -105,7 +107,13 @@ export default function ProfilePanel({ isOpen = true, userId, roomId, onClose, o
     const [isEditModalOpen, setIsEditModalOpen] = useState(false);
     const [viewingImage, setViewingImage] = useState(null);
     const [avatarSourceRect, setAvatarSourceRect] = useState(null);
+    const [imgError, setImgError] = useState(false); // [NEW] Track image load error
     const avatarRef = useRef(null);
+
+    // [NEW] Reset error when avatar changes
+    useEffect(() => {
+        setImgError(false);
+    }, [profile?.avatar_url, profile?.avatar_thumb_url]);
 
     // [NEW] Multiple Profile Photos
     const [userPhotos, setUserPhotos] = useState([]);
@@ -797,8 +805,13 @@ export default function ProfilePanel({ isOpen = true, userId, roomId, onClose, o
                                     }
                                 }}
                             >
-                                {avatarSource ? (
-                                    <img src={avatarSource} alt="Avatar" className="w-full h-full object-cover" />
+                                {avatarSource && !imgError ? (
+                                    <img 
+                                        src={avatarSource} 
+                                        alt="Avatar" 
+                                        className="w-full h-full object-cover" 
+                                        onError={() => setImgError(true)}
+                                    />
                                 ) : (
                                     profile.display_name?.[0]?.toUpperCase()
                                 )}

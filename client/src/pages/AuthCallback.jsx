@@ -43,6 +43,11 @@ export default function AuthCallback() {
                     // Log in the user
                     await login(token, newUser, false);
                     
+                    // [NEW] Track Last Used Login Method
+                    if (provider) {
+                        localStorage.setItem('last_login_method', provider);
+                    }
+
                     // [NEW] If New User, redirect to Onboarding Flow (Profile -> Backup)
                     // We pass the recoveryCode to be handled there if needed (though Profile is step 1)
                     if (payload.isNewUser || recoveryCode) {

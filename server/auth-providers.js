@@ -47,6 +47,15 @@ passport.use(new GoogleStrategy({
         if (oauthAccounts.length > 0) {
             // Existing OAuth account - get user
             const { rows: users } = await db.query('SELECT * FROM users WHERE id = $1', [oauthAccounts[0].user_id]);
+            const user = users[0];
+
+            // [MODIFIED] If avatar is from Google, CLEAR IT to use fallback initials
+            // We check if it contains googleusercontent.com
+            if (user.avatar_url && user.avatar_url.includes('googleusercontent.com')) {
+                await db.query('UPDATE users SET avatar_url = NULL, avatar_thumb_url = NULL WHERE id = $1', [user.id]);
+                user.avatar_url = null;
+                user.avatar_thumb_url = null;
+            }
             
             // Update access token
             await db.query(
@@ -54,7 +63,7 @@ passport.use(new GoogleStrategy({
                 [accessToken, refreshToken, oauthAccounts[0].id]
             );
             
-            return done(null, users[0]);
+            return done(null, user);
         }
 
         // Check if user exists with this email (for account linking)
@@ -72,7 +81,7 @@ passport.use(new GoogleStrategy({
         if (!user) {
             const displayName = profile.displayName || profile.username || `User${Math.floor(Math.random() * 10000)}`;
             const username = `@${profile.id.substring(0, 15)}`; // Generate username from Google ID
-            const avatarUrl = profile.photos && profile.photos[0] ? profile.photos[0].value : null;
+            const avatarUrl = null; // [MODIFIED] Do not use Google photo by default
 
             // [NEW] Generate Recovery Code
             const recoveryCode = `RECOVERY-${crypto.randomBytes(4).toString('hex').toUpperCase()}-${crypto.randomBytes(4).toString('hex').toUpperCase()}`;
@@ -124,6 +133,14 @@ passport.use(new GitHubStrategy({
         if (oauthAccounts.length > 0) {
             // Existing OAuth account - get user
             const { rows: users } = await db.query('SELECT * FROM users WHERE id = $1', [oauthAccounts[0].user_id]);
+            const user = users[0];
+
+            // [MODIFIED] If avatar is from GitHub, CLEAR IT
+            if (user.avatar_url && (user.avatar_url.includes('githubusercontent.com') || user.avatar_url.includes('avatars.github'))) {
+                 await db.query('UPDATE users SET avatar_url = NULL, avatar_thumb_url = NULL WHERE id = $1', [user.id]);
+                 user.avatar_url = null;
+                 user.avatar_thumb_url = null;
+            }
             
             // Update access token
             await db.query(
@@ -131,7 +148,7 @@ passport.use(new GitHubStrategy({
                 [accessToken, oauthAccounts[0].id]
             );
             
-            return done(null, users[0]);
+            return done(null, user);
         }
 
         // Get primary email from GitHub
@@ -149,7 +166,7 @@ passport.use(new GitHubStrategy({
         if (!user) {
             const displayName = profile.displayName || profile.username || `User${Math.floor(Math.random() * 10000)}`;
             const username = `@${profile.username || profile.id.substring(0, 15)}`;
-            const avatarUrl = profile.photos && profile.photos[0] ? profile.photos[0].value : null;
+            const avatarUrl = null; // [MODIFIED] Do not use GitHub photo by default
 
             // [NEW] Generate Recovery Code
             const recoveryCode = `RECOVERY-${crypto.randomBytes(4).toString('hex').toUpperCase()}-${crypto.randomBytes(4).toString('hex').toUpperCase()}`;

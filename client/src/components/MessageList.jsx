@@ -442,9 +442,11 @@ export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone,
                         <div 
                             onClick={(e) => {
                                 e.stopPropagation();
-                                if (!isAi && onOpenProfile) onOpenProfile(msg.user_id);
+                                const isUnknown = !msg.display_name && !msg.username;
+                                if (!isAi && !isUnknown && onOpenProfile) onOpenProfile(msg.user_id);
                             }}
-                            className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] text-white font-bold overflow-hidden cursor-pointer hover:opacity-80 transition-opacity ${isAi ? 'bg-fuchsia-50 dark:bg-fuchsia-900/10 border border-fuchsia-100 dark:border-fuchsia-800/30' : (!msg.avatar_thumb_url ? 'bg-gradient-to-br from-indigo-500 to-violet-600' : 'bg-slate-200 dark:bg-slate-800')}`}
+                            className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] text-white font-bold overflow-hidden cursor-pointer hover:opacity-80 transition-opacity ${isAi ? 'bg-fuchsia-50 dark:bg-fuchsia-900/10 border border-fuchsia-100 dark:border-fuchsia-800/30' : (!msg.avatar_thumb_url ? 'bg-gradient-to-br from-indigo-500 to-violet-600' : 'bg-slate-200 dark:bg-slate-800')} 
+                            ${(!msg.display_name && !msg.username) ? '!cursor-default hover:opacity-100' : ''}`}
                         >
                             {isAi ? (
                                 <SparkleLogo className="w-3.5 h-3.5" />
@@ -458,9 +460,11 @@ export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone,
                         <span 
                             onClick={(e) => {
                                 e.stopPropagation();
-                                if (!isAi && onOpenProfile) onOpenProfile(msg.user_id);
+                                const isUnknown = !msg.display_name && !msg.username;
+                                if (!isAi && !isUnknown && onOpenProfile) onOpenProfile(msg.user_id);
                             }}
-                            className={`text-xs font-medium cursor-pointer hover:underline transition-colors ${isAi ? 'text-transparent bg-clip-text bg-gradient-to-r from-fuchsia-500 to-purple-600 font-bold' : 'text-slate-500 dark:text-slate-400'}`}
+                            className={`text-xs font-medium cursor-pointer hover:underline transition-colors ${isAi ? 'text-transparent bg-clip-text bg-gradient-to-r from-fuchsia-500 to-purple-600 font-bold' : 'text-slate-500 dark:text-slate-400'}
+                            ${(!msg.display_name && !msg.username) ? '!cursor-default !no-underline' : ''}`}
                         >
                             {renderTextWithEmojis(isAi ? (msg.display_name && msg.display_name !== 'Assistant' ? msg.display_name : 'Sparkle AI') : (msg.display_name || msg.username || 'Unknown User'))}
                         </span>

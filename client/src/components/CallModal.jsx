@@ -82,7 +82,8 @@ const CallModal = () => {
         toggleVideo,
         switchCamera,
         remoteMediaStatus,
-        currentFacingMode
+        currentFacingMode,
+        hasMultipleCameras
     } = useCall();
     const [isMicOn, setIsMicOn] = useState(true);
     const [isVideoOn, setIsVideoOn] = useState(true);
@@ -368,9 +369,11 @@ const CallModal = () => {
                                             </motion.button>
                                             {isVideoCall && (
                                                 <div className="flex gap-4">
-                                                    <motion.button onClick={handleSwitchCamera} whileTap={{ scale: 0.95 }} className="w-12 h-12 rounded-full flex items-center justify-center backdrop-blur-md border border-white/10 bg-white/10 text-white">
-                                                        <span className="material-symbols-outlined">flip_camera_ios</span>
-                                                    </motion.button>
+                                                    {hasMultipleCameras && (
+                                                        <motion.button onClick={handleSwitchCamera} whileTap={{ scale: 0.95 }} className="w-12 h-12 rounded-full flex items-center justify-center backdrop-blur-md border border-white/10 bg-white/10 text-white">
+                                                            <span className="material-symbols-outlined">flip_camera_ios</span>
+                                                        </motion.button>
+                                                    )}
                                                     <motion.button onClick={handleToggleVideo} whileTap={{ scale: 0.95 }} className={`w-12 h-12 rounded-full flex items-center justify-center backdrop-blur-md border border-white/10 ${isVideoOn ? 'bg-white/10 text-white' : 'bg-white text-black'}`}>
                                                         <span className="material-symbols-outlined">{isVideoOn ? 'videocam' : 'videocam_off'}</span>
                                                     </motion.button>
@@ -399,7 +402,7 @@ const CallModal = () => {
                                                         <span className="material-symbols-outlined">{isMicOn ? 'mic' : 'mic_off'}</span>
                                                     </motion.button>
                                                     
-                                                    {isVideoOn && (
+                                                    {isVideoOn && hasMultipleCameras && (
                                                         <motion.button onClick={handleSwitchCamera} whileTap={{ scale: 0.95 }} className="w-12 h-12 md:w-14 md:h-14 rounded-full flex items-center justify-center backdrop-blur-md border border-white/10 shadow-lg bg-white/20 text-white hover:bg-white/30 transition-all">
                                                             <span className="material-symbols-outlined">flip_camera_ios</span>
                                                         </motion.button>

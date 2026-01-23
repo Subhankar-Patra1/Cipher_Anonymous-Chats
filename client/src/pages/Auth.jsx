@@ -183,6 +183,9 @@ export default function Auth() {
                 return;
             }
 
+            // [NEW] Track Last Used Login Method
+            localStorage.setItem('last_login_method', 'password');
+
             login(data.token, data.user, view === 'signup');
 
             // Check for pending invite logic...
@@ -829,7 +832,7 @@ export default function Auth() {
                             </div>
 
                             {/* OAuth Buttons */}
-                            <OAuthButtons mode={view} />
+                            <OAuthButtons mode={view} lastUsedMethod={localStorage.getItem('last_login_method')} />
                         </>
                     )}
                     

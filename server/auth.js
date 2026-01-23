@@ -87,7 +87,17 @@ router.post('/login', async (req, res) => {
         const { rows } = await db.query('SELECT * FROM users WHERE username = $1', [username]);
         const user = rows[0];
 
-        if (!user || !(await bcrypt.compare(password, user.password_hash))) {
+        if (!user) {
+            return res.status(401).json({ error: 'Invalid credentials' });
+        }
+
+        // Check if user has a password (if not, they signed up via OAuth)
+        if (!user.password_hash) {
+            const authMethod = user.auth_method ? ` via ${user.auth_method}` : ' with Google or GitHub';
+            return res.status(400).json({ error: `This account was created${authMethod}. Please log in using that method.` });
+        }
+
+        if (!(await bcrypt.compare(password, user.password_hash))) {
             return res.status(401).json({ error: 'Invalid credentials' });
         }
 
