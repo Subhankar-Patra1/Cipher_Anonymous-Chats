@@ -479,18 +479,25 @@ export default function Dashboard() {
     }, [socket, triggerSync, token, hasSkippedSync, user]);
 
     useEffect(() => {
-        console.log(`[Dashboard] Initializing Socket. token=${!!token}, deviceId=${cryptoManager.deviceId}`);
+        // [FIX] robust check for deviceId
+        const deviceId = cryptoManager.deviceId;
+        
+        console.log(`[Dashboard] Initializing Socket. token=${!!token} deviceId=${deviceId}`);
+        
         const newSocket = io(import.meta.env.VITE_API_URL, {
             auth: { 
                 token,
-                deviceId: cryptoManager.deviceId 
+                deviceId: deviceId 
             },
             // Force transport to avoid some proxy issues if any
             transports: ['websocket', 'polling'] 
         });
 
         newSocket.on('connect', () => {
-            console.log(`[Dashboard] Socket connected! ID=${newSocket.id}`);
+            console.log(`[Dashboard] Socket connected! ID=${newSocket.id} DeviceID=${deviceId}`);
+            if (!deviceId) {
+                console.error('[Dashboard] Socket connected WITHOUT DeviceID! Sync will fail.');
+            }
         });
 
         newSocket.on('connect_error', (err) => {
@@ -1352,6 +1359,7 @@ export default function Dashboard() {
         // --- [PHASE 1] KEY SYNC HANDLERS (GLOBAL) ---
         newSocket.on('request_key_sync', async (payload) => {
             console.log(`[Sync] Received sync request from ${payload.targetDeviceId}`, payload);
+            console.log('[Sync] Setting pending request state', payload);
             setPendingSyncRequest(payload);
             
             // Force a browser notification as secondary alert
