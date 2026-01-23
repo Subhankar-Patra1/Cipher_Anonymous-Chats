@@ -56,10 +56,36 @@ app.use(cors({
 }));
 app.use(express.json());
 
+// [OAuth] Session middleware for Passport.js
+const session = require('express-session');
+const pgSession = require('connect-pg-simple')(session);
+const passport = require('passport');
+
+app.use(session({
+    store: new pgSession({
+        pool: db.pool,
+        tableName: 'session' // PostgreSQL will auto-create
+    }),
+    secret: process.env.SESSION_SECRET || 'fallback-secret-change-in-production',
+    resave: false,
+    saveUninitialized: false,
+    cookie: {
+        secure: process.env.NODE_ENV === 'production',
+        maxAge: 30 * 24 * 60 * 60 * 1000 // 30 days
+    }
+}));
+
+app.use(passport.initialize());
+app.use(passport.session());
+
 // app.use((req, res, next) => {
 //     console.log(`${req.method} ${req.url}`);
 //     next();
 // });
+
+// [OAuth] OAuth provider routes
+const authProviders = require('./auth-providers');
+app.use('/api/auth', authProviders);
 
 const authRoutes = require('./auth');
 app.use('/api/auth', authRoutes);
@@ -538,7 +564,7 @@ io.on('connection', async (socket) => {
     });
 
     // [UPDATED] Send Message with Acknowledgement Support
-    socket.on('send_message', async ({ roomId, content, replyToMessageId, tempId, ciphertext, iv, salt, keyVersion, meta, signature, signatureVersion, senderDeviceId, distribution_headers, mention_user_ids }, callback) => {
+    socket.on('send_message', async ({ roomId, content, replyToMessageId, tempId, ciphertext, iv, salt, keyVersion, meta, signature, signatureVersion, senderDeviceId, distribution_headers, mention_user_ids, created_at }, callback) => {
         // Callback is optional (for backward compatibility), but required for offline sync.
         const safeCallback = typeof callback === 'function' ? callback : () => {};
 
@@ -596,9 +622,10 @@ io.on('connection', async (socket) => {
 
                 let info;
                 try {
+                    // [FIX] Use provided created_at for retry scenarios to preserve message order
                     const insertRes = await db.query(
-                        `INSERT INTO messages (room_id, user_id, content, reply_to_message_id, blocked_for_user_id, ciphertext, iv, salt, key_version, meta_type, temp_id, signature, signature_version, sender_device_id, distribution_headers, mention_user_ids) 
-                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16) 
+                        `INSERT INTO messages (room_id, user_id, content, reply_to_message_id, blocked_for_user_id, ciphertext, iv, salt, key_version, meta_type, temp_id, signature, signature_version, sender_device_id, distribution_headers, mention_user_ids, created_at) 
+                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, COALESCE($17, NOW())) 
                         RETURNING id, status, reply_to_message_id, created_at`,
                         [
                             roomId, 
@@ -616,7 +643,8 @@ io.on('connection', async (socket) => {
                             signatureVersion || 1,
                             senderDeviceId || null,
                             distribution_headers || null,
-                            mention_user_ids || null
+                            mention_user_ids || null,
+                            created_at || null
                         ]
                     );
                     info = insertRes.rows[0];
@@ -1074,7 +1102,7 @@ io.on('connection', async (socket) => {
 
             if (res.rows[0]) {
                 const msgRes = await db.query(`
-                    SELECT room_id, content, type, ciphertext, iv, salt, key_version, temp_id 
+                    SELECT room_id, content, type, ciphertext, iv, salt, key_version, temp_id, file_name 
                     FROM messages WHERE id = $1
                 `, [messageId]);
                 const msgData = msgRes.rows[0];
@@ -1100,6 +1128,7 @@ io.on('connection', async (socket) => {
                         // [NEW] Message metadata for sidebar preview
                         message_content: msgData.content,
                         message_type: msgData.type,
+                        message_file_name: msgData.file_name,
                         message_ciphertext: msgData.ciphertext,
                         message_iv: msgData.iv,
                         message_salt: msgData.salt,
@@ -1130,7 +1159,7 @@ io.on('connection', async (socket) => {
 
             if (res.rows.length > 0) {
                 const msgRes = await db.query(`
-                    SELECT room_id, content, type, ciphertext, iv, salt, key_version, temp_id 
+                    SELECT room_id, content, type, ciphertext, iv, salt, key_version, temp_id, file_name 
                     FROM messages WHERE id = $1
                 `, [messageId]);
                 const msgData = msgRes.rows[0];
@@ -1147,6 +1176,7 @@ io.on('connection', async (socket) => {
                         // [NEW] Metadata even for unreact (can be used to restore message preview)
                         message_content: msgData.content,
                         message_type: msgData.type,
+                        message_file_name: msgData.file_name,
                         message_ciphertext: msgData.ciphertext,
                         message_iv: msgData.iv,
                         message_salt: msgData.salt,
@@ -1246,7 +1276,8 @@ async function getLatestMessageMetadata(roomId) {
     return res.rows[0];
 }
 
-const PORT = process.env.PORT || 3000;
+// Force Port 5000
+const PORT = 5000;
 server.listen(PORT, () => {
     console.log(`Server running on port ${PORT}`);
 });

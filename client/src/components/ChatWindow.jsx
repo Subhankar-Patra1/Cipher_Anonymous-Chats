@@ -1176,6 +1176,7 @@ export default function ChatWindow({
                 room_id: room.id,
                 user_id: user.id,
                 content,
+                type: 'text',
                 replyTo: finalReplyTo || null,
                 created_at: timestamp,
                 username: user.username,
@@ -1185,15 +1186,15 @@ export default function ChatWindow({
                 isDecrypted: true // Flag for UI to ignore decryption logic
             };
 
+            // [FIX] Update Sidebar FIRST (synchronously, before any async ops)
+            if (onMessageSent) {
+                onMessageSent(room.id, tempMsg); 
+            }
+
             // 1. SAVE TO DEXIE (Trigger Instant Render via useLiveQuery)
             await saveLocalMessage(tempMsg);
             
             setReplyTo(null);
-            
-            // [NEW] Optimistic Sidebar Update - Immediate (Zero Latency)
-            if (onMessageSent) {
-                onMessageSent(room.id, tempMsg); 
-            }
             
             if (isOffline) {
                 console.log('[Offline] Message queued in Dexie:', tempId);
@@ -1323,7 +1324,7 @@ export default function ChatWindow({
                              if (response && response.status === 'ok') {
                                  // UPDATE SUCCESS IN DEXIE
                                  await updateLocalMessage(tempId, {
-                                     id: response.messageId || tempId,
+                                     id: String(response.messageId || tempId),
                                      status: 'sent'
                                  });
 
@@ -1409,15 +1410,15 @@ export default function ChatWindow({
             isDecrypted: true
         };
 
+        // [FIX] Update Sidebar FIRST (synchronously, before any async ops)
+        if (onMessageSent) {
+            onMessageSent(room.id, tempMsg);
+        }
+
         // 1. SAVE TO DEXIE
         await saveLocalMessage(tempMsg);
         
         setReplyTo(null);
-
-        // [NEW] Optimistic Sidebar Update for Audio
-        if (onMessageSent) {
-            onMessageSent(room.id, tempMsg);
-        }
 
         const formData = new FormData();
         formData.append('audio', blob);
@@ -1430,9 +1431,11 @@ export default function ChatWindow({
         try {
             const result = await uploadAudioWithProgress(formData, tempId);
             // [FIX] Immediately reconcile optimistic message with server response
+            // [FIX] Exclude created_at to preserve original timestamp for message ordering
+            const { created_at, ...resultWithoutTimestamp } = result;
             await updateLocalMessage(tempId, {
-                ...result,
-                id: result.id,
+                ...resultWithoutTimestamp,
+                id: String(result.id),
                 status: result.status || 'sent',
                 uploadStatus: null, // Clear uploading state
                 audio_url: tempMsg.audio_url?.startsWith('blob:') ? tempMsg.audio_url : result.audio_url
@@ -1444,9 +1447,94 @@ export default function ChatWindow({
     };
 
     const handleRetry = async (msg) => {
-        if (!msg.localBlob) return;
+        const msgId = msg.tempId || msg.id;
+        // [FIX] Preserve original created_at to maintain message position
+        const originalCreatedAt = msg.created_at;
         
-        await updateLocalMessage(msg.tempId || msg.id, { 
+        // Handle text/GIF message retry (re-send via socket)
+        if (msg.type === 'text' || msg.type === 'gif' || (!msg.type && msg.content)) {
+            await updateLocalMessage(msgId, { status: 'sending' });
+            
+            try {
+                // Re-encrypt and send
+                let roomKeyData = await cryptoManager.getRoomKey(room.id);
+                const myDeviceId = await cryptoManager.init().then(i => i?.deviceId || cryptoManager.deviceId);
+                
+                // Get devices for distribution headers
+                const devRes = await fetch(`${import.meta.env.VITE_API_URL}/api/rooms/${room.id}/devices`, {
+                    headers: { Authorization: `Bearer ${token}` }
+                });
+                const devices = devRes.ok ? await devRes.json() : [];
+                
+                if (roomKeyData) {
+                    const { ciphertext, iv } = await cryptoManager.encryptMessage(msg.content, roomKeyData.key, msgId);
+                    const signature = await cryptoManager.signMessage(ciphertext, iv, msgId, roomKeyData.version);
+                    const distHeaders = await cryptoManager.getDistributionHeaders(room.id, roomKeyData.key, roomKeyData.version, devices);
+                    
+                    const payload = {
+                        roomId: room.id,
+                        content: '',
+                        ciphertext,
+                        iv,
+                        keyVersion: roomKeyData.version,
+                        replyToMessageId: msg.replyTo ? msg.replyTo.id : null,
+                        tempId: msgId,
+                        signature,
+                        signatureVersion: 1,
+                        senderDeviceId: myDeviceId,
+                        distribution_headers: distHeaders,
+                        meta: msg.type === 'gif' ? { type: 'gif', gif_url: msg.gif_url } : { type: 'text' },
+                        created_at: originalCreatedAt // [FIX] Preserve original position
+                    };
+                    
+                    if (socket.connected) {
+                        socket.emit('send_message', payload, async (response) => {
+                            if (response && response.status === 'ok') {
+                                await updateLocalMessage(msgId, { id: String(response.messageId || msgId), status: 'sent' });
+                            } else {
+                                await updateLocalMessage(msgId, { status: 'failed' });
+                            }
+                        });
+                    } else {
+                        await updateLocalMessage(msgId, { status: 'pending' });
+                    }
+                } else {
+                    // No encryption key, send plaintext fallback
+                    const payload = {
+                        roomId: room.id,
+                        content: msg.content,
+                        replyToMessageId: msg.replyTo ? msg.replyTo.id : null,
+                        tempId: msgId,
+                        meta: msg.type === 'gif' ? { type: 'gif', gif_url: msg.gif_url } : { type: 'text' },
+                        created_at: originalCreatedAt // [FIX] Preserve original position
+                    };
+                    
+                    if (socket.connected) {
+                        socket.emit('send_message', payload, async (response) => {
+                            if (response && response.status === 'ok') {
+                                await updateLocalMessage(msgId, { id: String(response.messageId || msgId), status: 'sent' });
+                            } else {
+                                await updateLocalMessage(msgId, { status: 'failed' });
+                            }
+                        });
+                    } else {
+                        await updateLocalMessage(msgId, { status: 'pending' });
+                    }
+                }
+            } catch (err) {
+                console.error('[Retry] Text message retry failed:', err);
+                await updateLocalMessage(msgId, { status: 'failed' });
+            }
+            return;
+        }
+        
+        // For media uploads, require localBlob
+        if (!msg.localBlob && !msg.localBlobs) {
+            console.warn('[Retry] No local blob found for media message');
+            return;
+        }
+        
+        await updateLocalMessage(msgId, { 
             uploadStatus: 'uploading', 
             uploadProgress: 0, 
             status: 'sending' 
@@ -1455,7 +1543,11 @@ export default function ChatWindow({
         const formData = new FormData();
         formData.append('roomId', room.id);
         if (msg.replyTo) formData.append('replyToMessageId', msg.replyTo.id);
-        formData.append('tempId', msg.tempId || msg.id);
+        formData.append('tempId', msgId);
+        // [FIX] Pass original created_at to preserve message position on retry
+        if (originalCreatedAt) {
+            formData.append('created_at', originalCreatedAt);
+        }
 
         if (msg.type === 'audio') {
             formData.append('audio', msg.localBlob);
@@ -1463,10 +1555,21 @@ export default function ChatWindow({
             formData.append('waveform', JSON.stringify(msg.audio_waveform));
             
             try {
-                await uploadAudioWithProgress(formData, msg.tempId || msg.id);
+                const result = await uploadAudioWithProgress(formData, msgId);
+                // [FIX] Update local message with server response
+                await updateLocalMessage(msgId, {
+                    id: String(result.id),
+                    audio_url: result.audio_url,
+                    status: result.status || 'sent',
+                    uploadStatus: null
+                });
+                // [FIX] Update sidebar status
+                if (onMessageStatusUpdate) {
+                    onMessageStatusUpdate(room.id, msgId, 'sent', result.id);
+                }
             } catch (err) {
                 console.error(err);
-                await updateLocalMessage(msg.tempId || msg.id, { 
+                await updateLocalMessage(msgId, { 
                     uploadStatus: 'failed', 
                     status: 'error' 
                 });
@@ -1479,12 +1582,60 @@ export default function ChatWindow({
             }
             
             formData.append('caption', msg.caption || '');
+            formData.append('isViewOnce', msg.is_view_once || false);
+            
+            // Add width/height metadata
+            if (msg.attachments && msg.attachments.length > 0) {
+                msg.attachments.forEach(att => {
+                    formData.append('widths', att.width || 0);
+                    formData.append('heights', att.height || 0);
+                });
+            }
 
             try {
-                await uploadImageWithProgress(formData, msg.tempId || msg.id);
+                const result = await uploadImageWithProgress(formData, msgId);
+                // [FIX] Update local message with server response (preserve local blob URLs)
+                await updateLocalMessage(msgId, {
+                    id: String(result.id),
+                    image_url: msg.image_url?.startsWith('blob:') ? msg.image_url : result.image_url,
+                    attachments: result.attachments,
+                    status: result.status || 'sent',
+                    uploadStatus: null,
+                    viewed_by: result.viewed_by
+                });
+                // [FIX] Update sidebar status
+                if (onMessageStatusUpdate) {
+                    onMessageStatusUpdate(room.id, msgId, 'sent', result.id);
+                }
             } catch (err) {
                  console.error(err);
-                 await updateLocalMessage(msg.tempId || msg.id, { status: 'error' });
+                 await updateLocalMessage(msgId, { status: 'error', uploadStatus: 'failed' });
+            }
+        } else if (msg.type === 'file') {
+            // File upload retry
+            formData.append('file', msg.localBlob);
+            formData.append('caption', msg.caption || '');
+            
+            try {
+                const result = await uploadFileWithProgress(formData, msgId);
+                // [FIX] Preserve original created_at to maintain message order - don't overwrite local timestamp
+                await updateLocalMessage(msgId, {
+                    id: String(result.id),
+                    file_url: result.file_url,
+                    file_name: result.file_name,
+                    file_size: result.file_size,
+                    file_type: result.file_type,
+                    file_extension: result.file_extension,
+                    status: result.status || 'sent',
+                    uploadStatus: null
+                });
+                // [FIX] Update sidebar status
+                if (onMessageStatusUpdate) {
+                    onMessageStatusUpdate(room.id, msgId, 'sent', result.id);
+                }
+            } catch (err) {
+                console.error(err);
+                await updateLocalMessage(msgId, { status: 'error', uploadStatus: 'failed' });
             }
         }
     };
@@ -1683,13 +1834,13 @@ export default function ChatWindow({
             isDecrypted: true
         };
         
-        // 1. SAVE TO DEXIE
-        await saveLocalMessage(tempMsg);
-
-        // [NEW] Optimistic Sidebar Update for Single Image
+        // [FIX] Update Sidebar FIRST (synchronously, before any async ops)
         if (onMessageSent) {
             onMessageSent(room.id, tempMsg);
         }
+        
+        // 1. SAVE TO DEXIE
+        await saveLocalMessage(tempMsg);
 
         const formData = new FormData();
         formData.append('roomId', room.id);
@@ -1704,9 +1855,11 @@ export default function ChatWindow({
         try {
             const result = await uploadImageWithProgress(formData, tempId);
             // [FIX] Immediately reconcile optimistic message with server response
+            // [FIX] Exclude created_at to preserve original timestamp for message ordering
+            const { created_at, ...resultWithoutTimestamp } = result;
             await updateLocalMessage(tempId, {
-                ...result,
-                id: result.id,
+                ...resultWithoutTimestamp,
+                id: String(result.id),
                 status: result.status || 'sent',
                 image_url: tempMsg.image_url?.startsWith('blob:') ? tempMsg.image_url : result.image_url,
                 // [FIX] Preserve viewed_by if already set
@@ -1762,13 +1915,13 @@ export default function ChatWindow({
             isDecrypted: true
         };
         
-        // 1. SAVE TO DEXIE
-        await saveLocalMessage(tempMsg);
-        
-        // [NEW] Optimistic Sidebar Update for Group Images
+        // [FIX] Update Sidebar FIRST (synchronously, before any async ops)
         if (onMessageSent) {
             onMessageSent(room.id, tempMsg);
         }
+        
+        // 1. SAVE TO DEXIE
+        await saveLocalMessage(tempMsg);
 
         const formData = new FormData();
         formData.append('roomId', room.id);
@@ -1786,9 +1939,11 @@ export default function ChatWindow({
         try {
             const result = await uploadImageWithProgress(formData, tempId);
             // [FIX] Immediately reconcile optimistic message with server response
+            // [FIX] Exclude created_at to preserve original timestamp for message ordering
+            const { created_at, ...resultWithoutTimestamp } = result;
             await updateLocalMessage(tempId, {
-                ...result,
-                id: result.id,
+                ...resultWithoutTimestamp,
+                id: String(result.id),
                 status: result.status || 'sent',
                 // [FIX] Preserve viewed_by if already set
                 viewed_by: result.viewed_by
@@ -1869,7 +2024,14 @@ export default function ChatWindow({
                 if (xhr.status >= 200 && xhr.status < 300) {
                     resolve(JSON.parse(xhr.responseText));
                 } else {
-                    reject(new Error('Upload failed'));
+                    // [FIX] Parse and log detailed error from server
+                    let errorMsg = 'Upload failed';
+                    try {
+                        const errData = JSON.parse(xhr.responseText);
+                        errorMsg = errData.details || errData.error || 'Upload failed';
+                    } catch (e) {}
+                    console.error('File upload error:', xhr.status, errorMsg);
+                    reject(new Error(errorMsg));
                 }
             };
 
@@ -1909,6 +2071,11 @@ export default function ChatWindow({
             isDecrypted: true
         };
         
+        // [FIX] Update Sidebar FIRST (synchronously, before any async ops)
+        if (onMessageSent) {
+            onMessageSent(room.id, tempMsg);
+        }
+        
         // 1. SAVE TO DEXIE
         await saveLocalMessage(tempMsg);
         
@@ -1924,9 +2091,11 @@ export default function ChatWindow({
         try {
             const result = await uploadFileWithProgress(formData, tempId);
             // [FIX] Immediately reconcile optimistic message with server response
+            // [FIX] Exclude created_at to preserve original timestamp for message ordering
+            const { created_at, ...resultWithoutTimestamp } = result;
             await updateLocalMessage(tempId, {
-                ...result,
-                id: result.id,
+                ...resultWithoutTimestamp,
+                id: String(result.id),
                 status: result.status || 'sent',
                 uploadStatus: null // Clear uploading state
             });
@@ -1964,6 +2133,11 @@ export default function ChatWindow({
             status: 'sending',
             isDecrypted: true
         };
+
+        // [FIX] Update Sidebar FIRST (synchronously, before any async ops)
+        if (onMessageSent) {
+            onMessageSent(room.id, tempMsg);
+        }
 
         // 1. SAVE TO DEXIE
         await saveLocalMessage(tempMsg);

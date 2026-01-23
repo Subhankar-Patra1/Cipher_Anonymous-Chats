@@ -12,12 +12,13 @@ db.version(3).stores({
   pending_queue: '++localId, room_id'
 });
 
-// [NEW] Version 4: Add rooms table for caching decrypted sidebar preview
-db.version(4).stores({
+// [NEW] Version 5: Add users table for caching profiles
+db.version(5).stores({
   messages: '++localId, id, room_id, created_at, tempId, status', 
   keys: 'room_id',
   pending_queue: '++localId, room_id',
-  rooms: 'id' // Cache last_message_plaintext for sidebar
+  rooms: 'id',
+  users: 'id' // Cache profiles: id, username, display_name, avatar_url, bio, etc.
 });
 
 // [CRITICAL] Handle "UpgradeError: Not yet support for changing primary key"
@@ -36,6 +37,35 @@ db.open().catch(err => {
 export default db;
 
 // Helper functions for easy access
+
+export const saveLocalUser = async (user) => {
+    try {
+        if (!user || !user.id) return;
+        // Don't cache groups_in_common deeply or sensitive fields if not needed
+        // Just cache appearance basics
+        const toCache = {
+            id: String(user.id),
+            username: user.username,
+            display_name: user.display_name,
+            avatar_url: user.avatar_url,
+            avatar_thumb_url: user.avatar_thumb_url,
+            bio: user.bio,
+            last_seen: user.last_seen,
+            cached_at: Date.now()
+        };
+        await db.users.put(toCache);
+    } catch (err) {
+        console.warn('[Dexie] Failed to cache user:', err);
+    }
+};
+
+export const getLocalUser = async (userId) => {
+    try {
+        return await db.users.get(String(userId));
+    } catch (err) {
+        return null;
+    }
+};
 
 export const saveLocalMessage = async (message) => {
     try {

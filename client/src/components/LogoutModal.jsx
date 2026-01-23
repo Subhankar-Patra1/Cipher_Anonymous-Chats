@@ -22,7 +22,7 @@ export default function LogoutModal({ isOpen, onClose, onConfirm }) {
                     <h3 className="text-xl font-bold text-slate-800 dark:text-white">Logout</h3>
                     <button 
                         onClick={!isLoading ? onClose : undefined} 
-                        className={`p-2 -mr-2 text-slate-400 hover:text-slate-600 dark:hover:text-white transition-colors rounded-full hover:bg-slate-100 dark:hover:bg-slate-800 ${isLoading ? 'opacity-50 cursor-not-allowed' : ''}`}
+                        className={`w-10 h-10 flex items-center justify-center text-slate-400 hover:text-slate-600 dark:hover:text-white transition-colors rounded-full hover:bg-slate-100 dark:hover:bg-slate-800 ${isLoading ? 'opacity-50 cursor-not-allowed' : ''}`}
                         disabled={isLoading}
                     >
                         <span className="material-symbols-outlined">close</span>

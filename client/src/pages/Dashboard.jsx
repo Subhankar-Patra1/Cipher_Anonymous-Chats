@@ -228,8 +228,12 @@ export default function Dashboard() {
                 senderPublicKey: myPubBase64
             });
             
-            setPendingSyncRequest(null);
-            showNotification('Chat history synced successfully!', 'success');
+            // [MODIFIED] Do not close modal immediately. Wait for sync_finished event.
+            // Update state to show loading UI in the modal.
+            setPendingSyncRequest(prev => ({ ...prev, status: 'approving' }));
+            // showNotification('Chat history synced successfully!', 'success'); // defer this too? OR just keep it. 
+            // Actually, "Synced successfully" implies done. Let's say "Keys sent" or just wait.
+
         } catch (e) {
             console.error('[Sync] Failed to provide keys', e);
             setPendingSyncRequest(null);
@@ -425,20 +429,45 @@ export default function Dashboard() {
     }, [fetchRooms]);
 
     const syncAttemptedRef = useRef(false);
+
+    // Check if backup exists
     useEffect(() => {
         if (!socket || syncAttemptedRef.current || hasSkippedSync) return;
-        const checkKeys = async () => {
+        
+        const checkRestoreStatus = async () => {
             const count = await countRoomKeys();
-            if (count === 0) {
-                syncAttemptedRef.current = true;
-                console.log('[Sync] No keys found locally. Delaying sync check (1.5s) to avoid race...');
-                setTimeout(() => {
-                    triggerSync();
-                }, 1500);
+            if (count > 0) return; // Already have keys
+            
+            syncAttemptedRef.current = true; // Prevent loop
+
+            try {
+                // 1. Check if Cloud Backup exists
+                const res = await fetch(`${import.meta.env.VITE_API_URL}/api/auth/backup`, {
+                    headers: { Authorization: `Bearer ${token}` }
+                });
+                
+                // If backup exists, trigger Restore Modal
+                if (res.ok) {
+                    const data = await res.json();
+                    if (data && (data.encrypted_blob || data.hasBackup)) { // Handle different API responses
+                        console.log('[Restore] Backup found. Prompting restore...');
+                        setShowRestoreModal(true);
+                        return;
+                    }
+                }
+            } catch (err) {
+                console.warn('[Restore] Failed to check backup status:', err);
             }
+
+            // 2. If no backup, fallback to P2P Sync (Existing Logic)
+            console.log('[Sync] No backup found. Delaying sync check (1.5s) to avoid race...');
+            setTimeout(() => {
+                 triggerSync();
+            }, 1500);
         };
-        checkKeys();
-    }, [socket, triggerSync]);
+
+        checkRestoreStatus();
+    }, [socket, triggerSync, token, hasSkippedSync]);
 
     useEffect(() => {
         console.log(`[Dashboard] Initializing Socket. token=${!!token}, deviceId=${cryptoManager.deviceId}`);
@@ -489,24 +518,50 @@ export default function Dashboard() {
              for (const msg of pending) {
                  try {
                      if (!newSocket.connected) break;
+                     
+                     // [FIX] For media messages (image, file, audio, gif), mark as 'error' so user can retry
+                     // These need HTTP uploads which can't be replayed via socket
+                     if (msg.type && msg.type !== 'text' && msg.type !== 'location' && msg.type !== 'poll') {
+                         // Media messages need to be retried manually (they have localBlob)
+                         if (msg.status === 'pending' || msg.status === 'sending') {
+                             await updateLocalMessage(msg.tempId || msg.id, { 
+                                 status: 'error',
+                                 uploadStatus: 'failed'
+                             });
+                             console.log(`[Offline] Media message ${msg.tempId} marked for retry`);
+                         }
+                         continue;
+                     }
+                     
+                     // [FIX] Include created_at in payload to preserve message position
+                     const payload = { ...msg, created_at: msg.created_at };
+                     
                      await new Promise((resolve, reject) => {
                          const timeout = setTimeout(() => reject(new Error('ACK Timeout')), 5000);
-                         newSocket.emit('send_message', msg, (response) => {
+                         newSocket.emit('send_message', payload, (response) => {
                              clearTimeout(timeout);
                              if (response && response.status === 'ok') resolve(response);
                              else reject(new Error(response?.error || 'Server Error'));
                          });
                      });
+                     
+                     // [FIX] Update Dexie status after successful send
+                     await updateLocalMessage(msg.tempId || msg.id, { 
+                         status: 'sent',
+                         id: msg.tempId // Keep the same ID for now, server will update via socket
+                     });
                      await deletePendingMessage(msg.tempId);
                      console.log(`[Offline] Synced message ${msg.tempId}`);
                      setRooms(prev => prev.map(r => {
-                         if (r.id === msg.roomId && String(r.last_message_id) === String(msg.tempId)) {
+                         if (String(r.id) === String(msg.roomId || msg.room_id) && String(r.last_message_id) === String(msg.tempId)) {
                              return { ...r, last_message_status: 'sent' };
                          }
                          return r;
                      }));
                  } catch (err) {
                      console.warn(`[Offline] Sync failed for ${msg.tempId}:`, err);
+                     // [FIX] Mark as error so user can see it failed
+                     await updateLocalMessage(msg.tempId || msg.id, { status: 'error' });
                      break; 
                  }
              }
@@ -654,10 +709,32 @@ export default function Dashboard() {
                          }).catch(console.error);
                       }
                       
-                      const isSameMessage = String(room.last_message_id) === String(msg.id) || String(room.last_message_id) === String(msg.temp_id || msg.tempId);
+                      const isSameMessage = String(room.last_message_id) === String(msg.id) || 
+                          String(room.last_message_id) === String(msg.temp_id || msg.tempId) ||
+                          String(room.last_message_id) === String(msg.tempId);
+                      
+                      // [FIX] Check if this is our own message echo (server confirming our sent message)
+                      const isOwnMessageEcho = String(msg.user_id) === String(user.id) && 
+                          (msg.temp_id || msg.tempId) && 
+                          (String(room.last_message_id) === String(msg.temp_id || msg.tempId) || 
+                           room.last_message_status === 'sending');
+                      
+                      // [FIX] Prevent older messages from overwriting newer optimistic updates
+                      const incomingMsgTime = new Date(msg.created_at).getTime();
+                      const currentMsgTime = room.last_message_at ? new Date(room.last_message_at).getTime() : 0;
+                      const isOlderMessage = incomingMsgTime < currentMsgTime && !isSameMessage && !isOwnMessageEcho;
+                      
+                      if (isOlderMessage) {
+                          // This is an older message arriving late, don't update sidebar preview
+                          // But still update official_last_message for reference if needed
+                          updatedRooms[roomIndex] = room;
+                          return updatedRooms;
+                      }
                       
                       let newContent = processedMsg.content || (processedMsg.ciphertext ? '🔒 Encrypted Message' : processedMsg.content);
-                      if (String(msg.user_id) === String(user.id) && isSameMessage && room.last_message_content && room.last_message_content !== '🔒 Encrypted Message') {
+                      
+                      // [FIX] Preserve our optimistic content when receiving echo of our own message
+                      if (isOwnMessageEcho && room.last_message_content && room.last_message_content !== '🔒 Encrypted Message') {
                           newContent = room.last_message_content;
                       }
                       
@@ -676,7 +753,15 @@ export default function Dashboard() {
                       room.last_message_sender_id = String(msg.user_id);
                       room.last_message_sender_name = msg.display_name || msg.username || 'Someone';
                       room.last_message_is_deleted = false;
-                      room.last_message_at = isSilent ? room.last_message_at : new Date().toISOString(); 
+                      room.last_message_at = isSilent ? room.last_message_at : new Date().toISOString();
+                      room.last_message_created_at = msg.created_at; // [FIX] Set created_at for reaction comparison
+                      
+                      // [FIX] Clear latest_reaction so new message shows instead of old reaction
+                      if (!isSilent) {
+                          room.latest_reaction = null;
+                          // [FIX] Clear last_message_reactions since new message has no reactions yet
+                          room.last_message_reactions = [];
+                      }
                       
                       // Handle media specific metadata for sidebar
                       if (msg.caption !== undefined) room.last_message_caption = msg.caption;
@@ -878,6 +963,7 @@ export default function Dashboard() {
                             // [NEW] Include message content for sidebar preview
                             message_content: metadata.message_content,
                             message_type: metadata.message_type,
+                            message_file_name: metadata.message_file_name,
                             message_ciphertext: metadata.message_ciphertext,
                             message_iv: metadata.message_iv,
                             message_key_version: metadata.message_key_version,
@@ -1335,6 +1421,10 @@ export default function Dashboard() {
 
         newSocket.on('sync_finished', () => {
             console.log('[Sync] Cleanup: Sync finished on another device.');
+            // Only show notification if we were the one approving (i.e. we have the modal open)
+            if (pendingSyncRequest) {
+                 showNotification('Sync completed successfully!', 'success');
+            }
             setPendingSyncRequest(null);
         });
 
@@ -1676,18 +1766,34 @@ export default function Dashboard() {
     const handleMessageSent = (roomId, message) => {
         setRooms(prev => {
             const updated = [...prev];
-            const idx = updated.findIndex(r => r.id === roomId);
+            const idx = updated.findIndex(r => String(r.id) === String(roomId));
             if (idx > -1) {
                 const room = { ...updated[idx] };
                 
                 // Update last message content for sidebar preview
-                room.last_message_content = message.content || (message.type === 'image' ? 'Sent an image' : 'Sent a message');
+                let previewContent = message.content;
+                if (message.type === 'image') previewContent = 'Sent an image';
+                else if (message.type === 'file') previewContent = message.file_name || 'Sent a file';
+                else if (message.type === 'audio') previewContent = 'Voice message';
+                else if (message.type === 'gif') previewContent = 'GIF';
+                else if (message.type === 'location') previewContent = 'Location';
+                else if (message.type === 'poll') previewContent = 'Poll';
+                else if (!previewContent) previewContent = 'Sent a message';
+                
+                room.last_message_content = previewContent;
                 room.last_message_ciphertext = null; 
-                room.last_message_type = message.type;
+                room.last_message_type = message.type || 'text';
                 room.last_message_sender_id = user.id;
                 room.last_message_status = 'sending'; 
                 room.last_message_at = new Date().toISOString(); 
-                room.last_message_id = message.tempId || message.id; 
+                room.last_message_created_at = message.created_at || new Date().toISOString(); // [FIX] Set created_at for reaction comparison
+                room.last_message_id = message.tempId || message.id;
+                room.last_message_file_name = message.file_name || null; // [FIX] Include file name
+                
+                // [FIX] Clear latest_reaction so new message shows instead of old reaction
+                room.latest_reaction = null;
+                // [FIX] Clear last_message_reactions since new message has no reactions yet
+                room.last_message_reactions = [];
                 
                 updated[idx] = room;
                 return sortRooms(updated);
@@ -1701,7 +1807,7 @@ export default function Dashboard() {
     const handleMessageStatusUpdate = (roomId, tempId, newStatus, newId) => {
          setRooms(prev => {
              const updated = [...prev];
-             const idx = updated.findIndex(r => r.id === roomId);
+             const idx = updated.findIndex(r => String(r.id) === String(roomId));
              if (idx > -1) {
                  const room = { ...updated[idx] };
                  // Check against both tempId and newId
@@ -1846,7 +1952,32 @@ export default function Dashboard() {
                 room.last_message_at = new Date().toISOString();
                 room.last_message_sender_id = message.user_id;
                 room.last_message_sender_name = message.display_name || message.username;
+            }
+            
+            // [FIX] Set latest_reaction for proper sidebar notification display
+            if (reaction) {
+                room.latest_reaction = {
+                    emoji: reaction,
+                    message_id: message.id,
+                    user_id: user.id,
+                    display_name: user.display_name || user.username,
+                    timestamp: new Date().toISOString(),
+                    message_content: message.content,
+                    message_type: message.type || 'text',
+                    message_file_name: message.file_name,
+                    message_ciphertext: message.ciphertext,
+                    message_iv: message.iv,
+                    message_key_version: message.key_version,
+                    message_temp_id: message.temp_id
+                };
             } else {
+                // Clear latest_reaction when unreacting (if it's for the same message)
+                if (room.latest_reaction && String(room.latest_reaction.message_id) === String(message.id)) {
+                    room.latest_reaction = null;
+                }
+            }
+            
+            if (!reaction) {
                 // Unreact on old message that isn't the preview: do nothing to sidebar
                 const updated = [...prev];
                 updated[idx] = room;
@@ -2252,6 +2383,27 @@ export default function Dashboard() {
                         if (action === 'delete') {
                             setActiveRoom(null);
                         }
+                        if (action === 'clear') {
+                            // Immediately clear last message in sidebar for this room
+                            // Use profileState.roomId or fall back to activeRoom.id
+                            const roomIdToClear = profileState.roomId || activeRoom?.id;
+                            if (roomIdToClear) {
+                                setRooms(prev => prev.map(r => 
+                                    String(r.id) === String(roomIdToClear) 
+                                        ? { 
+                                            ...r, 
+                                            last_message_id: null,
+                                            last_message_content: null,
+                                            last_message_type: null,
+                                            last_message_status: null,
+                                            last_message_sender_id: null,
+                                            last_message_created_at: null,
+                                            last_message_plaintext: null
+                                        } 
+                                        : r
+                                ));
+                            }
+                        }
                         fetchRooms();
                     }}
                     onGoToMessage={(msgId) => {
@@ -2290,20 +2442,33 @@ export default function Dashboard() {
                                 </span>
                             </p>
 
-                            <div className="space-y-3">
-                                <button 
-                                    onClick={handleApproveSync}
-                                    className="w-full py-3 rounded-xl bg-violet-600 hover:bg-violet-700 text-white font-bold transition-all shadow-lg shadow-violet-500/20"
-                                >
-                                    Approve and Sync
-                                </button>
-                                <button 
-                                    onClick={handleDenySyncRequest}
-                                    className="w-full py-3 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 font-bold hover:bg-slate-200 dark:hover:bg-slate-700 transition-all font-bold"
-                                >
-                                    Deny Request
-                                </button>
-                            </div>
+                            {pendingSyncRequest.status === 'approving' ? (
+                                <div className="py-8 animate-in fade-in duration-300">
+                                    <div className="relative mb-6 mx-auto w-16 h-16">
+                                        <div className="absolute inset-0 border-4 border-slate-100 dark:border-slate-800 rounded-full"></div>
+                                        <div className="absolute inset-0 border-t-4 border-violet-500 rounded-full animate-spin"></div>
+                                    </div>
+                                    <p className="text-slate-600 dark:text-slate-300 font-medium mb-2">Syncing history...</p>
+                                    <p className="text-xs text-slate-400 dark:text-slate-500">
+                                        Please wait while the new device decrypts your messages.
+                                    </p>
+                                </div>
+                            ) : (
+                                <div className="space-y-3">
+                                    <button 
+                                        onClick={handleApproveSync}
+                                        className="w-full py-3 rounded-xl bg-violet-600 hover:bg-violet-700 text-white font-bold transition-all shadow-lg shadow-violet-500/20"
+                                    >
+                                        Approve and Sync
+                                    </button>
+                                    <button 
+                                        onClick={handleDenySyncRequest}
+                                        className="w-full py-3 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 font-bold hover:bg-slate-200 dark:hover:bg-slate-700 transition-all font-bold"
+                                    >
+                                        Deny Request
+                                    </button>
+                                </div>
+                            )}
                         </div>
                     </div>
                 </div>

@@ -394,7 +394,7 @@ export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone,
                 ${isRestoreAnimation 
                     ? `animate-in fade-in duration-700 fill-mode-backwards ${isMe ? 'slide-in-from-right-16' : 'slide-in-from-left-16'}` 
                     : ''}
-                ${!isRestoreAnimation && isMe && (msg.status === 'sending' || msg.tempId) ? 'animate-message-send' : ''}
+                ${!isRestoreAnimation && isMe && (msg.status === 'sending' || msg.status === 'pending' || msg.tempId) ? 'animate-message-send' : ''}
             `}
             style={{
                 ...(isMe && bubbleColor ? { backgroundColor: bubbleColor, borderColor: 'transparent' } : {}),
@@ -611,8 +611,16 @@ export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone,
                                 {/* Overlay Status Icon for Audio */}
                                 {isMe && (
                                     <div className="absolute bottom-1 right-1 flex items-center justify-center p-0.5 rounded-full bg-black/30 backdrop-blur-[1px] z-20">
-                                        {msg.status === 'sending' && <span className="material-symbols-outlined text-[10px] text-white">access_time</span>}
-                                        {msg.status === 'error' && <span className="material-symbols-outlined text-[12px] text-red-400">error</span>}
+                                        {(msg.status === 'sending' || msg.status === 'pending') && <span className="material-symbols-outlined text-[10px] text-white">access_time</span>}
+                                        {msg.status === 'error' && (
+                                            <button 
+                                                onClick={(e) => { e.stopPropagation(); onRetry && onRetry(msg); }}
+                                                className="flex items-center gap-0.5 hover:scale-110 transition-transform"
+                                                title="Retry Upload"
+                                            >
+                                                <span className="material-symbols-outlined text-[14px] text-red-400">refresh</span>
+                                            </button>
+                                        )}
                                         {msg.status === 'sent' && <span className="material-symbols-outlined text-[14px] text-white">check</span>}
                                         {msg.status === 'delivered' && <span className="material-symbols-outlined text-[14px] text-white">done_all</span>}
                                         {msg.status === 'seen' && <span className="material-symbols-outlined text-[14px] text-blue-400 font-bold filled">done_all</span>}
@@ -651,8 +659,16 @@ export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone,
                                     {/* Overlay Status Icon for GIF */}
                                     {isMe && (
                                         <div className="absolute bottom-1 right-[38px] flex items-center justify-center p-0.5 rounded-full bg-black/30 backdrop-blur-[1px] z-20">
-                                            {msg.status === 'sending' && <span className="material-symbols-outlined text-[10px] text-white">access_time</span>}
-                                            {msg.status === 'error' && <span className="material-symbols-outlined text-[12px] text-red-400">error</span>}
+                                            {(msg.status === 'sending' || msg.status === 'pending') && <span className="material-symbols-outlined text-[10px] text-white">access_time</span>}
+                                            {msg.status === 'error' && (
+                                                <button 
+                                                    onClick={(e) => { e.stopPropagation(); onRetry && onRetry(msg); }}
+                                                    className="flex items-center gap-0.5 hover:scale-110 transition-transform"
+                                                    title="Retry Send"
+                                                >
+                                                    <span className="material-symbols-outlined text-[14px] text-red-400">refresh</span>
+                                                </button>
+                                            )}
                                             {msg.status === 'sent' && <span className="material-symbols-outlined text-[14px] text-white">check</span>}
                                             {msg.status === 'delivered' && <span className="material-symbols-outlined text-[14px] text-white">done_all</span>}
                                             {msg.status === 'seen' && <span className="material-symbols-outlined text-[14px] text-blue-400 font-bold filled">done_all</span>}
@@ -749,7 +765,7 @@ export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone,
                                             }
                                         `}>
                                             {/* 1. UPLOADING (Sender) */}
-                                            {msg.status === 'sending' ? (
+                                            {(msg.status === 'sending' || msg.status === 'pending') ? (
                                                 <div className="w-5 h-5 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin"></div>
                                             ) 
                                             /* 2. DOWNLOADING (Receiver: Signed as downloaded but not loaded) */
@@ -774,7 +790,7 @@ export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone,
                                             <span className={`text-sm font-bold ${(isViewOnceOpened) ? 'text-slate-500 dark:text-slate-400' : 'text-slate-700 dark:text-slate-200'}`}>
                                                 {/* Text Logic */}
                                                 {(isViewOnceOpened) ? 'Opened' 
-                                                 : (msg.status === 'sending') ? 'Sending...' 
+                                                 : (msg.status === 'sending' || msg.status === 'pending') ? 'Sending...' 
                                                  : (!isMe && isDownloaded && !imgLoaded) ? 'Downloading...' 
                                                  : (!isMe && !isDownloaded) ? 'Photo' // Or 'Tap to dwnld'
                                                  : 'Photo'
@@ -790,8 +806,16 @@ export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone,
                                         {/* Overlay Status Icon for View Once */}
                                         {isMe && !isViewOnceOpened && (
                                             <div className="absolute top-1/2 -translate-y-1/2 right-3 flex items-center justify-center">
-                                                {msg.status === 'sending' && <span className="material-symbols-outlined text-[10px] text-slate-400">access_time</span>}
-                                                {msg.status === 'error' && <span className="material-symbols-outlined text-[12px] text-red-400">error</span>}
+                                                {(msg.status === 'sending' || msg.status === 'pending') && <span className="material-symbols-outlined text-[10px] text-slate-400">access_time</span>}
+                                                {msg.status === 'error' && (
+                                                    <button 
+                                                        onClick={(e) => { e.stopPropagation(); onRetry && onRetry(msg); }}
+                                                        className="flex items-center gap-0.5 hover:scale-110 transition-transform"
+                                                        title="Retry Upload"
+                                                    >
+                                                        <span className="material-symbols-outlined text-[14px] text-red-400">refresh</span>
+                                                    </button>
+                                                )}
                                                 {/* We don't show checks here because the 'Opened' state is the main indicator for View Once */}
                                                 {/* But checking Whatsapp style: they show ticks until opened. */}
                                                 {msg.status === 'sent' && <span className="material-symbols-outlined text-[14px] text-slate-400">check</span>}
@@ -846,7 +870,7 @@ export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone,
                                         })}
                                         
                                         {/* Upload Spinner Overlay for Grid */}
-                                        {msg.status === 'sending' && (
+                                        {(msg.status === 'sending' || msg.status === 'pending') && (
                                             <div className="absolute inset-0 bg-black/40 backdrop-blur-[2px] flex flex-col items-center justify-center transition-all duration-300 z-10 pointer-events-none">
                                                 {(msg.uploadProgress || 0) < 1 ? (
                                                     <div className="relative w-10 h-10">
@@ -883,8 +907,16 @@ export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone,
                                         {/* Overlay Status Icon for Grid */}
                                         {isMe && (
                                             <div className="absolute bottom-1 right-1 flex items-center justify-center p-0.5 rounded-full bg-black/30 backdrop-blur-[1px] z-20">
-                                                {msg.status === 'sending' && <span className="material-symbols-outlined text-[10px] text-white">access_time</span>}
-                                                {msg.status === 'error' && <span className="material-symbols-outlined text-[12px] text-red-400">error</span>}
+                                                {(msg.status === 'sending' || msg.status === 'pending') && <span className="material-symbols-outlined text-[10px] text-white">access_time</span>}
+                                                {msg.status === 'error' && (
+                                                    <button 
+                                                        onClick={(e) => { e.stopPropagation(); onRetry && onRetry(msg); }}
+                                                        className="flex items-center gap-0.5 hover:scale-110 transition-transform"
+                                                        title="Retry Upload"
+                                                    >
+                                                        <span className="material-symbols-outlined text-[14px] text-red-400">refresh</span>
+                                                    </button>
+                                                )}
                                                 {msg.status === 'sent' && <span className="material-symbols-outlined text-[14px] text-white">check</span>}
                                                 {msg.status === 'delivered' && <span className="material-symbols-outlined text-[14px] text-white">done_all</span>}
                                                 {msg.status === 'seen' && <span className="material-symbols-outlined text-[14px] text-blue-400 font-bold filled">done_all</span>}
@@ -1019,15 +1051,23 @@ export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone,
                                     {/* Overlay Status Icon */}
                                     {isMe && (
                                         <div className="absolute bottom-1 right-1 flex items-center justify-center p-0.5 rounded-full bg-black/30 backdrop-blur-[1px] z-20">
-                                            {msg.status === 'sending' && <span className="material-symbols-outlined text-[10px] text-white">access_time</span>}
-                                            {msg.status === 'error' && <span className="material-symbols-outlined text-[12px] text-red-400">error</span>}
+                                            {(msg.status === 'sending' || msg.status === 'pending') && <span className="material-symbols-outlined text-[10px] text-white">access_time</span>}
+                                            {msg.status === 'error' && (
+                                                <button 
+                                                    onClick={(e) => { e.stopPropagation(); onRetry && onRetry(msg); }}
+                                                    className="flex items-center gap-0.5 hover:scale-110 transition-transform"
+                                                    title="Retry Upload"
+                                                >
+                                                    <span className="material-symbols-outlined text-[14px] text-red-400">refresh</span>
+                                                </button>
+                                            )}
                                             {msg.status === 'sent' && <span className="material-symbols-outlined text-[14px] text-white">check</span>}
                                             {msg.status === 'delivered' && <span className="material-symbols-outlined text-[14px] text-white">done_all</span>}
                                             {msg.status === 'seen' && <span className="material-symbols-outlined text-[14px] text-blue-400 font-bold filled">done_all</span>}
                                         </div>
                                     )}
 
-                                    {msg.status === 'sending' && (
+                                    {(msg.status === 'sending' || msg.status === 'pending') && (
                                         <div className="absolute inset-0 bg-black/40 backdrop-blur-[2px] flex flex-col items-center justify-center transition-all duration-300 z-10">
                                             {(msg.uploadProgress || 0) < 1 ? (
                                                 <div className="relative w-10 h-10">
@@ -1194,8 +1234,17 @@ export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone,
                                     {/* Overlay Status Icon for File */}
                                     {isMe && (
                                         <div className="absolute -bottom-1 -right-1 flex items-center justify-center z-20 drop-shadow-md">
-                                            {msg.status === 'sending' && <span className="material-symbols-outlined text-[10px] text-violet-200/80">access_time</span>}
-                                            {msg.status === 'error' && <span className="material-symbols-outlined text-[12px] text-red-300">error</span>}
+                                            {(msg.status === 'sending' || msg.status === 'pending') && <span className="material-symbols-outlined text-[10px] text-violet-200/80">access_time</span>}
+                                            {msg.status === 'error' && (
+                                                <button 
+                                                    onClick={(e) => { e.stopPropagation(); onRetry && onRetry(msg); }}
+                                                    className="flex items-center gap-1 bg-red-500/80 hover:bg-red-500 rounded-full px-1.5 py-0.5 transition-colors"
+                                                    title="Retry Upload"
+                                                >
+                                                    <span className="material-symbols-outlined text-[12px] text-white">refresh</span>
+                                                    <span className="text-[9px] text-white font-medium">Retry</span>
+                                                </button>
+                                            )}
                                             {msg.status === 'sent' && <span className="material-symbols-outlined text-[14px] text-violet-200/90">check</span>}
                                             {msg.status === 'delivered' && <span className="material-symbols-outlined text-[14px] text-violet-200/90">done_all</span>}
                                             {msg.status === 'seen' && <span className="material-symbols-outlined text-[14px] text-blue-400 font-bold filled">done_all</span>}
@@ -1215,7 +1264,7 @@ export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone,
                                     {/* Overlay Status Icon for Location */}
                                     {isMe && (
                                         <div className="absolute bottom-1 right-1 flex items-center justify-center p-0.5 rounded-full bg-black/30 backdrop-blur-[1px] z-20">
-                                            {msg.status === 'sending' && <span className="material-symbols-outlined text-[10px] text-white">access_time</span>}
+                                            {(msg.status === 'sending' || msg.status === 'pending') && <span className="material-symbols-outlined text-[10px] text-white">access_time</span>}
                                             {msg.status === 'error' && <span className="material-symbols-outlined text-[12px] text-red-400">error</span>}
                                             {msg.status === 'sent' && <span className="material-symbols-outlined text-[14px] text-white">check</span>}
                                             {msg.status === 'delivered' && <span className="material-symbols-outlined text-[14px] text-white">done_all</span>}
@@ -1257,7 +1306,7 @@ export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone,
                                     {/* Overlay Status Icon for Poll */}
                                     {isMe && (
                                         <div className="absolute bottom-1 right-1 flex items-center justify-center p-0.5 rounded-full bg-black/30 backdrop-blur-[1px] z-20">
-                                            {msg.status === 'sending' && <span className="material-symbols-outlined text-[10px] text-white">access_time</span>}
+                                            {(msg.status === 'sending' || msg.status === 'pending') && <span className="material-symbols-outlined text-[10px] text-white">access_time</span>}
                                             {msg.status === 'error' && <span className="material-symbols-outlined text-[12px] text-red-400">error</span>}
                                             {msg.status === 'sent' && <span className="material-symbols-outlined text-[14px] text-white">check</span>}
                                             {msg.status === 'delivered' && <span className="material-symbols-outlined text-[14px] text-white">done_all</span>}
@@ -1315,7 +1364,7 @@ export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone,
                                         ? 'bottom-1 right-0 bg-black/30 backdrop-blur-[2px] rounded-full px-1.5 py-0.5 text-white/90 shadow-sm'
                                         : 'bottom-0.5 right-1.5 text-violet-200/80 drop-shadow-md'
                             }`}>
-                                {msg.status === 'sending' && <span className="material-symbols-outlined text-[10px]">access_time</span>}
+                                {(msg.status === 'sending' || msg.status === 'pending') && <span className="material-symbols-outlined text-[10px]">access_time</span>}
                                 {msg.status === 'error' && (
                                     <button 
                                         onClick={(e) => { e.stopPropagation(); onRetry && onRetry(msg); }}
@@ -1380,7 +1429,7 @@ export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone,
                       // 1. Sender: Still sending
                       // 2. Receiver: Not downloaded yet (single image only, multi-image doesn't use imgLoaded)
                       !((msg.type === 'image' || msg.is_view_once) && (
-                          (isMe && msg.status === 'sending') || 
+                          (isMe && (msg.status === 'sending' || msg.status === 'pending')) || 
                           (!isMe && !msg.is_view_once && !(msg.attachments && msg.attachments.length > 1) && (!isDownloaded || !imgLoaded))
                       )) && !isSelectionMode && (
                         <div className="relative">
@@ -1856,7 +1905,7 @@ export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone,
                 
                 
                 <div className={`text-[10px] mt-1 px-1 flex items-center justify-end gap-1 select-none transition-opacity ${
-                    (msg.status === 'sending' || msg.is_pinned || msg.is_starred) 
+                    (msg.status === 'sending' || msg.status === 'pending' || msg.is_pinned || msg.is_starred) 
                         ? 'opacity-100 text-slate-600 dark:text-slate-300' 
                         : `opacity-0 group-hover:opacity-100 ${isMe ? 'text-slate-600 dark:text-slate-400' : 'text-slate-600 dark:text-slate-400'}`
                 }`}>
@@ -2283,8 +2332,12 @@ export default function MessageList({
     // [NEW] Unread Divider Logic
     // 1. Sort messages chronologically (safety) with stable tie-breaker
     const sortedMessages = [...messages].sort((a, b) => {
-        if (a.created_at !== b.created_at) {
-            return a.created_at < b.created_at ? -1 : 1;
+        // [FIX] Ensure created_at is compared as dates, handle undefined/null
+        const timeA = a.created_at ? new Date(a.created_at).getTime() : 0;
+        const timeB = b.created_at ? new Date(b.created_at).getTime() : 0;
+        
+        if (timeA !== timeB) {
+            return timeA - timeB;
         }
         // Tie-breaker for identical timestamps (optimistic messages or clock skew)
         // Use localId (Dexie-assigned) or id (Server/UUID) or tempId
@@ -2400,15 +2453,25 @@ export default function MessageList({
                         </div>
                     )}
                     {visibleMessages.map((msg, index) => {
-                    // [NEW] Strict Hide for Skipped Sync
-                    if (hasSkippedSync) {
-                        const isEncrypted = !msg.content || msg.content === '🔒 Waiting for key...' || msg.content === '🔒 Decryption Failed';
-                        if (isEncrypted) return null;
-                    }
-
-                    // [FIX] AI messages might have same user_id but are NOT 'me' for display purposes
+                    // [FIX] AI logic moved up for filtering
                     const isAi = msg.user_id === 'ai-assistant' || msg.author_name === 'Assistant' || (msg.meta && msg.meta.ai) || msg.isStreaming;
                     const isMe = msg.user_id == currentUser.id && !isAi;
+
+                    // [NEW] Strict Hide for Skipped Sync
+                    if (hasSkippedSync) {
+                        // Allow AI Messages always (usually plaintext)
+                        if (!isAi) {
+                             // Check if it is SAFE to show:
+                             // 1. Explicitly marked as Decrypted (e.g. newly sent local msg)
+                             // 2. Explicitly marked as NOT Encrypted (e.g. system msg, public msg)
+                             const isSafe = msg.isDecrypted || (msg.is_encrypted === false);
+                             
+                             if (!isSafe) return null; // Hide if not safe
+
+                             // Double check for legacy placeholder text just in case flags are missing
+                             if (!msg.content || msg.content === '🔒 Waiting for key...' || msg.content === '🔒 Decryption Failed') return null;
+                        }
+                    }
                     const isSystem = msg.type === 'system';
                     
                     if (isSystem) {

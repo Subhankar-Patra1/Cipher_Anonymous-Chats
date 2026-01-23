@@ -1,18 +1,38 @@
 import { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 import SpinLoading from '../components/SpinLoading';
+import OAuthButtons from '../components/OAuthButtons';
+import { cryptoManager } from '../lib/crypto/CryptoManager';
 
 export default function Auth() {
-    const [view, setView] = useState('login'); // 'login', 'signup', 'recovery', 'success'
-    const [formData, setFormData] = useState({ username: '', password: '', displayName: '', recoveryCode: '', newPassword: '' });
-    const [error, setError] = useState('');
-    const [generatedRecoveryCode, setGeneratedRecoveryCode] = useState('');
-    const [pendingLogin, setPendingLogin] = useState(null); // Store login data temporarily
-    const [isLoading, setIsLoading] = useState(false);
-    const [isSubmitting, setIsSubmitting] = useState(false);
     const { login } = useAuth();
     const navigate = useNavigate();
+    const location = useLocation(); // [NEW]
+
+    // [Refined] Initialize directly from location state to prevent flash
+    const isOAuthSuccess = location.state && location.state.view === 'oauth_success' && location.state.recoveryCode;
+
+    const [view, setView] = useState(isOAuthSuccess ? 'setup_backup' : 'login'); 
+    const [formData, setFormData] = useState({ username: '', password: '', displayName: '', recoveryCode: '', newPassword: '' });
+    const [error, setError] = useState('');
+    const [generatedRecoveryCode, setGeneratedRecoveryCode] = useState(isOAuthSuccess ? location.state.recoveryCode : '');
+    const [pendingLogin, setPendingLogin] = useState(isOAuthSuccess ? { 
+        token: location.state.token, 
+        user: location.state.user 
+    } : null);
+    const [isLoading, setIsLoading] = useState(false);
+    const [isSubmitting, setIsSubmitting] = useState(false);
+    const [copied, setCopied] = useState(false); // [NEW] Track copy state
+    
+    // Backup Setup State
+    const [backupPassword, setBackupPassword] = useState('');
+    const [confirmBackupPassword, setConfirmBackupPassword] = useState('');
+    const [backupPasswordHint, setBackupPasswordHint] = useState('');
+    const [showBackupPassword, setShowBackupPassword] = useState(false);
+    const [showConfirmBackupPassword, setShowConfirmBackupPassword] = useState(false);
+    
+
 
     // Validation States
     const [usernameStatus, setUsernameStatus] = useState('idle'); // idle, checking, available, taken
@@ -170,6 +190,62 @@ export default function Auth() {
         }
     };
 
+    const handleSetupBackup = async (e) => {
+        e.preventDefault();
+        setError('');
+        
+        if (backupPassword !== confirmBackupPassword) {
+            setError('Passwords do not match');
+            return;
+        }
+
+        if (backupPassword.length < 8) {
+             setError('Password must be at least 8 characters');
+             return;
+        }
+
+        setIsSubmitting(true);
+
+        try {
+            // 1. Ensure keys exist (Generate if new user)
+            await cryptoManager.init();
+
+            // 2. Export all keys
+            const bundle = await cryptoManager.exportAllKeysSync();
+
+            // 3. Encrypt bundle
+            const backup = await cryptoManager.encryptBackup(bundle, backupPassword);
+            
+            // 4. Upload to server
+            // Use pendingLogin.token since we aren't "logged in" in context yet
+            const res = await fetch(`${import.meta.env.VITE_API_URL}/api/auth/backup`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    Authorization: `Bearer ${pendingLogin.token}`
+                },
+                body: JSON.stringify({ ...backup, passwordHint: backupPasswordHint.trim() || null })
+            });
+
+            if (!res.ok) throw new Error('Failed to upload backup');
+
+            // 5. Enable auto-backup
+            await cryptoManager.enableAutoBackup(backupPassword, backup.salt, pendingLogin.token);
+
+            // 6. Transition to Dashboard
+            setView('entering_dashboard');
+            
+            setTimeout(() => {
+                login(pendingLogin.token, pendingLogin.user, true);
+            }, 2000);
+             
+        } catch (err) {
+             console.error('[Backup Setup] Error:', err);
+             setError(err.message || 'Failed to create backup');
+             setIsSubmitting(false);
+        }
+    };
+
     return (
         <div className="h-[100dvh] w-full grid grid-cols-1 lg:grid-cols-2 bg-slate-950 overflow-hidden">
             {/* Left Side - Visual */}
@@ -319,12 +395,16 @@ export default function Auth() {
                         <h2 className="text-3xl font-bold text-white mb-2">
                             {view === 'login' ? 'Welcome Back' : 
                              view === 'signup' ? 'Create Account' : 
-                             view === 'recovery' ? 'Recover Account' : 'Account Created'}
+                             view === 'recovery' ? 'Recover Account' : 
+                             view === 'setup_backup' ? 'Cloud Backup' : 
+                             view === 'entering_dashboard' ? 'All Set!' : 'Account Created'}
                         </h2>
                         <p className="text-slate-400">
                             {view === 'login' ? 'Enter your details to access your workspace.' : 
                              view === 'signup' ? 'Get started with your free account today.' : 
                              view === 'recovery' ? 'Enter your recovery code to reset your password.' : 
+                             view === 'setup_backup' ? 'Create a password-protected backup of your encryption keys.' :
+                             view === 'entering_dashboard' ? 'Preparing your secure environment...' :
                              'Save your recovery code securely.'}
                         </p>
                     </div>
@@ -346,25 +426,35 @@ export default function Auth() {
                                 <p className="text-slate-400 text-sm mb-4">
                                     This is the <strong>ONLY</strong> way to recover your account if you forget your password. We cannot show it again.
                                 </p>
-                                <div className="bg-slate-900 p-4 rounded-xl border border-slate-800 font-mono text-center text-lg text-white select-all relative group">
-                                    {generatedRecoveryCode}
+                                <div className="relative group">
+                                    <div className="bg-slate-900 p-4 rounded-xl border border-slate-800 font-mono text-center text-lg text-white select-all">
+                                        {generatedRecoveryCode}
+                                    </div>
                                     <button 
-                                        onClick={() => navigator.clipboard.writeText(generatedRecoveryCode)}
-                                        className="absolute right-2 top-1/2 -translate-y-1/2 p-2 text-slate-500 hover:text-white transition-colors opacity-0 group-hover:opacity-100"
-                                        title="Copy to clipboard"
+                                        onClick={(e) => {
+                                            e.stopPropagation();
+                                            navigator.clipboard.writeText(generatedRecoveryCode);
+                                            setCopied(true);
+                                            setTimeout(() => setCopied(false), 2000);
+                                        }}
+                                        className={`absolute right-2 top-1/2 -translate-y-1/2 p-2 transition-all duration-200 ${
+                                            copied 
+                                                ? 'text-emerald-500 opacity-100 scale-110' 
+                                                : 'text-slate-500 hover:text-white opacity-0 group-hover:opacity-100'
+                                        }`}
+                                        title={copied ? "Copied!" : "Copy to clipboard"}
                                     >
-                                        <span className="material-symbols-outlined text-sm">content_copy</span>
+                                        <span className="material-symbols-outlined text-lg">
+                                            {copied ? 'check_circle' : 'content_copy'}
+                                        </span>
                                     </button>
                                 </div>
                             </div>
                             <button
                                 onClick={() => {
                                     if (pendingLogin) {
-                                        setIsLoading(true);
-                                        setTimeout(() => {
-                                            login(pendingLogin.token, pendingLogin.user, true);
-                                            // Navigation handled by PublicRoute in App.jsx
-                                        }, 2000);
+                                        setGeneratedRecoveryCode(''); // Clear code from UI
+                                        setView('setup_backup'); // Proceed to Backup Setup
                                     } else {
                                         navigate('/');
                                     }
@@ -373,6 +463,130 @@ export default function Auth() {
                             >
                                 I have saved it, Continue
                             </button>
+                        </div>
+                    ) : view === 'setup_backup' ? (
+                        <form onSubmit={handleSetupBackup} className="space-y-4">
+                             <div className="bg-slate-900/50 p-4 rounded-xl border border-slate-800 mb-6">
+                                <div className="flex gap-3">
+                                    <span className="material-symbols-outlined text-violet-400">cloud_upload</span>
+                                    <p className="text-sm text-slate-400">
+                                        Your chats are end-to-end encrypted. We need this password to securely backup your keys so you can restore your history on other devices.
+                                    </p>
+                                </div>
+                            </div>
+
+                            <div>
+                                <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Create Password</label>
+                                <div className="relative">
+                                    <input
+                                        type={showBackupPassword ? "text" : "password"}
+                                        value={backupPassword}
+                                        onChange={(e) => setBackupPassword(e.target.value)}
+                                        className="w-full bg-slate-900/50 border border-slate-800 rounded-xl px-4 py-3 pr-12 text-white focus:outline-none focus:ring-2 focus:ring-emerald-500 transition-all placeholder:text-slate-600"
+                                        placeholder="Strong password"
+                                        required
+                                        minLength={8}
+                                    />
+                                    <button 
+                                        type="button"
+                                        onClick={() => setShowBackupPassword(!showBackupPassword)}
+                                        className="absolute right-2 top-1/2 -translate-y-1/2 w-10 h-10 flex items-center justify-center text-slate-500 hover:text-emerald-500 transition-colors"
+                                    >
+                                        <span className="material-symbols-outlined text-[20px]">
+                                            {showBackupPassword ? 'visibility' : 'visibility_off'}
+                                        </span>
+                                    </button>
+                                </div>
+                                <div className="mt-2 space-y-1">
+                                    <p className={`text-[10px] flex items-center gap-1.5 font-medium transition-colors ${backupPassword.length >= 8 ? 'text-emerald-500' : 'text-slate-500'}`}>
+                                        <span className="material-symbols-outlined text-[14px]">
+                                            {backupPassword.length >= 8 ? 'check_circle' : 'circle'}
+                                        </span>
+                                        Minimum 8 characters
+                                    </p>
+                                    <p className={`text-[10px] flex items-center gap-1.5 font-medium transition-colors ${/[0-9]/.test(backupPassword) ? 'text-emerald-500' : 'text-slate-500'}`}>
+                                        <span className="material-symbols-outlined text-[14px]">
+                                            {/[0-9]/.test(backupPassword) ? 'check_circle' : 'circle'}
+                                        </span>
+                                        At least one number
+                                    </p>
+                                </div>
+                            </div>
+
+                            <div>
+                                <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Confirm Password</label>
+                                <div className="relative">
+                                    <input
+                                        type={showConfirmBackupPassword ? "text" : "password"}
+                                        value={confirmBackupPassword}
+                                        onChange={(e) => setConfirmBackupPassword(e.target.value)}
+                                        className="w-full bg-slate-900/50 border border-slate-800 rounded-xl px-4 py-3 pr-12 text-white focus:outline-none focus:ring-2 focus:ring-emerald-500 transition-all placeholder:text-slate-600"
+                                        placeholder="Repeat password"
+                                        required
+                                    />
+                                    <button 
+                                        type="button"
+                                        onClick={() => setShowConfirmBackupPassword(!showConfirmBackupPassword)}
+                                        className="absolute right-2 top-1/2 -translate-y-1/2 w-10 h-10 flex items-center justify-center text-slate-500 hover:text-emerald-500 transition-colors"
+                                    >
+                                        <span className="material-symbols-outlined text-[20px]">
+                                            {showConfirmBackupPassword ? 'visibility' : 'visibility_off'}
+                                        </span>
+                                    </button>
+                                </div>
+                            </div>
+
+                            <div>
+                                <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Password Hint (Optional)</label>
+                                <input
+                                    type="text"
+                                    value={backupPasswordHint}
+                                    onChange={(e) => setBackupPasswordHint(e.target.value)}
+                                    className="w-full bg-slate-900/50 border border-slate-800 rounded-xl px-4 py-3 text-white focus:outline-none focus:ring-2 focus:ring-emerald-500 transition-all placeholder:text-slate-600"
+                                    placeholder="Something to help you remember"
+                                    maxLength={100}
+                                />
+                            </div>
+
+                             <button 
+                                type="submit" 
+                                disabled={isSubmitting || backupPassword.length < 8 || !/[0-9]/.test(backupPassword) || backupPassword !== confirmBackupPassword}
+                                className={`w-full font-bold py-3.5 rounded-xl transition-all duration-200 shadow-lg flex items-center justify-center gap-2 ${
+                                    isSubmitting || backupPassword.length < 8 || !/[0-9]/.test(backupPassword) || backupPassword !== confirmBackupPassword
+                                    ? 'bg-slate-800 text-slate-500 cursor-not-allowed'
+                                    : 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-emerald-500/20'
+                                }`}
+                            >
+                                {isSubmitting ? (
+                                    <>
+                                        <span className="material-symbols-outlined text-lg animate-spin">progress_activity</span>
+                                        Setting up Backup...
+                                    </>
+                                ) : (
+                                    <>
+                                        Set Backup & User Account
+                                        <span className="material-symbols-outlined text-lg">verified_user</span>
+                                    </>
+                                )}
+                            </button>
+
+                             <div className="mt-4 p-4 bg-amber-500/10 border border-amber-500/20 rounded-xl flex gap-3">
+                                <span className="material-symbols-outlined text-amber-500 text-xl shrink-0">warning</span>
+                                <p className="text-[10px] text-amber-500/80 leading-relaxed uppercase font-bold tracking-tight">
+                                    Cipher cannot reset this password. If you lose it, your backup is permanently unrecoverable.
+                                </p>
+                            </div>
+                        </form>
+                    ) : view === 'entering_dashboard' ? (
+                        <div className="flex flex-col items-center justify-center py-12 space-y-6">
+                            <div className="relative">
+                                <div className="absolute inset-0 bg-emerald-500/20 rounded-full blur-xl animate-pulse" />
+                                <SpinLoading size={64} color="text-emerald-500" />
+                            </div>
+                            <div className="space-y-2 text-center">
+                                <h3 className="text-xl font-bold text-white animate-pulse">Entering Dashboard...</h3>
+                                <p className="text-sm text-slate-400">Decryption keys ready.</p>
+                            </div>
                         </div>
                     ) : (
                         <form onSubmit={handleSubmit} className="space-y-6">
@@ -600,13 +814,30 @@ export default function Auth() {
                         </form>
                     )}
                     
+                    {view !== 'success' && view !== 'recovery' && view !== 'setup_backup' && view !== 'entering_dashboard' && (
+                        <>
+                            {/* OAuth Divider */}
+                            <div className="relative py-4">
+                                <div className="absolute inset-0 flex items-center">
+                                    <div className="w-full border-t border-slate-800"></div>
+                                </div>
+                                <div className="relative flex justify-center text-sm">
+                                    <span className="px-4 bg-slate-950 text-slate-500">Or continue with</span>
+                                </div>
+                            </div>
+
+                            {/* OAuth Buttons */}
+                            <OAuthButtons mode={view} />
+                        </>
+                    )}
+                    
                     <div className="text-center pt-4">
                         <p className="text-slate-400 text-sm">
                             {view === 'login' ? "Don't have an account? " : 
                              view === 'signup' ? "Already have an account? " : 
                              view === 'recovery' ? "Remember your password? " : ""}
                              
-                            {view !== 'success' && (
+                            {view !== 'success' && view !== 'setup_backup' && view !== 'entering_dashboard' && (
                                 <button 
                                     onClick={() => {
                                         setView(view === 'login' ? 'signup' : 'login');

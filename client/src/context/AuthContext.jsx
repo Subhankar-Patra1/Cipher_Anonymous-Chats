@@ -65,14 +65,17 @@ export const AuthProvider = ({ children }) => {
         }
     }, [token]);
 
-    const login = async (newToken, newUser, isNew = false) => {
+    const login = (newToken, newUser, isNew = false) => {
         if (isNew) {
             localStorage.setItem('skipped_sync', 'true');
         }
         localStorage.setItem('token', newToken);
         setToken(newToken);
         setUser(newUser);
-        await initializeCrypto(newToken);
+        // Initialize crypto in background - don't block login
+        initializeCrypto(newToken).catch(err => {
+            console.error('[Auth] Background crypto init failed:', err);
+        });
     };
 
     const updateUser = (updates) => {

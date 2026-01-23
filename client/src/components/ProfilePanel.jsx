@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { useAuth } from '../context/AuthContext';
 import { usePresence } from '../context/PresenceContext';
 import { useNotification } from '../context/NotificationContext';
+import db, { saveLocalUser, getLocalUser } from '../utils/db';
 import StatusDot from './StatusDot';
 import AvatarEditorModal from './AvatarEditorModal';
 import PasscodeSettingsModal from './PasscodeSettingsModal';
@@ -17,6 +18,7 @@ import ChatColorPicker from './ChatColorPicker';
 import { useAppLock } from '../context/AppLockContext'; // [NEW]
 import StarredMessagesModal from './StarredMessagesModal';
 import CreateBackupModal from './CreateBackupModal';
+import PhotoGalleryModal from './PhotoGalleryModal';
 
 
 const timeAgo = (dateString) => {
@@ -97,12 +99,18 @@ export default function ProfilePanel({ isOpen = true, userId, roomId, onClose, o
     // [NEW] Clear Chat Confirmation State
     const [isClearModalOpen, setIsClearModalOpen] = useState(false);
     const [deleteMediaInfo, setDeleteMediaInfo] = useState(false);
+    const [hasMessages, setHasMessages] = useState(true); // [NEW] Track if chat has messages
     const [mediaRefreshKey, setMediaRefreshKey] = useState(0); // [NEW] Force media refetch
     
     const [isEditModalOpen, setIsEditModalOpen] = useState(false);
     const [viewingImage, setViewingImage] = useState(null);
     const [avatarSourceRect, setAvatarSourceRect] = useState(null);
     const avatarRef = useRef(null);
+
+    // [NEW] Multiple Profile Photos
+    const [userPhotos, setUserPhotos] = useState([]);
+    const [showPhotoGallery, setShowPhotoGallery] = useState(false);
+    const [photoGalleryStartIndex, setPhotoGalleryStartIndex] = useState(0);
 
     const [showStarredMessages, setShowStarredMessages] = useState(false); // [NEW]
     
@@ -148,6 +156,18 @@ export default function ProfilePanel({ isOpen = true, userId, roomId, onClose, o
             nameEditorRef.current.scrollLeft = nameEditorRef.current.scrollWidth;
         }
     }, [editedName, isEditingName]);
+
+    // [NEW] Check if room has messages
+    useEffect(() => {
+        if (roomId) {
+            db.messages.where('room_id').equals(String(roomId)).count().then(count => {
+                setHasMessages(count > 0);
+            }).catch(() => {
+                // Fallback: assume there are messages
+                setHasMessages(true);
+            });
+        }
+    }, [roomId, mediaRefreshKey]); // mediaRefreshKey changes after clear, so it will recheck
 
 
     
@@ -357,47 +377,9 @@ export default function ProfilePanel({ isOpen = true, userId, roomId, onClose, o
     const isMe = currentUser && String(currentUser.id) === String(userId);
     const status = isMe ? { online: true } : presenceMap[userId];
 
-    useEffect(() => {
-        const fetchProfile = async () => {
-            try {
-                const res = await fetch(`${import.meta.env.VITE_API_URL}/api/users/${userId}/profile`, {
-                    headers: { Authorization: `Bearer ${token}` }
-                });
-                if (res.ok) {
-                    const data = await res.json();
-                    setProfile(data);
-                } else {
-                     // Handle 404 or other errors as deleted/inaccessible
-                     setProfile({
-                        display_name: 'Deleted Account',
-                        username: 'deleted',
-                        bio: 'This account no longer exists.',
-                        avatar_url: null,
-                        avatar_thumb_url: null,
-                        groups_in_common: []
-                    });
-                }
-            } catch (err) {
-                console.error(err);
-                setProfile({
-                    display_name: 'Deleted Account',
-                    username: 'deleted',
-                    bio: 'This account no longer exists.',
-                    avatar_url: null,
-                    avatar_thumb_url: null,
-                    groups_in_common: []
-                });
-            } finally {
-                setLoading(false);
-            }
-        };
-
-        if (userId) {
-            fetchProfile();
-            fetchStatuses([userId]);
-        } else {
-            // Handle case where userId is null/undefined (e.g. from a message of a deleted user)
-             setProfile({
+    const fetchProfileData = async () => {
+        if (!userId) {
+            setProfile({
                 display_name: 'Deleted Account',
                 username: 'deleted',
                 bio: 'This account no longer exists.',
@@ -406,8 +388,86 @@ export default function ProfilePanel({ isOpen = true, userId, roomId, onClose, o
                 groups_in_common: []
             });
             setLoading(false);
+            return;
         }
-    }, [userId, token]);
+
+        // [NEW] Stale-While-Revalidate: Load from cache instantly
+        try {
+            const cachedUser = await db.getLocalUser(userId);
+            if (cachedUser) {
+                setProfile(prev => ({ ...prev, ...cachedUser, groups_in_common: prev?.groups_in_common || [] }));
+                // Don't disable loading completely if we want to show a spinner for "fresh" data?
+                // Actually, instant load means we stop spinning immediately if we have something.
+                setLoading(false);
+            }
+        } catch (e) {
+            console.warn('[Profile] Cache read failed', e);
+        }
+
+        try {
+            const res = await fetch(`${import.meta.env.VITE_API_URL}/api/users/${userId}/profile`, {
+                headers: { Authorization: `Bearer ${token}` }
+            });
+            if (res.ok) {
+                const data = await res.json();
+                setProfile(data);
+                // [NEW] Update cache
+                await saveLocalUser(data);
+            } else {
+                 setProfile({
+                    display_name: 'Deleted Account',
+                    username: 'deleted',
+                    bio: 'This account no longer exists.',
+                    avatar_url: null,
+                    avatar_thumb_url: null,
+                    groups_in_common: []
+                });
+            }
+        } catch (err) {
+            console.error(err);
+            // Only show error state if we didn't load from cache
+            // If we have cache, we might want to show a toast "Offline" or just keep showing stale data?
+            // For now, if cache failed too (setProfile not called), we set error profile.
+            setProfile(prev => prev || {
+                display_name: 'Deleted Account',
+                username: 'deleted',
+                bio: 'This account no longer exists.',
+                avatar_url: null,
+                avatar_thumb_url: null,
+                groups_in_common: []
+            });
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    // [NEW] Fetch user photos
+    const fetchUserPhotos = async () => {
+        if (!userId) return;
+        try {
+            const endpoint = isMe 
+                ? `${import.meta.env.VITE_API_URL}/api/users/me/photos`
+                : `${import.meta.env.VITE_API_URL}/api/users/photos/${userId}`;
+            const res = await fetch(endpoint, {
+                headers: { Authorization: `Bearer ${token}` }
+            });
+            if (res.ok) {
+                const photos = await res.json();
+                setUserPhotos(photos);
+            }
+        } catch (err) {
+            console.error('Failed to fetch user photos:', err);
+        }
+    };
+
+    useEffect(() => {
+        fetchProfileData();
+        fetchUserPhotos();
+        
+        if (userId) {
+            fetchStatuses([userId]);
+        }
+    }, [userId, token, isMe]);
 
     // [NEW] Chat Preferences for DM
     const [preferences, setPreferences] = useState(null);
@@ -432,7 +492,7 @@ export default function ProfilePanel({ isOpen = true, userId, roomId, onClose, o
             })
             .then(res => res.ok ? res.json() : null)
             .then(data => {
-                if (data) setHasActiveBackup(true);
+                if (data && (data.encrypted_blob || data.hasBackup)) setHasActiveBackup(true);
             })
             .catch(err => console.error("Failed to check backup status", err));
         }
@@ -482,6 +542,23 @@ export default function ProfilePanel({ isOpen = true, userId, roomId, onClose, o
                 setConfirmModal(null);
                 setIsClearModalOpen(false); // [FIX] Close custom modal too
                 setMediaRefreshKey(k => k + 1); // [NEW] Force SharedMedia refetch
+                
+                // [FIX] Clear Dexie cache for this room
+                try {
+                    await db.messages.where('room_id').equals(String(roomId)).delete();
+                    // Also update room's last message in cache
+                    await db.rooms.update(roomId, {
+                        last_message_id: null,
+                        last_message_content: null,
+                        last_message_plaintext: null,
+                        last_message_type: null,
+                        last_message_sender_id: null,
+                        last_message_created_at: null
+                    });
+                } catch (e) {
+                    console.warn('Could not clear Dexie cache:', e);
+                }
+                
                 // The socket event will handle the UI update usually, but we can also trigger callback
                 if (onActionSuccess) onActionSuccess('clear');
             }
@@ -521,13 +598,23 @@ export default function ProfilePanel({ isOpen = true, userId, roomId, onClose, o
             });
 
             if (res.ok) {
-                setConfirmModal(null);
-                onClose();
-                logout();
+                // Cleanup local data
+                localStorage.clear();
+                try {
+                     await db.delete();
+                } catch(e) { console.error("Failed to delete local DB", e); }
+                
+                setTimeout(() => {
+                    window.location.href = '/auth';
+                }, 2000);
+            } else {
+                const data = await res.json();
+                alert(data.error || 'Failed to delete account');
+                setActionLoading(false);
             }
         } catch (err) {
             console.error(err);
-        } finally {
+            alert('An unexpected error occurred. Please try again.');
             setActionLoading(false);
         }
     };
@@ -687,13 +774,18 @@ export default function ProfilePanel({ isOpen = true, userId, roomId, onClose, o
                 <div className="flex-1 overflow-y-auto custom-scrollbar bg-white dark:bg-slate-900 transition-colors">
                     {/* Profile Header */}
                     <div className="p-6 flex flex-col items-center border-b border-slate-200/50 dark:border-slate-800/50 bg-gray-50/30 dark:bg-slate-900 transition-colors">
-                         {/* Avatar */}
+                         {/* Avatar with Photo Count */}
                          <div className="relative group mb-4">
                             <div 
                                 ref={avatarRef}
-                                className={`w-28 h-28 rounded-full flex items-center justify-center text-4xl font-bold text-white shadow-xl overflow-hidden border-[3px] border-white dark:border-slate-800 ${!avatarSource ? 'bg-gradient-to-br from-violet-500 to-indigo-600' : 'bg-slate-200 dark:bg-slate-800'} ${avatarSource ? 'cursor-pointer' : ''} transition-colors`}
+                                className={`w-28 h-28 rounded-full flex items-center justify-center text-4xl font-bold text-white shadow-xl overflow-hidden border-[3px] border-white dark:border-slate-800 ${!avatarSource ? 'bg-gradient-to-br from-violet-500 to-indigo-600' : 'bg-slate-200 dark:bg-slate-800'} ${avatarSource || userPhotos.length > 0 ? 'cursor-pointer' : ''} transition-colors`}
                                 onClick={() => {
-                                    if (avatarSource && avatarRef.current) {
+                                    // If there are multiple photos, open gallery
+                                    if (userPhotos.length > 0) {
+                                        setPhotoGalleryStartIndex(0);
+                                        setShowPhotoGallery(true);
+                                    } else if (avatarSource && avatarRef.current) {
+                                        // Fallback to single image viewer for legacy avatars
                                         const rect = avatarRef.current.getBoundingClientRect();
                                         setAvatarSourceRect({
                                             top: rect.top,
@@ -711,12 +803,16 @@ export default function ProfilePanel({ isOpen = true, userId, roomId, onClose, o
                                     profile.display_name?.[0]?.toUpperCase()
                                 )}
                             </div>
+                            
                             {isMe && (
                                 <button 
-                                    onClick={() => setIsEditModalOpen(true)}
-                                    className="absolute bottom-1 right-1 bg-white dark:bg-slate-800 rounded-full p-1.5 shadow-md border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors text-slate-500 dark:text-slate-300 hover:text-violet-600 dark:hover:text-white flex items-center justify-center"
+                                    onClick={(e) => {
+                                        e.stopPropagation();
+                                        setIsEditModalOpen(true);
+                                    }}
+                                    className="absolute bottom-1 right-1 bg-white dark:bg-slate-800 rounded-full w-8 h-8 shadow-md border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors text-slate-500 dark:text-slate-300 hover:text-violet-600 dark:hover:text-white flex items-center justify-center"
                                 >
-                                    <span className="material-symbols-outlined text-[18px] drop-shadow-md">edit</span>
+                                    <span className="material-symbols-outlined text-[18px] drop-shadow-md !leading-none pl-[1px]">add_a_photo</span>
                                 </button>
                             )}
                         </div>
@@ -1332,9 +1428,14 @@ export default function ProfilePanel({ isOpen = true, userId, roomId, onClose, o
                             <>
                                 <button 
                                     onClick={() => setIsClearModalOpen(true)}
-                                    className="w-full flex items-center gap-4 p-3 hover:bg-red-50 dark:hover:bg-slate-800/50 rounded-lg text-red-500 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-500/10 transition-colors text-left"
+                                    disabled={!hasMessages}
+                                    className={`w-full flex items-center gap-4 p-3 rounded-lg transition-colors text-left ${
+                                        hasMessages 
+                                            ? 'hover:bg-red-50 dark:hover:bg-slate-800/50 text-red-500 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-500/10' 
+                                            : 'text-slate-300 dark:text-slate-600 cursor-not-allowed'
+                                    }`}
                                 >
-                                    <span className="material-symbols-outlined">delete_sweep</span>
+                                    <span className={`material-symbols-outlined ${hasMessages ? '' : 'opacity-50'}`}>delete_sweep</span>
                                     <span className="text-sm font-medium">Clear messages</span>
                                 </button>
                                 
@@ -1467,17 +1568,24 @@ export default function ProfilePanel({ isOpen = true, userId, roomId, onClose, o
                         <div className="flex gap-3 justify-end">
                             <button 
                                 onClick={() => setIsClearModalOpen(false)}
-                                className="px-4 py-2 text-slate-500 dark:text-slate-300 font-medium hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition-colors"
+                                disabled={actionLoading}
+                                className={`px-4 py-2 text-slate-500 dark:text-slate-300 font-medium hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition-colors ${actionLoading ? 'opacity-50 cursor-not-allowed' : ''}`}
                             >
                                 Cancel
                             </button>
                             <button 
                                 onClick={() => handleClearMessages(deleteMediaInfo)} // [NEW] Pass flag
                                 disabled={actionLoading}
-                                className="px-4 py-2 rounded-lg bg-red-500 hover:bg-red-600 text-white font-bold transition-colors shadow-lg shadow-red-500/20 flex items-center gap-2"
+                                className={`px-4 py-2 rounded-lg bg-red-500 hover:bg-red-600 text-white font-bold transition-colors shadow-lg shadow-red-500/20 flex items-center gap-2 min-w-[120px] justify-center ${actionLoading ? 'opacity-80 cursor-wait' : ''}`}
                             >
-                                {actionLoading && <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"/>}
-                                Clear Chat
+                                {actionLoading ? (
+                                    <>
+                                        <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"/>
+                                        Clearing...
+                                    </>
+                                ) : (
+                                    'Clear Chat'
+                                )}
                             </button>
                         </div>
                     </div>
@@ -1490,6 +1598,102 @@ export default function ProfilePanel({ isOpen = true, userId, roomId, onClose, o
                 onSuccess={(data) => {
                     setProfile(prev => ({ ...prev, ...data }));
                     updateUser(data);
+                    // Refresh photos list after adding new photo
+                    if (data.avatar_url) {
+                        fetch(`${import.meta.env.VITE_API_URL}/api/users/me/photos`, {
+                            headers: { Authorization: `Bearer ${token}` }
+                        })
+                        .then(res => res.ok ? res.json() : [])
+                        .then(photos => setUserPhotos(photos))
+                        .catch(err => console.error('Failed to refresh photos:', err));
+                    }
+                }}
+                // Pass new props for multi-photo support
+                saveAsPhoto={true}
+            />
+            
+            {/* Photo Gallery Modal */}
+            <PhotoGalleryModal
+                isOpen={showPhotoGallery}
+                onClose={() => setShowPhotoGallery(false)}
+                userId={userId}
+                photos={userPhotos}
+                isMe={isMe}
+                onAddPhoto={() => setIsEditModalOpen(true)}
+                onDeletePhoto={async (photoId) => {
+                    try {
+                        const res = await fetch(`${import.meta.env.VITE_API_URL}/api/users/me/photos/${photoId}`, {
+                            method: 'DELETE',
+                            headers: { Authorization: `Bearer ${token}` }
+                        });
+                        
+                        if (res.ok) {
+                            const data = await res.json();
+                            
+                            // Update photos list locally
+                            const newPhotos = userPhotos.filter(p => p.id !== photoId);
+                            setUserPhotos(newPhotos);
+                            
+                            // If we just deleted the last photo
+                            if (newPhotos.length === 0) {
+                                setShowPhotoGallery(false);
+                                setProfile(prev => ({ 
+                                    ...prev, 
+                                    avatar_url: null, 
+                                    avatar_thumb_url: null 
+                                }));
+                                updateUser({ avatar_url: null, avatar_thumb_url: null });
+                            } else if (data.newMain) {
+                                // If a new main photo was returned (e.g. we deleted the main one)
+                                const newMain = data.newMain;
+                                setUserPhotos(prev => prev.map(p => ({
+                                    ...p, 
+                                    is_main: p.id === newMain.id
+                                })).sort((a, b) => (b.id === newMain.id ? 1 : 0) - (a.id === newMain.id ? 1 : 0)));
+
+                                setProfile(prev => ({ 
+                                    ...prev, 
+                                    avatar_url: newMain.photo_url, 
+                                    avatar_thumb_url: newMain.thumb_url 
+                                }));
+                                updateUser({ avatar_url: newMain.photo_url, avatar_thumb_url: newMain.thumb_url });
+                            }
+                        }
+                    } catch (err) {
+                        console.error("Failed to delete photo:", err);
+                    }
+                }}
+                onSetMainPhoto={async (photoId) => {
+                    try {
+                        const res = await fetch(`${import.meta.env.VITE_API_URL}/api/users/me/photos/${photoId}/main`, {
+                            method: 'PUT',
+                            headers: { Authorization: `Bearer ${token}` }
+                        });
+
+                        if (res.ok) {
+                            const data = await res.json();
+                            
+                            // Update photos list to reflect new main status
+                            setUserPhotos(prev => {
+                                const updated = prev.map(p => ({
+                                    ...p,
+                                    is_main: p.id === photoId
+                                }));
+                                // Sort: Main first, then others
+                                return updated.sort((a, b) => (b.is_main ? 1 : 0) - (a.is_main ? 1 : 0));
+                            });
+
+                            // Update profile and user context
+                            setProfile(prev => ({ 
+                                ...prev, 
+                                avatar_url: data.photo_url, 
+                                avatar_thumb_url: data.thumb_url 
+                            }));
+                            updateUser({ avatar_url: data.photo_url, avatar_thumb_url: data.thumb_url });
+                        }
+                    } catch (err) {
+                        console.error("Failed to set main photo:", err);
+                    }
                 }}
             />
             

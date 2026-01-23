@@ -21,12 +21,51 @@ import db from '../utils/db';
 const LastMessagePreview = ({ room, user, hasSkippedSync }) => {
     // [NEW] Local state for plaintext if not in room object
     const [localPlaintext, setLocalPlaintext] = useState(room.last_message_plaintext || null);
+    // [FIX] Track the last message ID we've seen to detect changes
+    const lastSeenIdRef = useRef(room.last_message_id);
 
     useEffect(() => {
+        // [FIX] If room has no last message (cleared), reset local state
+        if (!room.last_message_id) {
+            setLocalPlaintext(null);
+            lastSeenIdRef.current = null;
+            return;
+        }
+        
+        // [FIX] When message ID changes (new message), clear local state to prevent stale data
+        if (room.last_message_id !== lastSeenIdRef.current) {
+            lastSeenIdRef.current = room.last_message_id;
+            // Don't clear if we already have matching plaintext
+            if (localPlaintext !== room.last_message_content && localPlaintext !== room.last_message_plaintext) {
+                setLocalPlaintext(null);
+            }
+        }
+        
+        // [FIX] When status is 'sending', prioritize room.last_message_content (optimistic update)
+        // This ensures the sidebar shows the new message immediately, not stale Dexie data
+        if (room.last_message_status === 'sending' && room.last_message_content) {
+            setLocalPlaintext(null); // Clear local state to use room.last_message_content
+            return;
+        }
+        
+        // [FIX] If we have room.last_message_content and it's our message (sender_id matches),
+        // use it directly - don't fetch from Dexie which might have old data
+        if (room.last_message_content && String(room.last_message_sender_id) === String(user.id)) {
+            if (!localPlaintext || localPlaintext === '__NO_KEY__' || localPlaintext === '__DECRYPT_FAILED__') {
+                setLocalPlaintext(room.last_message_content);
+            }
+            return;
+        }
+        
         // Sync with room prop
         if (room.last_message_plaintext) {
             setLocalPlaintext(room.last_message_plaintext);
             return;
+        }
+        
+        // [FIX] Only fetch from Dexie if we don't have valid content and it's not our recent message
+        if (localPlaintext && localPlaintext !== '__NO_KEY__' && localPlaintext !== '__DECRYPT_FAILED__') {
+            return; // Already have valid content, don't override
         }
         
         // [FIX] Check Dexie rooms cache first (instant load on second visit)
@@ -54,10 +93,21 @@ const LastMessagePreview = ({ room, user, hasSkippedSync }) => {
                 });
             }
         });
-    }, [room.id, room.last_message_id, room.last_message_plaintext]);
+    }, [room.id, room.last_message_id, room.last_message_plaintext, room.last_message_status, room.last_message_content, room.last_message_sender_id, user.id]);
 
-    // [FIX] Compute content, handling special markers for failed decryption
-    const rawContent = localPlaintext || room.last_message_plaintext || room.last_message_content || '';
+    // [FIX] Compute content - prioritize room props for own messages to prevent flicker
+    const isOwnMessage = String(room.last_message_sender_id) === String(user.id);
+    let rawContent = (room.last_message_status === 'sending' && room.last_message_content) 
+        ? room.last_message_content 
+        : (isOwnMessage && room.last_message_content && room.last_message_content !== '🔒 Encrypted Message')
+            ? room.last_message_content
+            : (localPlaintext || room.last_message_plaintext || room.last_message_content || '');
+    
+    // [FIX] For file messages, show the filename instead of "File"
+    if (room.last_message_type === 'file' && (rawContent === 'File' || !rawContent) && room.last_message_file_name) {
+        rawContent = room.last_message_file_name;
+    }
+    
     const isDecryptionFailed = rawContent === '__NO_KEY__' || rawContent === '__DECRYPT_FAILED__';
     const content = isDecryptionFailed ? '' : rawContent; // Empty string triggers fallback
 
@@ -71,7 +121,10 @@ const LastMessagePreview = ({ room, user, hasSkippedSync }) => {
             if (room.last_message_id) {
                 if (room.last_message_ciphertext) return '🔒 Encrypted Message';
                 if (room.last_message_type === 'image') return 'Photo';
-                if (room.last_message_type === 'file') return 'File';
+                if (room.last_message_type === 'file') {
+                    // [FIX] Show filename instead of just "File"
+                    return room.last_message_file_name || 'File';
+                }
                 return 'Message';
             }
             return 'No messages here';
@@ -144,8 +197,15 @@ const LastMessagePreview = ({ room, user, hasSkippedSync }) => {
                 // Get key from CryptoManager
                 const keyData = await cryptoManager.getRoomKey(roomId, keyVersion);
                 if (!keyData?.key) {
-                    // [FIX] When no key available, set special marker to show encrypted fallback
-                    setLocalPlaintext('__NO_KEY__');
+                    // [MODIFIED] If key is missing, allow retry later (don't mark as permanently failed)
+                    decryptAttemptedRef.current = false;
+                    // Trigger a retry after a short delay (e.g. keys might be loading)
+                    setTimeout(() => {
+                         if (lastSeenIdRef.current === room.last_message_id && !localPlaintext) {
+                             // Force update to retry
+                             setLocalPlaintext(prev => prev === '__RETRY__' ? null : prev); 
+                         }
+                    }, 2000);
                     return;
                 }
                 
@@ -178,7 +238,7 @@ const LastMessagePreview = ({ room, user, hasSkippedSync }) => {
         };
         
         decryptFromRoom();
-    }, [room.id, room.last_message_ciphertext, room.last_message_iv, 
+    }, [room, room.id, room.last_message_ciphertext, room.last_message_iv, 
         room.last_message_key_version, room.last_message_plaintext, 
         room.last_message_temp_id, room.last_message_id,
         localPlaintext, hasSkippedSync]);
@@ -229,18 +289,13 @@ const LastMessagePreview = ({ room, user, hasSkippedSync }) => {
         // For non-encrypted messages, set preview immediately
         if (lr.message_type === 'image') { setReactionPreview('Photo'); return; }
         if (lr.message_type === 'audio') { setReactionPreview('Voice message'); return; }
-        if (lr.message_type === 'file') { setReactionPreview('File'); return; }
+        if (lr.message_type === 'file') { setReactionPreview(lr.message_file_name || 'File'); return; }
         if (lr.message_type === 'gif') { setReactionPreview('GIF'); return; }
         if (lr.message_type === 'location') { setReactionPreview('Location'); return; }
         if (lr.message_type === 'poll') { setReactionPreview('Poll'); return; }
         
-        if (lr.message_content) {
-            const text = lr.message_content.replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim();
-            setReactionPreview(text.length > 30 ? `"${text.slice(0, 30)}..."` : `"${text}"`);
-            return;
-        }
-        
-        // For encrypted messages, decrypt
+        // [FIX] Prioritize decryption when encrypted data is available
+        // Server's message_content may be stale/wrong for encrypted messages
         if (lr.message_ciphertext && lr.message_iv) {
             (async () => {
                 try {
@@ -265,24 +320,43 @@ const LastMessagePreview = ({ room, user, hasSkippedSync }) => {
                     setReactionPreview('a message');
                 }
             })();
-        } else {
-            setReactionPreview('a message');
+            return;
         }
+        
+        // Fallback: use plaintext content if no encrypted data
+        if (lr.message_content) {
+            const text = lr.message_content.replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim();
+            setReactionPreview(text.length > 30 ? `"${text.slice(0, 30)}..."` : `"${text}"`);
+            return;
+        }
+        
+        setReactionPreview('a message');
     }, [room.latest_reaction, room.id]);
     
     const reactionNotification = useMemo(() => {
         // [NEW] First check for latest_reaction (reactions on ANY message, not just last)
         if (room.latest_reaction && reactionPreview) {
             const lr = room.latest_reaction;
+            
+            // [FIX] Only show reaction notification if it's more recent than the last message
+            // If a new message was sent after the reaction, show the message instead
+            const reactionTime = lr.timestamp ? new Date(lr.timestamp).getTime() : 0;
+            const lastMessageTime = room.last_message_created_at ? new Date(room.last_message_created_at).getTime() : 0;
+            
+            if (lastMessageTime > reactionTime) {
+                // Last message is newer than the reaction, don't show reaction notification
+                return null;
+            }
+            
             const isMe = String(lr.user_id) === String(user.id);
             const reactorName = isMe ? 'You' : renderTextWithEmojis(lr.display_name || 'Someone');
             const emoji = lr.emoji;
             
             return (
-                <span className="flex items-center gap-1 text-slate-500 dark:text-slate-400">
-                    <span className={isMe ? "" : "font-medium text-slate-600 dark:text-slate-300"}>{reactorName}</span>
-                    <span>reacted</span>
-                    <span className="text-base flex items-center">{renderTextWithEmojis(emoji, '1.2em')}</span>
+                <span className="flex items-center gap-1 text-slate-500 dark:text-slate-400 min-w-0">
+                    <span className={`shrink-0 ${isMe ? "" : "font-medium text-slate-600 dark:text-slate-300"}`}>{reactorName}</span>
+                    <span className="shrink-0">reacted</span>
+                    <span className="text-base flex items-center shrink-0">{renderTextWithEmojis(emoji, '1.2em')}</span>
                     <span className="truncate">to: {reactionPreview}</span>
                 </span>
             );
@@ -323,16 +397,16 @@ const LastMessagePreview = ({ room, user, hasSkippedSync }) => {
             : (room.last_message_viewed_by?.includes(user.id)));
 
         return (
-            <span className="flex items-center gap-1 text-slate-500 dark:text-slate-400">
-                <span className={isMe ? "" : "font-medium text-slate-600 dark:text-slate-300"}>{reactorName}</span>
-                <span>reacted</span>
-                <span className="text-base flex items-center">{renderTextWithEmojis(emoji, '1.2em')}</span>
-                <span className="ml-0.5 flex items-center gap-1.5">
+            <span className="flex items-center gap-1 text-slate-500 dark:text-slate-400 min-w-0">
+                <span className={`shrink-0 ${isMe ? "" : "font-medium text-slate-600 dark:text-slate-300"}`}>{reactorName}</span>
+                <span className="shrink-0">reacted</span>
+                <span className="text-base flex items-center shrink-0">{renderTextWithEmojis(emoji, '1.2em')}</span>
+                <span className="ml-0.5 flex items-center gap-1.5 truncate">
                     to: "{isViewOnceImage && <ViewOnceIcon className="w-3.5 h-3.5" isOpened={isOpened} />}{preview}"
                 </span>
             </span>
         );
-    }, [room.latest_reaction, reactionPreview, room.last_message_id, room.last_message_reactions, room.last_message_type, room.last_message_is_deleted, room.last_message_file_name, room.last_message_poll_question, content, user.id]);
+    }, [room.latest_reaction, reactionPreview, room.last_message_id, room.last_message_reactions, room.last_message_type, room.last_message_is_deleted, room.last_message_file_name, room.last_message_poll_question, room.last_message_created_at, content, user.id]);
 
     // If there's a reaction notification, show it instead of the message content
     if (reactionNotification) {
@@ -343,8 +417,14 @@ const LastMessagePreview = ({ room, user, hasSkippedSync }) => {
         );
     }
 
+    // [FIX] Show file icon for file messages
+    const showFileIcon = room.last_message_type === 'file';
+
     return (
-        <span className="flex items-center min-w-0">
+        <span className="flex items-center min-w-0 gap-1">
+            {showFileIcon && (
+                <span className="material-symbols-outlined text-[14px] text-slate-400 dark:text-slate-500 shrink-0">description</span>
+            )}
             <span className="truncate py-0.5 leading-normal">{renderPreviewRaw(content)}</span>
             {reactionSummary}
         </span>
@@ -850,9 +930,11 @@ export default function Sidebar({ rooms, activeRoom, onSelectRoom, loadingRoomId
                                         {String(room.last_message_sender_id) === String(user.id) && room.type !== 'ai' && !room.last_message_is_deleted && !['image', 'file', 'video', 'audio', 'location', 'gif', 'poll'].includes(room.last_message_type) && (
                                             <span className={`material-symbols-outlined text-[16px] shrink-0 ${
                                                 room.last_message_status === 'seen' ? 'text-blue-500' :
+                                                room.last_message_status === 'error' ? 'text-red-400' :
                                                 'text-slate-400'
                                             }`}>
-                                                {room.last_message_status === 'sending' ? 'access_time' : 
+                                                {(room.last_message_status === 'sending' || room.last_message_status === 'pending') ? 'access_time' : 
+                                                 room.last_message_status === 'error' ? 'error' :
                                                  room.last_message_status === 'sent' ? 'check' : 
                                                  'done_all'}
                                             </span>
@@ -929,9 +1011,11 @@ export default function Sidebar({ rooms, activeRoom, onSelectRoom, loadingRoomId
                                                                         {String(room.last_message_sender_id) === String(user.id) && (
                                                                              <span className={`material-symbols-outlined text-[16px] shrink-0 mr-1 ${
                                                                                 room.last_message_status === 'seen' ? 'text-blue-500' :
+                                                                                room.last_message_status === 'error' ? 'text-red-400' :
                                                                                 'text-slate-400'
                                                                             }`}>
-                                                                                {room.last_message_status === 'sending' ? 'access_time' : 
+                                                                                {(room.last_message_status === 'sending' || room.last_message_status === 'pending') ? 'access_time' : 
+                                                                                 room.last_message_status === 'error' ? 'error' :
                                                                                  room.last_message_status === 'sent' ? 'check' : 
                                                                                  'done_all'}
                                                                             </span>
@@ -957,11 +1041,12 @@ export default function Sidebar({ rooms, activeRoom, onSelectRoom, loadingRoomId
                                                                 )}
                                                                 {String(room.last_message_sender_id) === String(user.id) && (
                                                                      <span className={`material-symbols-outlined text-[16px] shrink-0 ${
+                                                                        room.last_message_status === 'error' ? 'text-red-400' :
                                                                         room.last_message_status === 'seen' ? 'text-blue-500' :
-                                                                        room.last_message_status === 'delivered' ? 'text-slate-400' :
                                                                         'text-slate-400'
                                                                     }`}>
-                                                                        {room.last_message_status === 'sending' ? 'access_time' : 
+                                                                        {(room.last_message_status === 'sending' || room.last_message_status === 'pending') ? 'access_time' : 
+                                                                         room.last_message_status === 'error' ? 'error' :
                                                                          room.last_message_status === 'sent' ? 'check' : 
                                                                          'done_all'}
                                                                     </span>
@@ -984,10 +1069,12 @@ export default function Sidebar({ rooms, activeRoom, onSelectRoom, loadingRoomId
                                                                 )}
                                                                 {String(room.last_message_sender_id) === String(user.id) && (
                                                                      <span className={`material-symbols-outlined text-[16px] shrink-0 ${
+                                                                        room.last_message_status === 'error' ? 'text-red-400' :
                                                                         room.last_message_status === 'seen' ? 'text-blue-500' :
                                                                         'text-slate-400'
                                                                     }`}>
-                                                                        {room.last_message_status === 'sending' ? 'access_time' : 
+                                                                        {(room.last_message_status === 'sending' || room.last_message_status === 'pending') ? 'access_time' : 
+                                                                         room.last_message_status === 'error' ? 'error' :
                                                                          room.last_message_status === 'sent' ? 'check' : 
                                                                          'done_all'}
                                                                     </span>
@@ -997,7 +1084,7 @@ export default function Sidebar({ rooms, activeRoom, onSelectRoom, loadingRoomId
                                                             </span>
                                                         );
                                                     case 'audio':
-                                                        return ( 
+                                                        return (
                                                             <span className="flex items-center gap-1">
                                                                 {room.type === 'group' && String(room.last_message_sender_id) === String(user.id) && room.last_message_sender_id && (
                                                                     <span className="shrink-0 inline-flex items-center">You:</span>
@@ -1007,10 +1094,12 @@ export default function Sidebar({ rooms, activeRoom, onSelectRoom, loadingRoomId
                                                                 )}
                                                                 {String(room.last_message_sender_id) === String(user.id) && (
                                                                      <span className={`material-symbols-outlined text-[16px] shrink-0 ${
+                                                                        room.last_message_status === 'error' ? 'text-red-400' :
                                                                         room.last_message_status === 'seen' ? 'text-blue-500' :
                                                                         'text-slate-400'
                                                                     }`}>
-                                                                        {room.last_message_status === 'sending' ? 'access_time' : 
+                                                                        {(room.last_message_status === 'sending' || room.last_message_status === 'pending') ? 'access_time' : 
+                                                                         room.last_message_status === 'error' ? 'error' :
                                                                          room.last_message_status === 'sent' ? 'check' : 
                                                                          'done_all'}
                                                                     </span>
@@ -1030,10 +1119,12 @@ export default function Sidebar({ rooms, activeRoom, onSelectRoom, loadingRoomId
                                                                 )}
                                                                 {String(room.last_message_sender_id) === String(user.id) && (
                                                                      <span className={`material-symbols-outlined text-[16px] shrink-0 ${
+                                                                        room.last_message_status === 'error' ? 'text-red-400' :
                                                                         room.last_message_status === 'seen' ? 'text-blue-500' :
                                                                         'text-slate-400'
                                                                     }`}>
-                                                                        {room.last_message_status === 'sending' ? 'access_time' : 
+                                                                        {(room.last_message_status === 'sending' || room.last_message_status === 'pending') ? 'access_time' : 
+                                                                         room.last_message_status === 'error' ? 'error' :
                                                                          room.last_message_status === 'sent' ? 'check' : 
                                                                          'done_all'}
                                                                     </span>
@@ -1053,10 +1144,12 @@ export default function Sidebar({ rooms, activeRoom, onSelectRoom, loadingRoomId
                                                                 )}
                                                                 {String(room.last_message_sender_id) === String(user.id) && (
                                                                      <span className={`material-symbols-outlined text-[16px] shrink-0 ${
+                                                                        room.last_message_status === 'error' ? 'text-red-400' :
                                                                         room.last_message_status === 'seen' ? 'text-blue-500' :
                                                                         'text-slate-400'
                                                                     }`}>
-                                                                        {room.last_message_status === 'sending' ? 'access_time' : 
+                                                                        {(room.last_message_status === 'sending' || room.last_message_status === 'pending') ? 'access_time' : 
+                                                                         room.last_message_status === 'error' ? 'error' :
                                                                          room.last_message_status === 'sent' ? 'check' : 
                                                                          'done_all'}
                                                                     </span>
@@ -1087,10 +1180,12 @@ export default function Sidebar({ rooms, activeRoom, onSelectRoom, loadingRoomId
                                                                )}
                                                                 {String(room.last_message_sender_id) === String(user.id) && (
                                                                      <span className={`material-symbols-outlined text-[16px] shrink-0 ${
+                                                                        room.last_message_status === 'error' ? 'text-red-400' :
                                                                         room.last_message_status === 'seen' ? 'text-blue-500' :
                                                                         'text-slate-400'
                                                                     }`}>
-                                                                        {room.last_message_status === 'sending' ? 'access_time' : 
+                                                                        {(room.last_message_status === 'sending' || room.last_message_status === 'pending') ? 'access_time' : 
+                                                                         room.last_message_status === 'error' ? 'error' :
                                                                          room.last_message_status === 'sent' ? 'check' : 
                                                                          'done_all'}
                                                                     </span>

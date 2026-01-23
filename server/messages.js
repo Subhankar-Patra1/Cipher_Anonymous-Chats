@@ -84,11 +84,12 @@ router.post('/audio', upload.single('audio'), async (req, res) => {
 
         // Insert into DB (always save, even if blocked)
         // [MODIFIED] Include blocked_for_user_id to permanently hide from blocker
+        // [FIX] Support created_at for retry scenarios to preserve message position
         const result = await db.query(
-            `INSERT INTO messages (room_id, user_id, type, audio_url, audio_duration_ms, audio_waveform, content, reply_to_message_id, blocked_for_user_id, mention_user_ids) 
-             VALUES ($1, $2, 'audio', $3, $4, $5, 'Voice message', $6, $7, $8) 
+            `INSERT INTO messages (room_id, user_id, type, audio_url, audio_duration_ms, audio_waveform, content, reply_to_message_id, blocked_for_user_id, mention_user_ids, created_at) 
+             VALUES ($1, $2, 'audio', $3, $4, $5, 'Voice message', $6, $7, $8, COALESCE($9, NOW())) 
              RETURNING id, status, created_at`,
-            [roomId, req.user.id, audioUrl, durationMs, waveform, replyToMessageId || null, blockerUserId || null, req.body.mention_user_ids || null]
+            [roomId, req.user.id, audioUrl, durationMs, waveform, replyToMessageId || null, blockerUserId || null, req.body.mention_user_ids || null, req.body.created_at || null]
         );
         
         // [NEW] Update Room Last Message At
@@ -234,11 +235,12 @@ router.post('/image', upload.array('images', 10), async (req, res) => {
         const primaryImage = attachments[0];
 
         // Insert into DB with blocked_for_user_id
+        // [FIX] Support created_at for retry scenarios to preserve message position
         const result = await db.query(
-            `INSERT INTO messages (room_id, user_id, type, image_url, image_width, image_height, image_size, content, caption, reply_to_message_id, attachments, is_view_once, blocked_for_user_id, mention_user_ids, temp_id) 
-             VALUES ($1, $2, 'image', $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) 
+            `INSERT INTO messages (room_id, user_id, type, image_url, image_width, image_height, image_size, content, caption, reply_to_message_id, attachments, is_view_once, blocked_for_user_id, mention_user_ids, temp_id, created_at) 
+             VALUES ($1, $2, 'image', $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, COALESCE($15, NOW())) 
              RETURNING id, status, created_at, temp_id`,
-            [roomId, req.user.id, primaryImage.url, primaryImage.width, primaryImage.height, primaryImage.size, 'Image', caption || '', replyToMessageId || null, JSON.stringify(attachments), isViewOnce === 'true' || isViewOnce === true, blockerUserId || null, req.body.mention_user_ids || null, tempId || null]
+            [roomId, req.user.id, primaryImage.url, primaryImage.width, primaryImage.height, primaryImage.size, 'Image', caption || '', replyToMessageId || null, JSON.stringify(attachments), isViewOnce === 'true' || isViewOnce === true, blockerUserId || null, req.body.mention_user_ids || null, tempId || null, req.body.created_at || null]
         );
         
         // Update Room Last Message At
@@ -346,19 +348,24 @@ router.post('/file', upload.single('file'), async (req, res) => {
         // User wants "Extract extension".
         const originalName = file.originalname;
         const ext = originalName.split('.').pop();
-        const finalFileName = `${roomId}/files/${Date.now()}-${req.user.id}-${originalName}`;
+        // [FIX] Sanitize filename for S3 key - remove special characters that cause signature issues
+        const sanitizedName = originalName.replace(/[^a-zA-Z0-9._-]/g, '_');
+        const finalFileName = `${roomId}/files/${Date.now()}-${req.user.id}-${sanitizedName}`;
         
-        const fileUrl = await uploadFile(file.buffer, finalFileName, file.mimetype, `attachment; filename="${originalName}"`);
+        // [FIX] Properly encode ContentDisposition to avoid signature issues
+        const encodedFilename = encodeURIComponent(originalName).replace(/'/g, '%27');
+        const fileUrl = await uploadFile(file.buffer, finalFileName, file.mimetype, `attachment; filename*=UTF-8''${encodedFilename}`);
         
         const fileSize = file.size;
         const mimeType = file.mimetype;
 
         // Insert into DB with blocked_for_user_id
+        // [FIX] Support created_at for retry scenarios to preserve message position
         const result = await db.query(
-            `INSERT INTO messages (room_id, user_id, type, file_url, file_name, file_size, file_type, file_extension, content, caption, reply_to_message_id, blocked_for_user_id, mention_user_ids) 
-             VALUES ($1, $2, 'file', $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) 
+            `INSERT INTO messages (room_id, user_id, type, file_url, file_name, file_size, file_type, file_extension, content, caption, reply_to_message_id, blocked_for_user_id, mention_user_ids, temp_id, created_at) 
+             VALUES ($1, $2, 'file', $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, COALESCE($14, NOW())) 
              RETURNING id, status, created_at`,
-            [roomId, req.user.id, fileUrl, originalName, fileSize, mimeType, ext, 'File', caption || null, replyToMessageId || null, blockerUserId || null, req.body.mention_user_ids || null]
+            [roomId, req.user.id, fileUrl, originalName, fileSize, mimeType, ext, 'File', caption || null, replyToMessageId || null, blockerUserId || null, req.body.mention_user_ids || null, tempId, req.body.created_at || null]
         );
         
         // Update Room Last Message At
@@ -406,7 +413,8 @@ router.post('/file', upload.single('file'), async (req, res) => {
 
     } catch (err) {
         console.error('Error sending file:', err);
-        res.status(500).json({ error: 'Server error' });
+        console.error('Error stack:', err.stack);
+        res.status(500).json({ error: 'Server error', details: err.message });
     }
 });
 

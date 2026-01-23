@@ -193,6 +193,16 @@ export default function AIChatWindow({ socket, room, user, onBack, isLoading }) 
 
     // Initial Load & Normalization
     useEffect(() => {
+        // [FIX] Skip syncing if we're in setup/loading states - will sync when ready
+        const showLocalDetails = aiProvider === 'local' && !isLocalModelSetupComplete;
+        const showSetup = !isSetupComplete || showLocalDetails;
+        const isLocalLoading = aiProvider === 'local' && isModelLoading;
+        
+        // Don't sync if we're showing setup screens or loading
+        if (showSetup || isLocalLoading || isPaused) {
+            return;
+        }
+
         // [FIX] Always sync from server first to get canonical data
         // This prevents duplicates from stale localStorage or initialMessages
         syncMessages(room.id);
@@ -219,7 +229,7 @@ export default function AIChatWindow({ socket, room, user, onBack, isLoading }) 
         // Register room structure only (messages will come from syncMessages)
         registerRoom(room.id, []);
         
-    }, [room.id, aiName, registerRoom, syncMessages]);
+    }, [room.id, aiName, registerRoom, syncMessages, aiProvider, isLocalModelSetupComplete, isSetupComplete, isModelLoading, isPaused, socket]);
 
 
     // [NEW] Show Setup Prompt for first-time users OR if Local is not yet setup

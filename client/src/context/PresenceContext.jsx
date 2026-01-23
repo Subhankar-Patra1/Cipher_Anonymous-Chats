@@ -19,6 +19,12 @@ export const PresenceProvider = ({ children, socket }) => {
             });
             const data = await res.json();
             
+            // [FIX] Ensure data is an array before iterating
+            if (!Array.isArray(data)) {
+                console.warn('fetchStatuses: Expected array, got:', typeof data);
+                return;
+            }
+            
             setPresenceMap(prev => {
                 const next = { ...prev };
                 data.forEach(s => {

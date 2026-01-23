@@ -226,8 +226,58 @@ const createTables = async () => {
                 encrypted_blob TEXT NOT NULL,
                 salt TEXT NOT NULL,
                 iv TEXT NOT NULL,
+                password_hint TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
+
+            -- [OAuth] Add email column to users table
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS email VARCHAR(255) UNIQUE;
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS auth_method VARCHAR(50) DEFAULT 'password';
+            -- Make password_hash nullable for OAuth-only users
+            DO $$
+            BEGIN
+                ALTER TABLE users ALTER COLUMN password_hash DROP NOT NULL;
+            EXCEPTION
+                WHEN others THEN NULL;
+            END $$;
+
+            -- [OAuth] OAuth Accounts Table
+            CREATE TABLE IF NOT EXISTS oauth_accounts (
+                id SERIAL PRIMARY KEY,
+                user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+                provider VARCHAR(50) NOT NULL,
+                provider_user_id VARCHAR(255) NOT NULL,
+                email VARCHAR(255),
+                display_name VARCHAR(255),
+                avatar_url TEXT,
+                access_token TEXT,
+                refresh_token TEXT,
+                token_expires_at TIMESTAMP,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(provider, provider_user_id)
+            );
+
+            -- [OAuth] Session Table for Passport.js
+            CREATE TABLE IF NOT EXISTS session (
+                sid VARCHAR NOT NULL COLLATE "default" PRIMARY KEY,
+                sess JSON NOT NULL,
+                expire TIMESTAMP(6) NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS IDX_session_expire ON session (expire);
+
+            -- [NEW] User Photos (Multiple Profile Photos like Telegram)
+            CREATE TABLE IF NOT EXISTS user_photos (
+                id SERIAL PRIMARY KEY,
+                user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+                photo_url TEXT NOT NULL,
+                thumb_url TEXT NOT NULL,
+                photo_key TEXT NOT NULL,
+                is_main BOOLEAN DEFAULT FALSE,
+                sort_order INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE INDEX IF NOT EXISTS idx_user_photos_user_id ON user_photos(user_id);
         `);
         console.log("Tables created successfully");
     } catch (err) {

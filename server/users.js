@@ -275,6 +275,52 @@ router.put('/me/display-name', async (req, res) => {
     }
 });
 
+// [NEW] Update Username (For Onboarding)
+router.put('/me/username', async (req, res) => {
+    const { username } = req.body;
+    
+    // Basic validation
+    if (!username || typeof username !== 'string') {
+        return res.status(400).json({ error: 'Username required' });
+    }
+
+    // Format check (Must start with @, alphanumeric + underscore, 3-30 chars)
+    // We expect client to send with '@', or we add it. 
+    // Let's standardise: User sends "@shadow", we check length including @
+    const cleanUsername = username.startsWith('@') ? username : `@${username}`;
+    const rawName = cleanUsername.substring(1);
+
+    if (rawName.length < 3) return res.status(400).json({ error: 'Username too short (min 3 chars)' });
+    if (rawName.length > 30) return res.status(400).json({ error: 'Username too long (max 30 chars)' });
+    if (!/^[a-zA-Z0-9_]+$/.test(rawName)) return res.status(400).json({ error: 'Username can only contain letters, numbers, and underscores' });
+
+    try {
+        // Check uniqueness
+        const existing = await db.query('SELECT id FROM users WHERE username = $1', [cleanUsername]);
+        if (existing.rows.length > 0) {
+            return res.status(400).json({ error: 'Username is already taken' });
+        }
+
+        // Update DB
+        await db.query('UPDATE users SET username = $1 WHERE id = $2', [cleanUsername, req.user.id]);
+
+        // Broadcast profile update (username change might require meaningful updates on client, 
+        // but for now main use case is initial setup)
+        const io = req.app.get('io');
+        if (io) {
+            io.emit('user:profile:updated', { 
+                userId: req.user.id,
+                username: cleanUsername
+            });
+        }
+
+        res.json({ success: true, username: cleanUsername });
+    } catch (err) {
+        console.error("Update username error:", err);
+        res.status(500).json({ error: "Failed to update username" });
+    }
+});
+
 
 // 4. Get User Profile with Groups in Common
 router.get('/:id/profile', async (req, res) => {
@@ -422,6 +468,11 @@ router.delete('/me', async (req, res) => {
         await client.query('UPDATE rooms SET created_by = NULL WHERE created_by = $1', [req.user.id]);
 
         // 4. Delete User (Cascades to room_members, audio_play_state, etc.)
+        // [FIX] Constraint: messages(blocked_for_user_id) references users(id). 
+        // We must clear this reference before deleting user since it might not cascade depending on schema, 
+        // and we want to preserve messages but just unblock them (or anonymize the block info).
+        await client.query('UPDATE messages SET blocked_for_user_id = NULL WHERE blocked_for_user_id = $1', [req.user.id]);
+
         await client.query('DELETE FROM users WHERE id = $1', [req.user.id]);
 
         await client.query('COMMIT');
@@ -457,9 +508,298 @@ router.delete('/me', async (req, res) => {
     } catch (err) {
         await client.query('ROLLBACK');
         console.error("Delete account error:", err);
-        res.status(500).json({ error: "Failed to delete account" });
+        res.status(500).json({ error: "Failed to delete account: " + err.message });
     } finally {
         client.release();
+    }
+});
+
+// ============= MULTIPLE PROFILE PHOTOS =============
+
+// Get all photos for a user
+router.get('/photos/:userId', async (req, res) => {
+    const { userId } = req.params;
+    try {
+        const result = await db.query(
+            `SELECT id, photo_url, thumb_url, is_main, sort_order, created_at 
+             FROM user_photos 
+             WHERE user_id = $1 
+             ORDER BY is_main DESC, sort_order ASC, created_at DESC`,
+            [userId]
+        );
+        res.json(result.rows);
+    } catch (err) {
+        console.error("Get photos error:", err);
+        res.status(500).json({ error: "Failed to get photos" });
+    }
+});
+
+// Get my photos
+router.get('/me/photos', async (req, res) => {
+    try {
+        const result = await db.query(
+            `SELECT id, photo_url, thumb_url, is_main, sort_order, created_at 
+             FROM user_photos 
+             WHERE user_id = $1 
+             ORDER BY is_main DESC, sort_order ASC, created_at DESC`,
+            [req.user.id]
+        );
+        res.json(result.rows);
+    } catch (err) {
+        console.error("Get my photos error:", err);
+        res.status(500).json({ error: "Failed to get photos" });
+    }
+});
+
+// Add a new photo
+router.post('/me/photos', async (req, res) => {
+    const { photo_url, thumb_url, photo_key, set_as_main } = req.body;
+    
+    if (!photo_url || !thumb_url || !photo_key) {
+        return res.status(400).json({ error: 'Missing required fields' });
+    }
+
+    try {
+        // If setting as main, unset current main first
+        if (set_as_main) {
+            await db.query(
+                'UPDATE user_photos SET is_main = FALSE WHERE user_id = $1 AND is_main = TRUE',
+                [req.user.id]
+            );
+        }
+
+        // Check if this is the first photo (make it main automatically)
+        const countResult = await db.query(
+            'SELECT COUNT(*) FROM user_photos WHERE user_id = $1',
+            [req.user.id]
+        );
+        const isFirst = parseInt(countResult.rows[0].count) === 0;
+        const isMain = set_as_main || isFirst;
+
+        // Get next sort order
+        const orderResult = await db.query(
+            'SELECT COALESCE(MAX(sort_order), 0) + 1 as next_order FROM user_photos WHERE user_id = $1',
+            [req.user.id]
+        );
+        const sortOrder = orderResult.rows[0].next_order;
+
+        // Insert the new photo
+        const result = await db.query(
+            `INSERT INTO user_photos (user_id, photo_url, thumb_url, photo_key, is_main, sort_order)
+             VALUES ($1, $2, $3, $4, $5, $6)
+             RETURNING id, photo_url, thumb_url, is_main, sort_order, created_at`,
+            [req.user.id, photo_url, thumb_url, photo_key, isMain, sortOrder]
+        );
+
+        const newPhoto = result.rows[0];
+
+        // If this is main, update the user's avatar_url and avatar_thumb_url
+        if (isMain) {
+            await db.query(
+                'UPDATE users SET avatar_url = $1, avatar_thumb_url = $2, avatar_key = $3 WHERE id = $4',
+                [photo_url, thumb_url, photo_key, req.user.id]
+            );
+
+            // Broadcast avatar update
+            const io = req.app.get('io');
+            if (io) {
+                io.emit('user:avatar:updated', { 
+                    userId: req.user.id, 
+                    avatar_url: photo_url, 
+                    avatar_thumb_url: thumb_url 
+                });
+            }
+        }
+
+        // Broadcast photo added event
+        const io = req.app.get('io');
+        if (io) {
+            io.emit('user:photo:added', { 
+                userId: req.user.id, 
+                photo: newPhoto
+            });
+        }
+
+        res.json(newPhoto);
+    } catch (err) {
+        console.error("Add photo error:", err);
+        res.status(500).json({ error: "Failed to add photo" });
+    }
+});
+
+// Set a photo as main
+router.put('/me/photos/:photoId/main', async (req, res) => {
+    const { photoId } = req.params;
+
+    try {
+        // Verify ownership
+        const photoResult = await db.query(
+            'SELECT * FROM user_photos WHERE id = $1 AND user_id = $2',
+            [photoId, req.user.id]
+        );
+
+        if (photoResult.rows.length === 0) {
+            return res.status(404).json({ error: 'Photo not found' });
+        }
+
+        const photo = photoResult.rows[0];
+
+        // Unset current main
+        await db.query(
+            'UPDATE user_photos SET is_main = FALSE WHERE user_id = $1 AND is_main = TRUE',
+            [req.user.id]
+        );
+
+        // Set this photo as main
+        await db.query(
+            'UPDATE user_photos SET is_main = TRUE WHERE id = $1',
+            [photoId]
+        );
+
+        // Update user's avatar
+        await db.query(
+            'UPDATE users SET avatar_url = $1, avatar_thumb_url = $2, avatar_key = $3 WHERE id = $4',
+            [photo.photo_url, photo.thumb_url, photo.photo_key, req.user.id]
+        );
+
+        // Broadcast avatar update
+        const io = req.app.get('io');
+        if (io) {
+            io.emit('user:avatar:updated', { 
+                userId: req.user.id, 
+                avatar_url: photo.photo_url, 
+                avatar_thumb_url: photo.thumb_url 
+            });
+            io.emit('user:photo:main:changed', { 
+                userId: req.user.id, 
+                photoId: parseInt(photoId)
+            });
+        }
+
+        res.json({ success: true, photo_url: photo.photo_url, thumb_url: photo.thumb_url });
+    } catch (err) {
+        console.error("Set main photo error:", err);
+        res.status(500).json({ error: "Failed to set main photo" });
+    }
+});
+
+// Delete a photo
+router.delete('/me/photos/:photoId', async (req, res) => {
+    const { photoId } = req.params;
+
+    try {
+        // Verify ownership and get photo data
+        const photoResult = await db.query(
+            'SELECT * FROM user_photos WHERE id = $1 AND user_id = $2',
+            [photoId, req.user.id]
+        );
+
+        if (photoResult.rows.length === 0) {
+            return res.status(404).json({ error: 'Photo not found' });
+        }
+
+        const photo = photoResult.rows[0];
+        const wasMain = photo.is_main;
+
+        // Delete from S3
+        if (photo.photo_key) {
+            await deleteObject(photo.photo_key).catch(e => console.warn("Failed to delete photo from S3", e));
+            // Try to delete thumb if naming convention is known
+            if (photo.photo_key.includes('-avatar.')) {
+                const thumbKey = photo.photo_key.replace('-avatar.', '-thumb.');
+                await deleteObject(thumbKey).catch(e => console.warn("Failed to delete thumb S3", e));
+            }
+        }
+
+        // Delete from DB
+        await db.query('DELETE FROM user_photos WHERE id = $1', [photoId]);
+
+        // If was main, set another photo as main (most recent)
+        let newMainPhoto = null;
+        if (wasMain) {
+            const nextPhoto = await db.query(
+                `SELECT * FROM user_photos WHERE user_id = $1 ORDER BY sort_order ASC, created_at DESC LIMIT 1`,
+                [req.user.id]
+            );
+
+            if (nextPhoto.rows.length > 0) {
+                newMainPhoto = nextPhoto.rows[0];
+                await db.query('UPDATE user_photos SET is_main = TRUE WHERE id = $1', [newMainPhoto.id]);
+                await db.query(
+                    'UPDATE users SET avatar_url = $1, avatar_thumb_url = $2, avatar_key = $3 WHERE id = $4',
+                    [newMainPhoto.photo_url, newMainPhoto.thumb_url, newMainPhoto.photo_key, req.user.id]
+                );
+            } else {
+                // No photos left, clear avatar
+                await db.query(
+                    'UPDATE users SET avatar_url = NULL, avatar_thumb_url = NULL, avatar_key = NULL WHERE id = $1',
+                    [req.user.id]
+                );
+            }
+        }
+
+        // Broadcast events
+        const io = req.app.get('io');
+        if (io) {
+            io.emit('user:photo:deleted', { 
+                userId: req.user.id, 
+                photoId: parseInt(photoId)
+            });
+
+            if (wasMain) {
+                if (newMainPhoto) {
+                    io.emit('user:avatar:updated', { 
+                        userId: req.user.id, 
+                        avatar_url: newMainPhoto.photo_url, 
+                        avatar_thumb_url: newMainPhoto.thumb_url 
+                    });
+                } else {
+                    io.emit('user:avatar:deleted', { userId: req.user.id });
+                }
+            }
+        }
+
+        res.json({ success: true, newMain: newMainPhoto ? { id: newMainPhoto.id, photo_url: newMainPhoto.photo_url, thumb_url: newMainPhoto.thumb_url } : null });
+    } catch (err) {
+        console.error("Delete photo error:", err);
+        res.status(500).json({ error: "Failed to delete photo" });
+    }
+});
+
+// Reorder photos
+router.put('/me/photos/reorder', async (req, res) => {
+    const { photoIds } = req.body; // Array of photo IDs in new order
+
+    if (!photoIds || !Array.isArray(photoIds)) {
+        return res.status(400).json({ error: 'photoIds array required' });
+    }
+
+    try {
+        // Verify all photos belong to user
+        const result = await db.query(
+            'SELECT id FROM user_photos WHERE user_id = $1',
+            [req.user.id]
+        );
+        const userPhotoIds = new Set(result.rows.map(r => r.id));
+
+        for (const id of photoIds) {
+            if (!userPhotoIds.has(id)) {
+                return res.status(403).json({ error: 'Invalid photo ID' });
+            }
+        }
+
+        // Update sort orders
+        for (let i = 0; i < photoIds.length; i++) {
+            await db.query(
+                'UPDATE user_photos SET sort_order = $1 WHERE id = $2',
+                [i, photoIds[i]]
+            );
+        }
+
+        res.json({ success: true });
+    } catch (err) {
+        console.error("Reorder photos error:", err);
+        res.status(500).json({ error: "Failed to reorder photos" });
     }
 });
 

@@ -163,6 +163,17 @@ export default function AvatarEditorModal({ isOpen, onClose, ...props }) {
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState(null);
 
+    // [NEW] Reset state when modal opens
+    React.useEffect(() => {
+        if (isOpen) {
+            setImageSrc(null);
+            setZoom(1);
+            setRotation(0);
+            setCrop({ x: 0, y: 0 });
+            setError(null);
+        }
+    }, [isOpen]);
+
     const onCropComplete = useCallback((croppedArea, croppedAreaPixels) => {
         setCroppedAreaPixels(croppedAreaPixels);
     }, []);
@@ -236,7 +247,7 @@ export default function AvatarEditorModal({ isOpen, onClose, ...props }) {
                 });
             }));
 
-            // Complete
+            // Complete upload (updates user avatar)
             const completeRes = await fetch(completeUrl, {
                 method: 'POST',
                 headers: {
@@ -250,6 +261,29 @@ export default function AvatarEditorModal({ isOpen, onClose, ...props }) {
 
             if (!completeRes.ok) throw new Error('Failed to save avatar');
             const data = await completeRes.json();
+
+            // [NEW] Also save to user_photos table if saveAsPhoto prop is true
+            if (props.saveAsPhoto) {
+                const avatarUpload = uploads.find(u => u.type === 'avatar');
+                const thumbUpload = uploads.find(u => u.type === 'thumb');
+                
+                if (avatarUpload) {
+                    // Get public URLs from the complete response
+                    await fetch(`${import.meta.env.VITE_API_URL}/api/users/me/photos`, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'Authorization': `Bearer ${token}`
+                        },
+                        body: JSON.stringify({
+                            photo_url: data.avatar_url,
+                            thumb_url: data.avatar_thumb_url,
+                            photo_key: avatarUpload.key,
+                            set_as_main: true // New photos are set as main by default
+                        })
+                    });
+                }
+            }
 
             if (props.onSuccess) {
                 props.onSuccess(data);

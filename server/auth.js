@@ -91,7 +91,7 @@ router.post('/login', async (req, res) => {
             return res.status(401).json({ error: 'Invalid credentials' });
         }
 
-        // [NEW] Create Session
+        // [OPTIMIZED] Create Session in background - don't block login response
         const ua = new UAParser(req.headers['user-agent']);
         const browser = ua.getBrowser();
         const os = ua.getOS();
@@ -102,7 +102,14 @@ router.post('/login', async (req, res) => {
         const sessionId = uuidv4();
         const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
 
-        await db.query(`
+        // Generate token immediately with session ID
+        const token = jwt.sign({ id: user.id, username: user.username, display_name: user.display_name, sessionId }, JWT_SECRET);
+        
+        // Send response immediately - don't wait for session insert
+        res.json({ token, user: { id: user.id, username: user.username, display_name: user.display_name, share_presence: user.share_presence, avatar_url: user.avatar_url, avatar_thumb_url: user.avatar_thumb_url } });
+
+        // Create session in background (fire-and-forget)
+        db.query(`
             INSERT INTO user_sessions (id, user_id, device_name, device_type, os, browser, ip_address, location)
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
         `, [
@@ -114,10 +121,7 @@ router.post('/login', async (req, res) => {
             browser.name || 'Unknown', 
             ip, 
             null
-        ]);
-
-        const token = jwt.sign({ id: user.id, username: user.username, display_name: user.display_name, sessionId }, JWT_SECRET);
-        res.json({ token, user: { id: user.id, username: user.username, display_name: user.display_name, share_presence: user.share_presence, avatar_url: user.avatar_url, avatar_thumb_url: user.avatar_thumb_url } });
+        ]).catch(err => console.error('[Login] Session insert failed:', err));
     } catch (error) {
         console.error("Login error:", error);
         

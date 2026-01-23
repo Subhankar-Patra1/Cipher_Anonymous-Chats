@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useLayoutEffect } from 'react';
+import { motion, AnimatePresence } from 'framer-motion';
 
 import PickerPanel from './PickerPanel';
 import ContentEditable from 'react-contenteditable';
@@ -17,6 +18,7 @@ const formatDuration = (ms) => {
 };
 
 import AISendIcon from './icons/AISendIcon';
+import SendIcon from './icons/SendIcon';
 import PollIcon from './icons/PollIcon';
 
 export default function MessageInput({ 
@@ -1436,14 +1438,22 @@ export default function MessageInput({
                                 </div>
                             )}
                             
-                            {!hasText && (
-                                <div className="absolute left-4 top-3 text-slate-400 dark:text-slate-500 pointer-events-none select-none transition-colors">
-                                    {pendingGif 
-                                        ? "Enter caption (optional)..." 
-                                        : "Type a message..."
-                                    }
-                                </div>
-                            )}
+                            <AnimatePresence>
+                                {!hasText && (
+                                    <motion.div 
+                                        initial={{ opacity: 1, x: 0 }}
+                                        animate={{ opacity: 1, x: 0 }}
+                                        exit={{ opacity: 0, x: 20 }}
+                                        transition={{ duration: 0.2 }}
+                                        className="absolute left-4 top-3 text-slate-400 dark:text-slate-500 pointer-events-none select-none transition-colors"
+                                    >
+                                        {pendingGif 
+                                            ? "Enter caption (optional)..." 
+                                            : "Type a message..."
+                                        }
+                                    </motion.div>
+                                )}
+                            </AnimatePresence>
 
                             <div className="pr-2 flex items-center gap-1">
                                 <div className="relative">
@@ -1620,31 +1630,33 @@ export default function MessageInput({
 
                 {hasContent || isAi ? ( // [FIX] Always show Send button for AI (hide Mic)
                     <button 
+                        key="send-btn"
                         type={isGenerating ? "button" : "submit"} // [FIX] Type button for Stop to prevent submit
                         onClick={isGenerating ? onStop : undefined} // [FIX] Call stop handler
                         className={`
-                            p-3 rounded-xl flex items-center justify-center transition-all duration-200 shrink-0
-                            ${disabled && !isGenerating // [FIX] If disabled but NOT generating (e.g. just thinking), show disabled style. If generating, show Stop style.
+                            w-12 h-12 rounded-full flex items-center justify-center transition-all duration-200 shrink-0
+                            ${disabled && !isGenerating
                                 ? 'bg-slate-100 dark:bg-slate-800 text-slate-400 dark:text-slate-500 cursor-not-allowed' 
                                 : isGenerating
-                                    ? 'bg-slate-200 dark:bg-slate-700 text-red-500 hover:bg-slate-300 dark:hover:bg-slate-600 shadow-sm border border-red-200 dark:border-red-900/30' // Stop button style
+                                    ? 'bg-slate-200 dark:bg-slate-700 text-red-500 hover:bg-slate-300 dark:hover:bg-slate-600 shadow-sm border border-red-200 dark:border-red-900/30'
                                 : !hasContent
                                     ? 'bg-violet-600/50 text-white/50 cursor-default shadow-none' 
                                     : 'bg-violet-600 hover:bg-violet-500 text-white shadow-lg shadow-violet-500/20 hover:scale-105 active:scale-95'
                             }
                         `}
-                        disabled={disabled && !isGenerating} // Enable if generating (to click stop)
+                        disabled={disabled && !isGenerating}
                     >
                         {isGenerating ? (
-                             <span className="material-symbols-outlined animate-pulse">stop_circle</span>
+                             <span className="material-symbols-outlined animate-pulse text-[28px]">stop_circle</span>
                         ) : isAi ? (
-                            <AISendIcon className="w-6 h-6 text-white" />
+                            <AISendIcon className="w-7 h-7 text-white" />
                         ) : (
-                            <span className="material-symbols-outlined">send</span>
+                            <SendIcon className="w-7 h-7 text-white" />
                         )}
                     </button>
                 ) : (
                     <button 
+                        key="mic-btn"
                         type="button" 
                         onClick={handleStartRecording}
                         className={`

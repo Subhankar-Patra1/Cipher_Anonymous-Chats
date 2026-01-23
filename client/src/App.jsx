@@ -2,6 +2,7 @@ import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-d
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { NotificationProvider } from './context/NotificationContext';
 import Auth from './pages/Auth';
+import AuthCallback from './pages/AuthCallback';
 
 import Dashboard from './pages/Dashboard';
 import InvitePage from './pages/InvitePage';
@@ -11,6 +12,7 @@ import LockScreen from './components/LockScreen';
 import LandingPage from './pages/LandingPage';
 import LoadingScreen from './components/LoadingScreen'; // [NEW]
 import { AppLockProvider, useAppLock } from './context/AppLockContext'; // [MODIFIED] Added useAppLock hook
+import CompleteProfile from './pages/CompleteProfile'; // [NEW]
 
 
 const PrivateRoute = ({ children }) => {
@@ -39,6 +41,7 @@ const AppContent = () => {
                             <Auth />
                         </PublicRoute>
                     } />
+                    <Route path="/auth/callback" element={<AuthCallback />} />
                     <Route path="/invite" element={<InvitePage />} />
                     <Route path="/landing" element={<Navigate to="/" replace />} />
                     <Route path="/" element={
@@ -49,6 +52,11 @@ const AppContent = () => {
                     <Route path="/dashboard" element={
                         <PrivateRoute>
                             <Dashboard />
+                        </PrivateRoute>
+                    } />
+                     <Route path="/complete-profile" element={
+                        <PrivateRoute>
+                            <CompleteProfile />
                         </PrivateRoute>
                     } />
                 </Routes>
