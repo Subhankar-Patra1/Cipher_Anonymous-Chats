@@ -6,73 +6,83 @@ import SpinLoading from '../components/SpinLoading';
 export default function AuthCallback() {
     const [searchParams] = useSearchParams();
     const navigate = useNavigate();
-    const { login } = useAuth();
+    const { login, user } = useAuth(); // [FIX] Get user from context
     const [error, setError] = useState('');
 
     useEffect(() => {
-        const token = searchParams.get('token');
-        const provider = searchParams.get('provider');
-        const errorParam = searchParams.get('error');
+        const processCallback = async () => {
+            const token = searchParams.get('token');
+            const provider = searchParams.get('provider');
+            const errorParam = searchParams.get('error');
 
-        if (errorParam) {
-            setError(`Authentication failed: ${errorParam}`);
-            setTimeout(() => navigate('/auth'), 3000);
-            return;
-        }
+            if (errorParam) {
+                setError(`Authentication failed: ${errorParam}`);
+                setTimeout(() => navigate('/auth'), 3000);
+                return;
+            }
 
-        if (token) {
-            // Decode JWT to get user info (basic decode, validation happens on server)
-            try {
-                const payload = JSON.parse(atob(token.split('.')[1]));
-                const user = {
-                    id: payload.id,
-                    username: payload.username,
-                    display_name: payload.display_name,
-                    isNewUser: payload.isNewUser // [NEW] Pass onboarding flag
-                };
-
-                const recoveryCode = searchParams.get('recoveryCode');
-
-                // Log in the user
-                login(token, user, false);
-                
-                // [NEW] If New User, redirect to Onboarding Flow (Profile -> Backup)
-                // We pass the recoveryCode to be handled there if needed (though Profile is step 1)
-                if (payload.isNewUser || recoveryCode) {
-                     navigate('/complete-profile', { 
-                        state: { 
-                            recoveryCode,
-                            isNewUser: true
-                        } 
-                    });
+            if (token) {
+                 // [FIX] Prevent infinite loop if already logged in (re-mount)
+                 if (user) {
+                     navigate('/'); 
                      return;
-                }
+                 }
 
-                // Check for pending invites
-                const pendingInvite = localStorage.getItem('pendingInvite');
-                if (pendingInvite) {
-                    try {
-                        const { type, value } = JSON.parse(pendingInvite);
-                        localStorage.removeItem('pendingInvite');
-                        if (type === 'group') navigate(`/dashboard?joinCode=${value}`);
-                        else if (type === 'direct') navigate(`/dashboard?chatUser=${value}`);
-                        else navigate('/');
-                    } catch (e) {
-                         console.error('Invalid pending invite', e);
-                         navigate('/');
+                // Decode JWT to get user info (basic decode, validation happens on server)
+                try {
+                    const payload = JSON.parse(atob(token.split('.')[1]));
+                    const newUser = { // [FIX] Rename to avoid shadowing
+                        id: payload.id,
+                        username: payload.username,
+                        display_name: payload.display_name,
+                        isNewUser: payload.isNewUser // [NEW] Pass onboarding flag
+                    };
+
+                    const recoveryCode = searchParams.get('recoveryCode');
+
+                    // Log in the user
+                    await login(token, newUser, false);
+                    
+                    // [NEW] If New User, redirect to Onboarding Flow (Profile -> Backup)
+                    // We pass the recoveryCode to be handled there if needed (though Profile is step 1)
+                    if (payload.isNewUser || recoveryCode) {
+                         navigate('/complete-profile', { 
+                            state: { 
+                                recoveryCode,
+                                isNewUser: true
+                            } 
+                        });
+                         return;
                     }
-                } else {
-                    navigate('/');
+
+                    // Check for pending invites
+                    const pendingInvite = localStorage.getItem('pendingInvite');
+                    if (pendingInvite) {
+                        try {
+                            const { type, value } = JSON.parse(pendingInvite);
+                            localStorage.removeItem('pendingInvite');
+                            if (type === 'group') navigate(`/dashboard?joinCode=${value}`);
+                            else if (type === 'direct') navigate(`/dashboard?chatUser=${value}`);
+                            else navigate('/');
+                        } catch (e) {
+                             console.error('Invalid pending invite', e);
+                             navigate('/');
+                        }
+                    } else {
+                        navigate('/');
+                    }
+                } catch (err) {
+                    console.error('Failed to process OAuth callback:', err);
+                    setError('Failed to complete authentication');
+                    setTimeout(() => navigate('/auth'), 3000);
                 }
-            } catch (err) {
-                console.error('Failed to process OAuth callback:', err);
-                setError('Failed to complete authentication');
+            } else {
+                setError('No authentication token received');
                 setTimeout(() => navigate('/auth'), 3000);
             }
-        } else {
-            setError('No authentication token received');
-            setTimeout(() => navigate('/auth'), 3000);
-        }
+        };
+
+        processCallback();
     }, [searchParams, navigate, login]);
 
     return (
