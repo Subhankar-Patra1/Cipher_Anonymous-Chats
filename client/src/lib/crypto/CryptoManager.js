@@ -191,6 +191,9 @@ class CryptoManager {
         
         // [NEW] Trigger auto-backup (debounced)
         this.triggerAutoBackup();
+
+        // [NEW] Notify UI that keys have been updated
+        window.dispatchEvent(new CustomEvent('cipher:keys-updated', { detail: { roomId, version } }));
     }
 
     /**
@@ -656,6 +659,10 @@ class CryptoManager {
         }
         
         console.log(`[Crypto] Rotated key for room ${roomId} to v${setup.version}`);
+        
+        // [NEW] Notify UI
+        window.dispatchEvent(new CustomEvent('cipher:keys-updated', { detail: { roomId, version: setup.version } }));
+        
         return { success: true, version: setup.version };
     }
 
@@ -706,6 +713,9 @@ class CryptoManager {
         this.roomKeyCache.clear();
         
         console.log(`[Crypto] Successfully synced ${roomKeys.length} room keys and ${trustedKeys.length} trusted keys.`);
+        
+        // [NEW] Notify UI
+        window.dispatchEvent(new CustomEvent('cipher:keys-updated', { detail: { type: 'bulk-import' } }));
     }
 
     /**

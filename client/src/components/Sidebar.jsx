@@ -176,10 +176,30 @@ const LastMessagePreview = ({ room, user, hasSkippedSync }) => {
         decryptAttemptedRef.current = false;
     }, [room.id, room.last_message_id]);
 
+    // [NEW] Listen for key updates to trigger re-decryption
+    useEffect(() => {
+        const handleKeysUpdated = (e) => {
+            // If it's a bulk import (restore) or specific to this room
+            if (e.detail?.type === 'bulk-import' || String(e.detail?.roomId) === String(room.id)) {
+                // Only trigger if we are currently encrypted or failed
+                if (!localPlaintext || localPlaintext === '__DECRYPT_FAILED__' || localPlaintext === '__NO_KEY__') {
+                    decryptAttemptedRef.current = false;
+                    // Force a re-run of the decryption effect
+                    setLocalPlaintext(prev => prev === '__RETRY__' ? null : '__RETRY__');
+                    // Reset to null after a micro-tick to ensure the second effect runs
+                    setTimeout(() => setLocalPlaintext(null), 0);
+                }
+            }
+        };
+
+        window.addEventListener('cipher:keys-updated', handleKeysUpdated);
+        return () => window.removeEventListener('cipher:keys-updated', handleKeysUpdated);
+    }, [room.id, localPlaintext]);
+
     useEffect(() => {
         const decryptFromRoom = async () => {
             // Skip if already have plaintext
-            if (localPlaintext || room.last_message_plaintext) return;
+            if (localPlaintext && localPlaintext !== '__RETRY__') return;
             // Skip if no encrypted data
             if (!room.last_message_ciphertext || !room.last_message_iv) return;
             // Skip if user doesn't have keys (skipped sync)
@@ -201,9 +221,9 @@ const LastMessagePreview = ({ room, user, hasSkippedSync }) => {
                     decryptAttemptedRef.current = false;
                     // Trigger a retry after a short delay (e.g. keys might be loading)
                     setTimeout(() => {
-                         if (lastSeenIdRef.current === room.last_message_id && !localPlaintext) {
+                         if (lastSeenIdRef.current === room.last_message_id && (!localPlaintext || localPlaintext === '__RETRY__')) {
                              // Force update to retry
-                             setLocalPlaintext(prev => prev === '__RETRY__' ? null : prev); 
+                             setLocalPlaintext(prev => prev === '__RETRY_DELAY__' ? null : '__RETRY_DELAY__'); 
                          }
                     }, 2000);
                     return;

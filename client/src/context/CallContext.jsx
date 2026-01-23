@@ -13,6 +13,8 @@ export const CallProvider = ({ children, socket }) => {
     const [localStream, setLocalStream] = useState(null);
     const [remoteStream, setRemoteStream] = useState(null);
     const [callDetails, setCallDetails] = useState(null); // { callerId, callerName, type, roomId }
+    const [remoteMediaStatus, setRemoteMediaStatus] = useState({ audio: true, video: true });
+    const [currentFacingMode, setCurrentFacingMode] = useState('user');
     
     // Refs for mutable state in callbacks
     const connectionRef = useRef(null);
@@ -79,6 +81,10 @@ export const CallProvider = ({ children, socket }) => {
             endCall();
         });
 
+        socket.on('call:media-toggle', ({ audio, video }) => {
+            setRemoteMediaStatus({ audio, video });
+        });
+
         return () => {
             socket.off('call:invite');
             socket.off('call:accepted');
@@ -91,8 +97,17 @@ export const CallProvider = ({ children, socket }) => {
         let stream = null;
         try {
             stream = await navigator.mediaDevices.getUserMedia({ 
-                video: type === 'video', 
-                audio: true 
+                video: type === 'video' ? {
+                    facingMode: 'user',
+                    width: { ideal: 1280 },
+                    height: { ideal: 720 },
+                    frameRate: { ideal: 30 }
+                } : false, 
+                audio: {
+                    echoCancellation: true,
+                    noiseSuppression: true,
+                    autoGainControl: true
+                }
             });
         } catch (err) {
             console.error("Media Access denied:", err);
@@ -129,7 +144,7 @@ export const CallProvider = ({ children, socket }) => {
                     signal: data,
                     type,
                     roomId,
-                    callerName: user.username || "User", // Send OUR name
+                    callerName: user.display_name || user.username || "User", // Send OUR name
                     callerAvatar: user.avatar_url || user.avatar_thumb_url || user.profile_picture || user.avatar // Send OUR avatar
                 });
             });
@@ -170,8 +185,17 @@ export const CallProvider = ({ children, socket }) => {
         let stream = null;
         try {
             stream = await navigator.mediaDevices.getUserMedia({ 
-                video: callDetails.type === 'video', 
-                audio: true 
+                video: callDetails.type === 'video' ? {
+                    facingMode: 'user',
+                    width: { ideal: 1280 },
+                    height: { ideal: 720 },
+                    frameRate: { ideal: 30 }
+                } : false, 
+                audio: {
+                    echoCancellation: true,
+                    noiseSuppression: true,
+                    autoGainControl: true
+                }
             });
         } catch (err) {
             console.error("Media Access denied:", err);
@@ -245,6 +269,8 @@ export const CallProvider = ({ children, socket }) => {
         setLocalStream(null);
         setRemoteStream(null);
         setCallDetails(null);
+        setRemoteMediaStatus({ audio: true, video: true });
+        setCurrentFacingMode('user');
         connectionRef.current = null;
         localStreamRef.current = null;
         incomingSignalRef.current = null;
@@ -257,6 +283,12 @@ export const CallProvider = ({ children, socket }) => {
          if (localStreamRef.current) {
              const audioTrack = localStreamRef.current.getAudioTracks()[0];
              if (audioTrack) audioTrack.enabled = active;
+             
+             // Signal to other user
+             const target = callDetails?.isOutgoing ? callDetails.targetId : callDetails?.callerId;
+             if (target && socket) {
+                 socket.emit('call:media-toggle', { to: target, audio: active, video: localStreamRef.current.getVideoTracks()[0]?.enabled ?? false });
+             }
          }
     };
 
@@ -264,6 +296,56 @@ export const CallProvider = ({ children, socket }) => {
         if (localStreamRef.current) {
              const videoTrack = localStreamRef.current.getVideoTracks()[0];
              if (videoTrack) videoTrack.enabled = active;
+
+             // Signal to other user
+             const target = callDetails?.isOutgoing ? callDetails.targetId : callDetails?.callerId;
+             if (target && socket) {
+                 socket.emit('call:media-toggle', { to: target, audio: localStreamRef.current.getAudioTracks()[0]?.enabled ?? true, video: active });
+             }
+        }
+    };
+
+    const switchCamera = async () => {
+        if (!localStreamRef.current) return;
+
+        const newMode = currentFacingMode === 'user' ? 'environment' : 'user';
+        
+        try {
+            const newStream = await navigator.mediaDevices.getUserMedia({ 
+                video: { 
+                    facingMode: newMode,
+                    width: { ideal: 1280 },
+                    height: { ideal: 720 }
+                },
+                audio: false
+            });
+
+            const newVideoTrack = newStream.getVideoTracks()[0];
+            const oldVideoTrack = localStreamRef.current.getVideoTracks()[0];
+
+            if (connectionRef.current && oldVideoTrack) {
+                connectionRef.current.replaceTrack(oldVideoTrack, newVideoTrack, localStreamRef.current);
+            }
+
+            // Update local stream ref and state
+            oldVideoTrack.stop();
+            localStreamRef.current.removeTrack(oldVideoTrack);
+            localStreamRef.current.addTrack(newVideoTrack);
+
+            // Trigger a re-render of local video by forcing a new stream reference if needed, 
+            // though most components react to track changes if they use the same stream object.
+            // To be safe, we can set a new stream object.
+            const updatedStream = new MediaStream(localStreamRef.current.getTracks());
+            setLocalStream(updatedStream);
+            localStreamRef.current = updatedStream;
+            
+            setCurrentFacingMode(newMode);
+            
+            console.log(`[Call] Switched camera to ${newMode}`);
+        } catch (err) {
+            console.error("Failed to switch camera:", err);
+            // Fallback: If environment specifically fails, try to just cycle if available or notify
+            alert("Could not switch camera. Make sure you have multiple cameras available.");
         }
     };
 
@@ -277,7 +359,10 @@ export const CallProvider = ({ children, socket }) => {
             answerCall,
             endCall,
             toggleAudio,
-            toggleVideo
+            toggleVideo,
+            switchCamera,
+            remoteMediaStatus,
+            currentFacingMode
         }}>
             {children}
         </CallContext.Provider>

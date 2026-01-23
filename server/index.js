@@ -1231,6 +1231,15 @@ io.on('connection', async (socket) => {
         });
     });
 
+    socket.on('call:media-toggle', ({ to, audio, video }) => {
+        console.log(`[Call] Media toggle from ${socket.user.id} to ${to}: audio=${audio}, video=${video}`);
+        io.to(`user:${to}`).emit('call:media-toggle', {
+            from: socket.user.id,
+            audio,
+            video
+        });
+    });
+
     socket.on('disconnect', () => {
         const userId = socket.user.id;
         console.log(`[DEBUG] Socket disconnected: User=${socket.user.username} (${userId}) SocketID=${socket.id} DeviceID=${socket.deviceId || 'N/A'}`);
