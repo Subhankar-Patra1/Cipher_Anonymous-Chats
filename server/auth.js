@@ -204,7 +204,7 @@ router.get('/me', async (req, res) => {
              return res.status(401).json({ error: 'Invalid token structure. Please login again.' });
         }
 
-        const { rows } = await db.query('SELECT id, username, display_name, share_presence, avatar_url, avatar_thumb_url FROM users WHERE id = $1', [decoded.id]);
+        const { rows } = await db.query('SELECT id, username, display_name, share_presence, avatar_url, avatar_thumb_url, auth_method FROM users WHERE id = $1', [decoded.id]);
         const user = rows[0];
         
         if (!user) return res.status(404).json({ error: 'User not found' });

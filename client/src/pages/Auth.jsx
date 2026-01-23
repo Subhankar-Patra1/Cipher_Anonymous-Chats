@@ -246,6 +246,8 @@ export default function Auth() {
         }
     };
 
+
+
     return (
         <div className="h-[100dvh] w-full grid grid-cols-1 lg:grid-cols-2 bg-slate-950 overflow-hidden">
             {/* Left Side - Visual */}
@@ -590,23 +592,6 @@ export default function Auth() {
                         </div>
                     ) : (
                         <form onSubmit={handleSubmit} className="space-y-6">
-                            {view === 'signup' && (
-                                <div className="space-y-2">
-                                    <label className="text-sm font-medium text-slate-300">Display Name</label>
-                                    <div className="relative">
-                                        <input 
-                                            type="text" 
-                                            className="w-full bg-slate-900/50 text-white rounded-xl pl-10 pr-4 py-3 focus:outline-none focus:ring-2 focus:ring-violet-500/50 border border-slate-800 focus:border-violet-500/50 transition-all placeholder:text-slate-600"
-                                            placeholder="Shadow"
-                                            value={formData.displayName}
-                                            onChange={e => setFormData({...formData, displayName: e.target.value})}
-                                            required
-                                        />
-                                        <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 text-lg">badge</span>
-                                    </div>
-                                </div>
-                            )}
-                            
                             {/* Username Field */}
                             <div className="space-y-2">
                                 <label className="text-sm font-medium text-slate-300">Username</label>
@@ -735,7 +720,7 @@ export default function Auth() {
 
                                         {view === 'signup' && formData.password && (
                                             <div className="absolute right-10 top-1/2 -translate-y-1/2">
-                                                {passwordValid 
+                                                {passwordValid  
                                                     ? <span className="material-symbols-outlined text-green-500 text-lg">check_circle</span>
                                                     : <span className="material-symbols-outlined text-red-500 text-lg">cancel</span>
                                                 }

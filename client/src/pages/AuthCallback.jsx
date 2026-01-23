@@ -27,35 +27,25 @@ export default function AuthCallback() {
                 const user = {
                     id: payload.id,
                     username: payload.username,
-                    display_name: payload.display_name
+                    display_name: payload.display_name,
+                    isNewUser: payload.isNewUser // [NEW] Pass onboarding flag
                 };
 
                 const recoveryCode = searchParams.get('recoveryCode');
 
-                // [NEW] If Recovery Code is present (New OAuth User), redirect to Setup Flow
-                if (recoveryCode) {
-                    navigate('/auth', { 
+                // Log in the user
+                login(token, user, false);
+                
+                // [NEW] If New User, redirect to Onboarding Flow (Profile -> Backup)
+                // We pass the recoveryCode to be handled there if needed (though Profile is step 1)
+                if (payload.isNewUser || recoveryCode) {
+                     navigate('/complete-profile', { 
                         state: { 
-                            view: 'oauth_success', 
-                            recoveryCode, 
-                            token, 
-                            user 
+                            recoveryCode,
+                            isNewUser: true
                         } 
                     });
-                    return;
-                }
-
-                // Log in the user
-                login(token, user, false); // isNew = false for OAuth login generally, but we handle onboarding
-                
-                // [NEW] Check for Onboarding Flag (Legacy or if Code is missing for some reason)
-                if (payload.isNewUser) {
-                     // If we have no recovery code but isNewUser is true, something is weird.
-                     // But maybe they want profile completion?
-                     // For now, let's assume if no recovery code, treat as login (dashboard will handle sync)
-                     // Or redirect to profile if needed.
-                     // navigate('/complete-profile');
-                     // return;
+                     return;
                 }
 
                 // Check for pending invites

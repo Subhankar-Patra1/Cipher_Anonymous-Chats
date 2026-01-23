@@ -440,34 +440,43 @@ export default function Dashboard() {
             
             syncAttemptedRef.current = true; // Prevent loop
 
-            try {
-                // 1. Check if Cloud Backup exists
-                const res = await fetch(`${import.meta.env.VITE_API_URL}/api/auth/backup`, {
-                    headers: { Authorization: `Bearer ${token}` }
-                });
-                
-                // If backup exists, trigger Restore Modal
-                if (res.ok) {
-                    const data = await res.json();
-                    if (data && (data.encrypted_blob || data.hasBackup)) { // Handle different API responses
-                        console.log('[Restore] Backup found. Prompting restore...');
-                        setShowRestoreModal(true);
-                        return;
+            // [NEW] Flow Logic based on Auth Method
+            // OAuth users -> Prioritize Cloud Restore (Backup Password)
+            // Local users -> Prioritize Device Sync (Approval)
+            const isOAuth = user?.auth_method === 'oauth' || user?.auth_method === 'multiple';
+            
+            // If OAuth, check cloud backup first
+            if (isOAuth) {
+                try {
+                    // 1. Check if Cloud Backup exists
+                    const res = await fetch(`${import.meta.env.VITE_API_URL}/api/auth/backup`, {
+                        headers: { Authorization: `Bearer ${token}` }
+                    });
+                    
+                    // If backup exists, trigger Restore Modal
+                    if (res.ok) {
+                        const data = await res.json();
+                        if (data && (data.encrypted_blob || data.hasBackup)) {
+                            console.log('[Restore] Backup found (OAuth). Prompting restore...');
+                            setShowRestoreModal(true);
+                            return;
+                        }
                     }
+                } catch (err) {
+                    console.warn('[Restore] Failed to check backup status:', err);
                 }
-            } catch (err) {
-                console.warn('[Restore] Failed to check backup status:', err);
             }
 
-            // 2. If no backup, fallback to P2P Sync (Existing Logic)
-            console.log('[Sync] No backup found. Delaying sync check (1.5s) to avoid race...');
+            // 2. Fallback (or Primary for Local) -> P2P Sync
+            // Local users skip straight to here
+            console.log(`[Sync] ${isOAuth ? 'No backup found' : 'Local User'}. Starting Device Sync...`);
             setTimeout(() => {
                  triggerSync();
             }, 1500);
         };
 
         checkRestoreStatus();
-    }, [socket, triggerSync, token, hasSkippedSync]);
+    }, [socket, triggerSync, token, hasSkippedSync, user]);
 
     useEffect(() => {
         console.log(`[Dashboard] Initializing Socket. token=${!!token}, deviceId=${cryptoManager.deviceId}`);
@@ -2488,6 +2497,10 @@ export default function Dashboard() {
                 fetchRooms();
             }}
             token={token}
+            onSwitchToSync={() => {
+                setShowRestoreModal(false);
+                triggerSync();
+            }}
         />
         
         <CallModal />

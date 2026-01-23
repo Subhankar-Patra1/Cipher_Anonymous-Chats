@@ -20,12 +20,13 @@ const FUN_FACTS = [
     "Fun fact: Cipher uses end-to-end encryption for everything."
 ];
 
-export default function RestoreModal({ isOpen, onClose, onRestoreSuccess, token }) {
+export default function RestoreModal({ isOpen, onClose, onRestoreSuccess, token, onSwitchToSync }) {
     const [password, setPassword] = useState('');
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState('');
     const [currentStep, setCurrentStep] = useState('idle');
     const [factIndex, setFactIndex] = useState(0);
+    const [isClosing, setIsClosing] = useState(false); // [NEW] Track closing state
     const factIntervalRef = useRef(null);
 
     useEffect(() => {
@@ -38,6 +39,25 @@ export default function RestoreModal({ isOpen, onClose, onRestoreSuccess, token 
         }
         return () => clearInterval(factIntervalRef.current);
     }, [loading]);
+
+    // [NEW] Handle smooth closing
+    const handleClose = () => {
+        setIsClosing(true);
+        setTimeout(() => {
+            onClose();
+            setIsClosing(false); // Reset for next time (though unmount happens first)
+        }, 300); // Match animation duration
+    };
+
+    // [NEW] Auto-close on success
+    useEffect(() => {
+        if (currentStep === 'completed') {
+            const timer = setTimeout(() => {
+                handleClose();
+            }, 3000); 
+            return () => clearTimeout(timer);
+        }
+    }, [currentStep]);
 
     if (!isOpen) return null;
 
@@ -98,8 +118,8 @@ export default function RestoreModal({ isOpen, onClose, onRestoreSuccess, token 
     const progressPercent = (PROGRESS_STEPS.findIndex(s => s.id === currentStep) + 1) / PROGRESS_STEPS.length * 100;
 
     return createPortal(
-        <div className="fixed inset-0 bg-black/80 backdrop-blur-xl flex items-center justify-center z-[3000] p-4 animate-in fade-in duration-300">
-            <div className="bg-slate-900 border border-slate-700 rounded-3xl p-8 w-full max-w-md shadow-2xl relative overflow-hidden transition-all duration-500">
+        <div className={`fixed inset-0 bg-black/80 backdrop-blur-xl flex items-center justify-center z-[3000] p-4 ${isClosing ? 'animate-out fade-out duration-300' : 'animate-in fade-in duration-300'}`}>
+            <div className={`bg-slate-900 border border-slate-700 rounded-3xl p-8 w-full max-w-md shadow-2xl relative overflow-hidden transition-all duration-500 ${isClosing ? 'animate-out zoom-out-95 duration-300' : ''}`}>
                 {/* Background Decor */}
                 {loading && (
                     <div className="absolute top-0 left-0 w-full h-1 bg-slate-800">
@@ -127,7 +147,7 @@ export default function RestoreModal({ isOpen, onClose, onRestoreSuccess, token 
                     
                     {!loading && currentStep !== 'completed' ? (
                         <p className="text-slate-400 text-sm">
-                            No active devices found. Enter your Backup Password to restore your encrypted chat history.
+                            Enter your Backup Password to restore your chat history from the cloud.
                         </p>
                     ) : (
                         <div className="space-y-1">
@@ -186,21 +206,37 @@ export default function RestoreModal({ isOpen, onClose, onRestoreSuccess, token 
                             </div>
                         )}
 
-                        <div className="flex gap-3 pt-2">
-                            <button
-                                type="button"
-                                onClick={onClose}
-                                className="flex-1 px-4 py-4 rounded-2xl bg-slate-800 text-slate-400 font-bold hover:bg-slate-700 hover:text-slate-200 transition-all active:scale-95"
-                            >
-                                Cancel
-                            </button>
+                        <div className="flex flex-col gap-3 pt-3">
                             <button
                                 type="submit"
                                 disabled={!password}
-                                className="flex-[1.5] px-4 py-4 rounded-2xl bg-gradient-to-r from-violet-600 to-indigo-600 text-white font-bold hover:from-violet-500 hover:to-indigo-500 disabled:opacity-30 disabled:grayscale disabled:cursor-not-allowed transition-all shadow-lg active:scale-95"
+                                className="w-full py-3.5 rounded-xl bg-gradient-to-r from-violet-600 to-indigo-600 text-white font-bold text-sm tracking-wide hover:from-violet-500 hover:to-indigo-500 disabled:opacity-40 disabled:grayscale disabled:cursor-not-allowed transition-all shadow-lg hover:shadow-violet-500/25 active:scale-[0.98]"
                             >
                                 Restore History
                             </button>
+
+                            <div className="flex gap-3">
+                                <button
+                                    type="button"
+                                    onClick={handleClose}
+                                    className="flex-1 py-3.5 rounded-xl bg-slate-800 text-slate-400 font-semibold text-sm hover:bg-slate-700 hover:text-slate-200 transition-all active:scale-[0.98]"
+                                >
+                                    Cancel
+                                </button>
+                                {/* [NEW] Sync Option */}
+                                {onSwitchToSync && (
+                                    <button
+                                        type="button"
+                                        onClick={() => {
+                                            setIsClosing(true);
+                                            setTimeout(onSwitchToSync, 300);
+                                        }}
+                                        className="flex-1 py-3.5 rounded-xl bg-slate-800/50 border border-violet-500/20 text-violet-400 font-semibold text-sm hover:bg-slate-800 hover:border-violet-500/40 hover:text-violet-300 transition-all active:scale-[0.98]"
+                                    >
+                                        Sync from Device
+                                    </button>
+                                )}
+                            </div>
                         </div>
                     </form>
                 )}
