@@ -88,9 +88,19 @@ export const AuthProvider = ({ children }) => {
     };
 
     const logout = () => {
+        // [FIX] Clear all app lock preferences on logout
         localStorage.removeItem('token');
+        localStorage.removeItem('app_passcode');
+        localStorage.removeItem('app_lock_enabled');
+        localStorage.removeItem('auto_lock_duration');
+        localStorage.removeItem('skipped_sync'); // Clear sync skip flag too
+        
         setToken(null);
         setUser(null);
+        
+        // Force reload to reset AppLockContext state since it initializes from localStorage
+        // This is safer than trying to expose a reset method from AppLockContext
+        window.location.reload();
     };
 
     // [FIX] Don't show loading screen if app lock is enabled - lock screen takes priority
