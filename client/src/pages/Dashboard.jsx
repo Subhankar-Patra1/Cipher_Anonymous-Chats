@@ -1331,6 +1331,29 @@ export default function Dashboard() {
                 return sortRooms(newRooms);
             });
         });
+        
+        // [NEW] Todo update - update chat list with "updated" preview 
+        newSocket.on('todo_updated', ({ roomId, todoId, messageId, updaterId, updaterName, todoTitle, todo }) => {
+            // Update sidebar preview
+            setRooms(currentRooms => {
+                const newRooms = currentRooms.map(room => {
+                    if (String(room.id) === String(roomId)) {
+                        return {
+                            ...room,
+                            last_message_content: todoTitle || 'To-Do List',
+                            last_message_type: 'todo_updated',
+                            last_message_sender_id: updaterId,
+                            last_message_sender_name: updaterName,
+                            last_message_todo_title: todoTitle,
+                            last_message_at: new Date().toISOString()
+                        };
+                    }
+                    return room;
+                });
+                return sortRooms(newRooms);
+            });
+        });
+
         // [NEW] Group Avatar/Bio Updates
         newSocket.on('room:updated', (data) => {
             // data matches: { roomId, avatar_url, avatar_thumb_url, bio, etc }
@@ -1770,6 +1793,18 @@ export default function Dashboard() {
             console.error(err);
         }
     };
+
+    const handleMessageUser = useCallback(async (userId) => {
+        handleCloseProfile();
+        // Find existing DM with this user
+        const existingDm = rooms.find(r => r.type === 'direct' && String(r.other_user_id) === String(userId));
+        if (existingDm) {
+            handleSelectRoom(existingDm);
+        } else {
+            // Create new DM
+            await handleCreateRoom({ type: 'direct', targetUserId: userId });
+        }
+    }, [rooms, handleSelectRoom, handleCloseProfile]);
 
     const handleJoinRoom = async (code) => {
         try {
@@ -2507,6 +2542,7 @@ export default function Dashboard() {
                         setShowRestoreModal(true);
                     }}
                     socket={socket}
+                    onMessageUser={handleMessageUser}
                 />
             )}
 

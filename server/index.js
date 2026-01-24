@@ -108,6 +108,9 @@ app.use('/api/gifs', tenorRoutes);
 const pollsRoutes = require('./polls');
 app.use('/api/polls', pollsRoutes);
 
+const todosRoutes = require('./todos');
+app.use('/api/todos', todosRoutes);
+
 // AI Integration
 const { setupAI } = require('./ai');
 setupAI(app, io, db, redisClient);

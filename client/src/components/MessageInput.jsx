@@ -29,6 +29,7 @@ export default function MessageInput({
     onSendImage,
     onLocationClick,
     onPollClick,
+    onTodoClick,
     disabled, 
     replyTo, 
     setReplyTo,
@@ -1258,6 +1259,15 @@ export default function MessageInput({
                                             {renderTextWithEmojis(replyTo.poll_question) || 'Poll'}
                                         </span>
                                     </div>
+
+                                ) : replyTo.type === 'todo' ? (
+                                    <div className="flex flex-col">
+                                        <span className="text-sm font-semibold text-violet-600 dark:text-violet-300 flex items-center gap-1">{renderTextWithEmojis(replyTo.sender)}</span>
+                                        <span className="text-sm text-slate-600 dark:text-slate-300 flex items-center gap-1">
+                                            <span className="material-symbols-outlined text-[16px] text-violet-500">checklist</span>
+                                            {replyTo.todo?.title || replyTo.content || 'To-Do List'}
+                                        </span>
+                                    </div>
                                 ) : replyTo.type === 'location' ? (
                                     <div className="flex justify-between items-center w-full gap-2">
                                         <div className="flex flex-col">
@@ -1598,6 +1608,26 @@ export default function MessageInput({
                                                                 <span className="material-symbols-outlined text-[18px] sm:text-[20px]">ballot</span>
                                                             </div>
                                                             <span className="text-xs sm:text-sm font-semibold text-slate-700 dark:text-slate-200">Poll</span>
+                                                        </button>
+                                                    )}
+
+                                                    {/* To-do List Option */}
+                                                    {onTodoClick && (
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => {
+                                                                onTodoClick();
+                                                                closeAttachMenu();
+                                                            }}
+                                                            style={{ 
+                                                                animationDelay: isClosingAttach ? '0ms' : '200ms' 
+                                                            }}
+                                                            className={`w-full flex items-center gap-2.5 p-2 rounded-[12px] hover:bg-slate-100 dark:hover:bg-slate-800 active:bg-slate-200 dark:active:bg-slate-700 transition-colors text-left group ${isClosingAttach ? 'item-out' : 'item-in'}`}
+                                                        >
+                                                            <div className="w-8 h-8 sm:w-9 sm:h-9 rounded-full bg-violet-500 grid place-items-center text-white shadow-lg shadow-violet-500/20">
+                                                                <span className="material-symbols-outlined text-[18px] sm:text-[20px]">checklist</span>
+                                                            </div>
+                                                            <span className="text-xs sm:text-sm font-semibold text-slate-700 dark:text-slate-200">To-do List</span>
                                                         </button>
                                                     )}
                                                 </div>

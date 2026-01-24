@@ -12,6 +12,7 @@ import FilePreviewModal from './FilePreviewModal';
 import PinnedMessagesPanel from './PinnedMessagesPanel';
 import LocationPicker from './LocationPicker';
 import CreatePollModal from './CreatePollModal';
+import CreateTodoModal from './CreateTodoModal';
 import PinDurationModal from './PinDurationModal';
 import { linkifyText } from '../utils/linkify';
 import { renderTextWithEmojis } from '../utils/emojiRenderer';
@@ -219,6 +220,7 @@ export default function ChatWindow({
     const [selectedFiles, setSelectedFiles] = useState(null);
     const [showLocationPicker, setShowLocationPicker] = useState(false);
     const [showCreatePoll, setShowCreatePoll] = useState(false);
+    const [showCreateTodo, setShowCreateTodo] = useState(false);
     const [pinToConfirm, setPinToConfirm] = useState(null);
     const [loadingMore, setLoadingMore] = useState(false);
     const [hasMore, setHasMore] = useState(true);
@@ -798,6 +800,18 @@ export default function ChatWindow({
                 if (msg) await updateLocalMessage(msg.id, { poll });
             }
         };
+
+        // [NEW] Todo updated
+        const handleTodoUpdated = async ({ todoId, messageId, todo }) => {
+             // Update local message state
+             if (messageId) {
+                 await updateLocalMessage(messageId, { todo });
+             }
+        };
+        
+        socket.on('todo_updated', handleTodoUpdated); 
+        socket.on('poll_vote', handlePollVote);
+        socket.on('poll_closed', handlePollClosed);
         socket.on('poll_closed', handlePollClosed);
 
         // [NEW] Update messages when a user changes their display name
@@ -2753,6 +2767,7 @@ export default function ChatWindow({
                             onSendGif={handleSendGif}
                             onLocationClick={() => setShowLocationPicker(true)}
                             onPollClick={() => setShowCreatePoll(true)}
+                            onTodoClick={() => setShowCreateTodo(true)}
                             disabled={!canSend || isExpired}
                             replyTo={replyTo}          
                             setReplyTo={setReplyTo}
@@ -2892,6 +2907,15 @@ export default function ChatWindow({
                         throw err;
                     }
                 }}
+            />
+
+            {/* [NEW] Create Todo Modal from Chat */}
+            <CreateTodoModal
+                isOpen={showCreateTodo}
+                onClose={() => setShowCreateTodo(false)}
+                rooms={[]} // Not needed when fixedRoomId is provided
+                activeRoom={room}
+                fixedRoomId={room.id}
             />
 
             {/* [NEW] Pin Duration Modal */}

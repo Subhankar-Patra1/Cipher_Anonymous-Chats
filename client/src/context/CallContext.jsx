@@ -19,18 +19,30 @@ export const CallProvider = ({ children, socket }) => {
     const [hasMultipleCameras, setHasMultipleCameras] = useState(false);
     
     // Check for multiple cameras on mount
-    useEffect(() => {
-        const checkCameras = async () => {
-            try {
-                const devices = await navigator.mediaDevices.enumerateDevices();
-                const videoDevices = devices.filter(device => device.kind === 'videoinput');
+    const checkCameras = async () => {
+        try {
+            const devices = await navigator.mediaDevices.enumerateDevices();
+            const videoDevices = devices.filter(device => device.kind === 'videoinput');
+            
+            // On mobile, if no labels are present, it often means permissions haven't been granted.
+            // But we can guess multiple cameras exist on most modern phones.
+            const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+            
+            // If labels are available, we can be sure. If not, and it's mobile, assume it has multiple.
+            const hasLabels = videoDevices.some(d => d.label);
+            if (isMobile && !hasLabels) {
+                setHasMultipleCameras(true); // Assume multiple on mobile if we can't tell yet
+            } else {
                 setHasMultipleCameras(videoDevices.length > 1);
-            } catch (err) {
-                console.warn("Error checking cameras:", err);
-                setHasMultipleCameras(false);
             }
-        };
-        
+        } catch (err) {
+            console.warn("Error checking cameras:", err);
+            const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+            setHasMultipleCameras(isMobile); // Default to true on mobile on error
+        }
+    };
+
+    useEffect(() => {
         checkCameras();
         
         // Listen for device changes
@@ -188,6 +200,9 @@ export const CallProvider = ({ children, socket }) => {
         // Also listen for general peer events
         peer.on('connect', () => {
             setConnectionStatus('good');
+            
+            // Refresh camera list once we have permission
+            checkCameras();
         });
     };
 
@@ -292,6 +307,9 @@ export const CallProvider = ({ children, socket }) => {
             localStreamRef.current = stream;
             setCallStatus('connected');
             setConnectionStatus('good');
+
+            // Refresh camera list once we have permission
+            checkCameras();
 
             const peer = new SimplePeer({
                 initiator: false,
@@ -402,24 +420,23 @@ export const CallProvider = ({ children, socket }) => {
         const newMode = currentFacingMode === 'user' ? 'environment' : 'user';
         
         try {
-        const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
-        const constraints = {
-            video: { 
-                facingMode: newMode,
-                width: isMobile ? { ideal: 480 } : { ideal: 1280 },
-                height: isMobile ? { ideal: 360 } : { ideal: 720 },
-                frameRate: isMobile ? { ideal: 20, max: 24 } : { ideal: 30 }
-            },
-            audio: false
-        };
-
+            const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+            const constraints = {
+                video: { 
+                    facingMode: { ideal: newMode },
+                    width: isMobile ? { ideal: 480 } : { ideal: 1280 },
+                    height: isMobile ? { ideal: 360 } : { ideal: 720 },
+                    frameRate: isMobile ? { ideal: 20, max: 24 } : { ideal: 30 }
+                },
+                audio: false
+            };
 
             const newStream = await navigator.mediaDevices.getUserMedia(constraints);
-
             const newVideoTrack = newStream.getVideoTracks()[0];
             const oldVideoTrack = localStreamRef.current.getVideoTracks()[0];
 
             if (connectionRef.current && oldVideoTrack) {
+                // simple-peer replaceTrack handles the heavy lifting
                 connectionRef.current.replaceTrack(oldVideoTrack, newVideoTrack, localStreamRef.current);
             }
 
@@ -428,20 +445,26 @@ export const CallProvider = ({ children, socket }) => {
             localStreamRef.current.removeTrack(oldVideoTrack);
             localStreamRef.current.addTrack(newVideoTrack);
 
-            // Trigger a re-render of local video by forcing a new stream reference if needed, 
-            // though most components react to track changes if they use the same stream object.
-            // To be safe, we can set a new stream object.
+            // Re-broadcast media toggle to ensure remote sees the update
+            const target = callDetails?.isOutgoing ? callDetails.targetId : callDetails?.callerId;
+            if (target && socket) {
+                socket.emit('call:media-toggle', { 
+                    to: target, 
+                    audio: localStreamRef.current.getAudioTracks()[0]?.enabled ?? true, 
+                    video: true 
+                });
+            }
+
+            // Force a new stream reference to trigger re-renders
             const updatedStream = new MediaStream(localStreamRef.current.getTracks());
             setLocalStream(updatedStream);
             localStreamRef.current = updatedStream;
             
             setCurrentFacingMode(newMode);
-            
             console.log(`[Call] Switched camera to ${newMode}`);
         } catch (err) {
             console.error("Failed to switch camera:", err);
-            // Fallback: If environment specifically fails, try to just cycle if available or notify
-            alert("Could not switch camera. Make sure you have multiple cameras available.");
+            alert("Could not switch camera. This might happen if your device only has one camera or permissions were denied.");
         }
     };
 

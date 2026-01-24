@@ -26,6 +26,7 @@ import { linkToBigEmoji, isSingleEmoji, splitEmojis } from '../utils/animatedEmo
 import emojiRegex from 'emoji-regex'; // [NEW] For spoiler emoji detection
 import ReactionPicker, { REACTION_MAP } from './ReactionPicker'; // [NEW]
 import ReactionDetailsModal from './ReactionDetailsModal'; // [NEW]
+import TodoMessage from './TodoMessage'; // [NEW]
 import { Emoji, EmojiStyle } from 'emoji-picker-react';
 import db, { updateLocalMessage } from '../utils/db';
 
@@ -569,6 +570,11 @@ export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone,
                                         <PollIcon className="w-[14px] h-[14px] shrink-0" />
                                         <span className="truncate">{renderTextWithEmojis(msg.replyTo.poll_question) || 'Poll'}</span>
                                     </div>
+                                ) : msg.replyTo.type === 'todo' ? (
+                                    <div className="flex items-center gap-1 text-xs opacity-90">
+                                        <span className="material-symbols-outlined text-[14px]">checklist</span>
+                                        <span className="truncate">Todo</span>
+                                    </div>
                                 ) : (
                                     <div className="text-xs opacity-80 line-clamp-2">
                                         {linkifyText(msg.replyTo.plaintext_content || msg.replyTo.text, '', isMe ? 'text-white/90 underline break-all' : 'text-violet-600 dark:text-violet-300 underline break-all', { disableBigEmoji: true })}
@@ -625,8 +631,8 @@ export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone,
                                                 <span className="material-symbols-outlined text-[14px] text-red-400">refresh</span>
                                             </button>
                                         )}
-                                        {msg.status === 'sent' && <span className="material-symbols-outlined text-[14px] text-white">check</span>}
-                                        {msg.status === 'delivered' && <span className="material-symbols-outlined text-[14px] text-white">done_all</span>}
+                                        {msg.status === 'sent' && <span className="material-symbols-outlined text-[14px] text-violet-200/90">check</span>}
+                                        {msg.status === 'delivered' && <span className="material-symbols-outlined text-[14px] text-violet-200/90">done_all</span>}
                                         {msg.status === 'seen' && <span className="material-symbols-outlined text-[14px] text-blue-400 font-bold filled">done_all</span>}
                                     </div>
                                 )}
@@ -673,8 +679,8 @@ export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone,
                                                     <span className="material-symbols-outlined text-[14px] text-red-400">refresh</span>
                                                 </button>
                                             )}
-                                            {msg.status === 'sent' && <span className="material-symbols-outlined text-[14px] text-white">check</span>}
-                                            {msg.status === 'delivered' && <span className="material-symbols-outlined text-[14px] text-white">done_all</span>}
+                                            {msg.status === 'sent' && <span className="material-symbols-outlined text-[14px] text-violet-200/90">check</span>}
+                                            {msg.status === 'delivered' && <span className="material-symbols-outlined text-[14px] text-violet-200/90">done_all</span>}
                                             {msg.status === 'seen' && <span className="material-symbols-outlined text-[14px] text-blue-400 font-bold filled">done_all</span>}
                                         </div>
                                     )}
@@ -685,6 +691,8 @@ export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone,
                                     </p>
                                 )}
                             </>
+                        ) : msg.type === 'todo' ? (
+                            <TodoMessage msg={msg} />
                         ) : ((linkToBigEmoji(msg.content) || isSingleEmoji(msg.content)) && !msg.replyTo) ? (
                             // Big emoji display - render each emoji separately
                             <div className="p-2 flex gap-1 flex-wrap">
@@ -1270,8 +1278,8 @@ export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone,
                                         <div className="absolute bottom-1 right-1 flex items-center justify-center p-0.5 rounded-full bg-black/30 backdrop-blur-[1px] z-20">
                                             {(msg.status === 'sending' || msg.status === 'pending') && <span className="material-symbols-outlined text-[10px] text-white">access_time</span>}
                                             {msg.status === 'error' && <span className="material-symbols-outlined text-[12px] text-red-400">error</span>}
-                                            {msg.status === 'sent' && <span className="material-symbols-outlined text-[14px] text-white">check</span>}
-                                            {msg.status === 'delivered' && <span className="material-symbols-outlined text-[14px] text-white">done_all</span>}
+                                            {msg.status === 'sent' && <span className="material-symbols-outlined text-[14px] text-violet-200/90">check</span>}
+                                            {msg.status === 'delivered' && <span className="material-symbols-outlined text-[14px] text-violet-200/90">done_all</span>}
                                             {msg.status === 'seen' && <span className="material-symbols-outlined text-[14px] text-blue-400 font-bold filled">done_all</span>}
                                         </div>
                                     )}
@@ -1312,8 +1320,8 @@ export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone,
                                         <div className="absolute bottom-1 right-1 flex items-center justify-center p-0.5 rounded-full bg-black/30 backdrop-blur-[1px] z-20">
                                             {(msg.status === 'sending' || msg.status === 'pending') && <span className="material-symbols-outlined text-[10px] text-white">access_time</span>}
                                             {msg.status === 'error' && <span className="material-symbols-outlined text-[12px] text-red-400">error</span>}
-                                            {msg.status === 'sent' && <span className="material-symbols-outlined text-[14px] text-white">check</span>}
-                                            {msg.status === 'delivered' && <span className="material-symbols-outlined text-[14px] text-white">done_all</span>}
+                                            {msg.status === 'sent' && <span className="material-symbols-outlined text-[14px] text-violet-200/90">check</span>}
+                                            {msg.status === 'delivered' && <span className="material-symbols-outlined text-[14px] text-violet-200/90">done_all</span>}
                                             {msg.status === 'seen' && <span className="material-symbols-outlined text-[14px] text-blue-400 font-bold filled">done_all</span>}
                                         </div>
                                     )}
@@ -1378,8 +1386,8 @@ export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone,
                                         <span className="material-symbols-outlined text-[14px] text-red-300">refresh</span>
                                     </button>
                                 )}
-                                {msg.status === 'sent' && <span className="material-symbols-outlined text-[14px]">check</span>}
-                                {msg.status === 'delivered' && <span className="material-symbols-outlined text-[14px] text-slate-300 dark:text-slate-400">done_all</span>}
+                                {msg.status === 'sent' && <span className="material-symbols-outlined text-[14px] text-violet-200/90">check</span>}
+                                {msg.status === 'delivered' && <span className="material-symbols-outlined text-[14px] text-violet-200/90">done_all</span>}
                                 {msg.status === 'seen' && <span className="material-symbols-outlined text-[14px] text-blue-400 font-bold filled">done_all</span>}
                             </div>
                         )}
@@ -1545,7 +1553,8 @@ export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone,
                                                     latitude: msg.latitude,
                                                     longitude: msg.longitude,
                                                     address: msg.address,
-                                                    attachments: msg.attachments // [NEW] Pass attachments
+                                                    attachments: msg.attachments, // [NEW] Pass attachments
+                                                    todo: msg.todo // [NEW] Pass todo object for title access
                                                 });
                                                 closeMenu();
                                             }}
@@ -1557,7 +1566,7 @@ export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone,
                                     )}
 
                                     {/* [NEW] Edit Option */}
-                                    {isMe && !isAudio && msg.type !== 'gif' && msg.type !== 'file' && msg.type !== 'location' && msg.type !== 'poll' && !msg.is_deleted_for_everyone && (msg.type !== 'image' || msg.caption) && (
+                                    {isMe && !isAudio && msg.type !== 'gif' && msg.type !== 'file' && msg.type !== 'location' && msg.type !== 'poll' && msg.type !== 'todo' && !msg.is_deleted_for_everyone && (msg.type !== 'image' || msg.caption) && (
                                         <button 
                                             className="w-full flex items-center gap-2 px-3 py-2.5 text-left text-sm text-slate-700 dark:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors first:rounded-t-2xl last:rounded-b-2xl"
                                             onClick={(e) => {
@@ -1595,7 +1604,7 @@ export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone,
                                         </button>
                                     )}
 
-                                    {msg.type !== 'audio' && msg.type !== 'gif' && msg.type !== 'file' && msg.type !== 'location' && msg.type !== 'poll' && !isAi && !msg.is_view_once && (
+                                    {msg.type !== 'audio' && msg.type !== 'gif' && msg.type !== 'file' && msg.type !== 'location' && msg.type !== 'poll' && msg.type !== 'todo' && !isAi && !msg.is_view_once && (
                                         // Check if this is a multi-image message
                                         (msg.attachments && msg.attachments.length > 1) ? (
                                             // Download All button for multi-image messages

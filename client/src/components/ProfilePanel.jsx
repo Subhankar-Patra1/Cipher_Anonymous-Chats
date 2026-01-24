@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { useAuth } from '../context/AuthContext';
 import { usePresence } from '../context/PresenceContext';
+import { useCall } from '../context/CallContext';
 import { useNotification } from '../context/NotificationContext';
 import db, { saveLocalUser, getLocalUser } from '../utils/db';
 import StatusDot from './StatusDot';
@@ -80,9 +81,10 @@ const AppLockSetting = () => {
     );
 };
 
-export default function ProfilePanel({ isOpen = true, userId, roomId, onClose, onActionSuccess, onGoToMessage, onRequestSync, showRestoreOption, socket }) {
+export default function ProfilePanel({ isOpen = true, userId, roomId, onClose, onActionSuccess, onGoToMessage, onRequestSync, showRestoreOption, socket, onMessageUser }) {
     const { token, user: currentUser, updateUser, logout } = useAuth();
     const { presenceMap, fetchStatuses } = usePresence();
+    const { initiateCall } = useCall();
     const { 
         isSupported: notificationsSupported, 
         permission: notificationPermission, 
@@ -476,6 +478,31 @@ export default function ProfilePanel({ isOpen = true, userId, roomId, onClose, o
             fetchStatuses([userId]);
         }
     }, [userId, token, isMe]);
+
+    // [NEW] Real-time block/unblock listeners
+    useEffect(() => {
+        if (!socket || !userId) return;
+
+        const onYouAreBlocked = ({ blockerId }) => {
+            if (String(blockerId) === String(userId)) {
+                setProfile(prev => prev ? { ...prev, is_blocked_by_them: true } : prev);
+            }
+        };
+
+        const onYouAreUnblocked = ({ blockerId }) => {
+            if (String(blockerId) === String(userId)) {
+                setProfile(prev => prev ? { ...prev, is_blocked_by_them: false } : prev);
+            }
+        };
+
+        socket.on('you_are_blocked', onYouAreBlocked);
+        socket.on('you_are_unblocked', onYouAreUnblocked);
+
+        return () => {
+            socket.off('you_are_blocked', onYouAreBlocked);
+            socket.off('you_are_unblocked', onYouAreUnblocked);
+        };
+    }, [socket, userId]);
 
     // [NEW] Chat Preferences for DM
     const [preferences, setPreferences] = useState(null);
@@ -998,6 +1025,40 @@ export default function ProfilePanel({ isOpen = true, userId, roomId, onClose, o
                                         }
                                     </span>
                                 )}
+                            </div>
+                        )}
+
+                        {!isMe && profile && !profile.is_blocked_by_me && !profile.is_blocked_by_them && (
+                            <div className="flex items-center justify-center gap-6 mt-6 pb-2">
+                                <button 
+                                    onClick={() => onMessageUser?.(userId)}
+                                    className="flex flex-col items-center gap-1.5 group"
+                                >
+                                    <div className="w-12 h-12 rounded-full bg-slate-100 dark:bg-slate-800 flex items-center justify-center text-emerald-500 group-hover:bg-emerald-500 group-hover:text-white transition-all shadow-sm">
+                                        <span className="material-symbols-outlined text-[24px]">chat</span>
+                                    </div>
+                                    <span className="text-[11px] font-bold text-slate-500 dark:text-slate-400 group-hover:text-emerald-500 transition-colors">Message</span>
+                                </button>
+
+                                <button 
+                                    onClick={() => initiateCall(userId, roomId, 'audio', profile.display_name, profile.avatar_url)}
+                                    className="flex flex-col items-center gap-1.5 group"
+                                >
+                                    <div className="w-12 h-12 rounded-full bg-slate-100 dark:bg-slate-800 flex items-center justify-center text-emerald-500 group-hover:bg-emerald-500 group-hover:text-white transition-all shadow-sm">
+                                        <span className="material-symbols-outlined text-[24px]">call</span>
+                                    </div>
+                                    <span className="text-[11px] font-bold text-slate-500 dark:text-slate-400 group-hover:text-emerald-500 transition-colors">Audio</span>
+                                </button>
+
+                                <button 
+                                    onClick={() => initiateCall(userId, roomId, 'video', profile.display_name, profile.avatar_url)}
+                                    className="flex flex-col items-center gap-1.5 group"
+                                >
+                                    <div className="w-12 h-12 rounded-full bg-slate-100 dark:bg-slate-800 flex items-center justify-center text-emerald-500 group-hover:bg-emerald-500 group-hover:text-white transition-all shadow-sm">
+                                        <span className="material-symbols-outlined text-[24px]">videocam</span>
+                                    </div>
+                                    <span className="text-[11px] font-bold text-slate-500 dark:text-slate-400 group-hover:text-emerald-500 transition-colors">Video</span>
+                                </button>
                             </div>
                         )}
                     </div>

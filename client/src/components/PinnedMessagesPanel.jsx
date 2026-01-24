@@ -97,8 +97,31 @@ export default function PinnedMessagesPanel({ roomId, onGoToMessage, onUnpin, so
             }
         };
 
+        const handleMessageEdited = (updatedMsg) => {
+            setPinnedMessages(prev => {
+                const index = prev.findIndex(m => String(m.id) === String(updatedMsg.id));
+                if (index === -1) return prev;
+
+                const newPinned = [...prev];
+                const merged = { ...newPinned[index], ...updatedMsg };
+                
+                // Process re-decryption in background if needed
+                if (decryptMessage && (merged.ciphertext || merged.caption_ciphertext)) {
+                    decryptMessage(merged).then(decrypted => {
+                        setPinnedMessages(latest => 
+                            latest.map(m => String(m.id) === String(updatedMsg.id) ? decrypted : m)
+                        );
+                    }).catch(console.error);
+                }
+                
+                newPinned[index] = merged;
+                return newPinned;
+            });
+        };
+
         socket.on('message_pinned', handlePinned);
         socket.on('message_unpinned', handleUnpinned);
+        socket.on('message_edited', handleMessageEdited);
 
         // [NEW] Clear pinned messages when chat is cleared
         const handleChatCleared = (data) => {
@@ -112,6 +135,7 @@ export default function PinnedMessagesPanel({ roomId, onGoToMessage, onUnpin, so
         return () => {
             socket.off('message_pinned', handlePinned);
             socket.off('message_unpinned', handleUnpinned);
+            socket.off('message_edited', handleMessageEdited);
             socket.off('chat:cleared', handleChatCleared);
         };
     }, [socket, roomId, token]);
@@ -136,12 +160,17 @@ export default function PinnedMessagesPanel({ roomId, onGoToMessage, onUnpin, so
     };
 
     const getMessagePreview = (msg) => {
-        if (msg.type === 'image') return '📷 Photo';
+        if (msg.type === 'image') {
+            if (msg.caption && msg.caption !== 'Image') return msg.caption;
+            if (msg.content && msg.content !== 'Image') return msg.content;
+            return 'Photo';
+        }
         if (msg.type === 'audio') return '🎤 Voice message';
         if (msg.type === 'file') return `📎 ${msg.file_name || 'File'}`;
         if (msg.type === 'gif') return '🎞️ GIF';
         if (msg.type === 'location') return '📍 Location';
-        if (msg.type === 'poll') return '📊 Poll';
+        if (msg.type === 'poll') return `📊 ${msg.poll?.question || msg.poll_question || 'Poll'}`;
+        if (msg.type === 'todo') return msg.todo?.title || msg.todo_title || 'To-Do List';
         return msg.content?.slice(0, 80) || '';
     };
 
@@ -171,8 +200,10 @@ export default function PinnedMessagesPanel({ roomId, onGoToMessage, onUnpin, so
 
                 {/* Message Preview */}
                 <div className="flex-1 min-w-0">
-                    <p className="text-sm text-slate-700 dark:text-slate-200 truncate">
-                        {renderTextWithEmojis(getMessagePreview(currentPinned))}
+                    <p className="text-sm text-slate-700 dark:text-slate-200 truncate flex items-center">
+                        {currentPinned.type === 'todo' && <span className="material-symbols-outlined text-[16px] mr-1 translate-y-[1px]">checklist</span>}
+                        {currentPinned.type === 'image' && <span className="material-symbols-outlined text-[16px] mr-1 translate-y-[1px]">image</span>}
+                        <span className="truncate">{renderTextWithEmojis(getMessagePreview(currentPinned), '1.25em')}</span>
                     </p>
                 </div>
 
@@ -223,11 +254,13 @@ export default function PinnedMessagesPanel({ roomId, onGoToMessage, onUnpin, so
                                             </div>
                                         )}
                                         <span className="text-xs font-semibold text-slate-700 dark:text-slate-200">
-                                            {renderTextWithEmojis(msg.display_name)}
+                                            {renderTextWithEmojis(msg.display_name, '1.25em')}
                                         </span>
                                     </div>
-                                    <p className="text-sm text-slate-600 dark:text-slate-300 truncate mt-1 ml-8">
-                                        {renderTextWithEmojis(getMessagePreview(msg))}
+                                    <p className="text-sm text-slate-600 dark:text-slate-300 truncate mt-1 ml-8 flex items-center">
+                                        {msg.type === 'todo' && <span className="material-symbols-outlined text-[16px] mr-1 translate-y-[1px]">checklist</span>}
+                                        {msg.type === 'image' && <span className="material-symbols-outlined text-[16px] mr-1 translate-y-[1px]">image</span>}
+                                        <span className="truncate">{renderTextWithEmojis(getMessagePreview(msg), '1.25em')}</span>
                                     </p>
                                 </div>
 

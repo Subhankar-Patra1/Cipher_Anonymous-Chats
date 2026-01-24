@@ -278,6 +278,26 @@ const createTables = async () => {
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
             CREATE INDEX IF NOT EXISTS idx_user_photos_user_id ON user_photos(user_id);
+
+            -- [NEW] Todos Feature
+            CREATE TABLE IF NOT EXISTS todos (
+                id SERIAL PRIMARY KEY,
+                room_id INTEGER REFERENCES rooms(id) ON DELETE CASCADE,
+                created_by INTEGER REFERENCES users(id),
+                title TEXT,
+                message_id INTEGER REFERENCES messages(id) ON DELETE SET NULL, -- Link to the chat message
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE TABLE IF NOT EXISTS todo_items (
+                id SERIAL PRIMARY KEY,
+                todo_id INTEGER REFERENCES todos(id) ON DELETE CASCADE,
+                text TEXT NOT NULL,
+                is_completed BOOLEAN DEFAULT FALSE,
+                completed_by INTEGER REFERENCES users(id),
+                completed_at TIMESTAMP,
+                order_index INTEGER DEFAULT 0
+            );
         `);
         console.log("Tables created successfully");
     } catch (err) {

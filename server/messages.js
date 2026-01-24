@@ -1367,14 +1367,18 @@ router.get('/room/:roomId/pinned', async (req, res) => {
             return res.status(403).json({ error: 'Not a member of this room' });
         }
 
-        // Get pinned messages with user info
+        // Get pinned messages with user info, poll and todo data
         const result = await db.query(`
             SELECT m.*, 
                    u.display_name, u.username, u.avatar_thumb_url, u.avatar_url,
-                   pinner.display_name as pinned_by_name
+                   pinner.display_name as pinned_by_name,
+                   p.question as poll_question,
+                   t.title as todo_title
             FROM messages m
             JOIN users u ON m.user_id = u.id
             LEFT JOIN users pinner ON m.pinned_by = pinner.id
+            LEFT JOIN polls p ON m.id = p.message_id
+            LEFT JOIN todos t ON m.id = t.message_id
             WHERE m.room_id = $1 
               AND m.is_pinned = TRUE 
               AND m.is_deleted_for_everyone = FALSE

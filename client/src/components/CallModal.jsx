@@ -153,9 +153,13 @@ const CallModal = () => {
         toggleVideo(!isVideoOn);
     };
 
-    const handleSwitchCamera = (e) => {
+    const handleSwitchCamera = async (e) => {
         if (e) e.stopPropagation();
-        switchCamera();
+        try {
+            await switchCamera();
+        } catch (err) {
+            console.error("Switch camera failed:", err);
+        }
     };
 
     const handleToggleSwap = (e) => {

@@ -97,7 +97,7 @@ export const textToHtml = (text) => {
     const regex = emojiRegex();
     return text.replace(regex, (match) => {
         const hex = toHex(match);
-        return `<img src="https://cdn.jsdelivr.net/npm/emoji-datasource-apple/img/apple/64/${hex}.png" alt="${match}" class="w-[1.5em] h-[1.45em] inline-block select-none pointer-events-none" style="vertical-align: -0.25em; margin: 0 1px;" draggable="false" />`;
+        return `<img src="https://cdn.jsdelivr.net/npm/emoji-datasource-apple/img/apple/64/${hex}.png" alt="${match}" class="w-[1.5em] h-[1.45em] inline-block select-none pointer-events-none" style="vertical-align: -0.35em; margin: 0 1px;" draggable="false" />`;
     });
 };
 
@@ -245,7 +245,7 @@ export const linkifyText = (text, searchTerm = '', linkClass, options = {}) => {
                     src={`https://cdn.jsdelivr.net/npm/emoji-datasource-apple/img/apple/64/${hex}.png`}
                     alt={match[0]}
                     className="w-[1.45em] h-[1.45em] inline-block select-none pointer-events-none"
-                    style={{ verticalAlign: '-0.25em', margin: '0 1px' }}
+                    style={{ verticalAlign: '-0.35em', margin: '0 1px' }}
                     draggable="false" 
                     loading="lazy"
                 />
@@ -288,7 +288,7 @@ export const linkifyText = (text, searchTerm = '', linkClass, options = {}) => {
                     src={`https://cdn.jsdelivr.net/npm/emoji-datasource-apple/img/apple/64/${hex}.png`}
                     alt={emojiChar}
                     className="w-[1.45em] h-[1.45em] inline-block select-none pointer-events-none"
-                    style={{ verticalAlign: '-0.25em', margin: '0 1px' }}
+                    style={{ verticalAlign: '-0.35em', margin: '0 1px' }}
                     draggable="false" 
                     loading="lazy"
                     onError={(e) => {

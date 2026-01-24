@@ -320,6 +320,7 @@ const LastMessagePreview = ({ room, user, hasSkippedSync }) => {
         if (lr.message_type === 'gif') { setReactionPreview('GIF'); return; }
         if (lr.message_type === 'location') { setReactionPreview('Location'); return; }
         if (lr.message_type === 'poll') { setReactionPreview('Poll'); return; }
+        if (lr.message_type === 'todo' && !lr.message_ciphertext) { setReactionPreview(`"${lr.message_todo_title || lr.message_content || 'To-Do List'}"`); return; }
         
         // [FIX] Prioritize decryption when encrypted data is available
         // Server's message_content may be stale/wrong for encrypted messages
@@ -384,7 +385,9 @@ const LastMessagePreview = ({ room, user, hasSkippedSync }) => {
                     <span className={`shrink-0 ${isMe ? "" : "font-medium text-slate-600 dark:text-slate-300"}`}>{reactorName}</span>
                     <span className="shrink-0">reacted</span>
                     <span className="text-base flex items-center shrink-0">{renderTextWithEmojis(emoji, '1.2em')}</span>
-                    <span className="truncate">to: {reactionPreview}</span>
+                    <span className="truncate flex items-center gap-1">
+                        to: {lr.message_type === 'todo' && <span className="material-symbols-outlined text-[14px]">checklist</span>}{reactionPreview}
+                    </span>
                 </span>
             );
         }
@@ -412,6 +415,7 @@ const LastMessagePreview = ({ room, user, hasSkippedSync }) => {
         else if (room.last_message_type === 'audio') preview = "Voice message";
         else if (room.last_message_type === 'gif') preview = "GIF";
         else if (room.last_message_type === 'poll') preview = room.last_message_poll_question || "Poll";
+        else if (room.last_message_type === 'todo') preview = `"${room.last_message_todo_title || room.last_message_content || "To-Do List"}"`;
         else preview = renderPreviewRaw(content);
 
         // Check if this is a view-once photo
@@ -429,7 +433,7 @@ const LastMessagePreview = ({ room, user, hasSkippedSync }) => {
                 <span className="shrink-0">reacted</span>
                 <span className="text-base flex items-center shrink-0">{renderTextWithEmojis(emoji, '1.2em')}</span>
                 <span className="ml-0.5 flex items-center gap-1.5 truncate">
-                    to: "{isViewOnceImage && <ViewOnceIcon className="w-3.5 h-3.5" isOpened={isOpened} />}{preview}"
+                    to: {room.last_message_type === 'todo' && <span className="material-symbols-outlined text-[14px]">checklist</span>}{preview}
                 </span>
             </span>
         );
@@ -744,7 +748,7 @@ export default function Sidebar({ rooms, activeRoom, onSelectRoom, loadingRoomId
                         </div>
                     </button>
                 </div>
-                </div>
+            </div>
 
             
 
@@ -1215,6 +1219,17 @@ export default function Sidebar({ rooms, activeRoom, onSelectRoom, loadingRoomId
                                                                 <span className="truncate py-0.5 leading-normal">{renderTextWithEmojis(room.last_message_poll_question) || 'Poll'}</span>
                                                             </span>
                                                         );
+                                                    case 'todo_updated':
+                                                        return (
+                                                            <span className="flex items-center gap-1">
+                                                                <span className="shrink-0">
+                                                                    {String(room.last_message_sender_id) === String(user.id) ? 'You' : renderTextWithEmojis(room.last_message_sender_name)}
+                                                                </span>
+                                                                <span>updated:</span>
+                                                                <span className="material-symbols-outlined text-[16px] shrink-0 text-violet-500">checklist</span>
+                                                                <span className="truncate py-0.5 leading-normal">{renderTextWithEmojis(room.last_message_todo_title || 'To-Do List')}</span>
+                                                            </span>
+                                                        );
                                                     case 'poll':
                                                         return (
                                                             <span className="flex items-center gap-1">
@@ -1238,6 +1253,23 @@ export default function Sidebar({ rooms, activeRoom, onSelectRoom, loadingRoomId
                                                                 )}
                                                                 <PollIcon className="w-4 h-4 shrink-0" />
                                                                 <span className="truncate py-0.5 leading-normal">{renderTextWithEmojis(room.last_message_poll_question, '1.1em') || 'Poll'}</span>
+                                                            </span>
+                                                        );
+                                                    case 'todo':
+                                                        return (
+                                                            <span className="flex items-center gap-1">
+                                                                {room.type === 'group' && String(room.last_message_sender_id) === String(user.id) && room.last_message_sender_name && (
+                                                                   <span className="shrink-0">You:</span>
+                                                               )}
+                                                               {room.type === 'group' && String(room.last_message_sender_id) !== String(user.id) && room.last_message_sender_name && (
+                                                                   <span className="shrink-0">{renderTextWithEmojis(room.last_message_sender_name)}:</span>
+                                                               )}
+                                                               {room.type === 'group' && String(room.last_message_sender_id) !== String(user.id) && room.last_message_sender_name && (
+                                                                   <span className="shrink-0">{renderTextWithEmojis(room.last_message_sender_name)}:</span>
+                                                               )}
+                                                                {/* Status icon removed for Todo to avoid visual clutter */}
+                                                                <span className="material-symbols-outlined text-[18px] translate-y-[0.5px] shrink-0 text-violet-500">checklist</span>
+                                                                <span className="truncate py-0.5 leading-normal">{room.last_message_content || 'To-Do List'}</span>
                                                             </span>
                                                         );
                                                     default:

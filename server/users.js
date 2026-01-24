@@ -362,6 +362,12 @@ router.get('/:id/profile', async (req, res) => {
         );
         const isBlockedByMe = blockRes.rows.length > 0;
 
+        const blockedByThemRes = await db.query(
+            'SELECT 1 FROM blocked_users WHERE blocker_id = $1 AND blocked_id = $2',
+            [targetUserId, req.user.id]
+        );
+        const isBlockedByThem = blockedByThemRes.rows.length > 0;
+
         res.json({
             id: user.id,
             display_name: user.display_name,
@@ -371,7 +377,8 @@ router.get('/:id/profile', async (req, res) => {
             bio: user.bio || '',
             last_seen,
             groups_in_common: groupsRes.rows,
-            is_blocked_by_me: isBlockedByMe
+            is_blocked_by_me: isBlockedByMe,
+            is_blocked_by_them: isBlockedByThem
         });
 
     } catch (err) {

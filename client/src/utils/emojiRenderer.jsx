@@ -52,7 +52,7 @@ export const renderTextWithEmojis = (text, size = '1.45em') => {
                     src={getAppleEmojiUrl(emojiChar)} 
                     alt={emojiChar} 
                     className="inline-block select-none pointer-events-none object-contain" 
-                    style={{ width: size, height: size, verticalAlign: '-0.25em' }}
+                    style={{ width: size, height: size, verticalAlign: '-0.35em' }}
                     draggable="false"
                     onError={(e) => {
                         e.target.style.display = 'none';
@@ -82,7 +82,7 @@ export const renderTextWithEmojisToHtml = (text) => {
             const emojiChar = matches[index];
             const url = getAppleEmojiUrl(emojiChar);
             // Updated class to match ProfilePanel styling needs
-            html += `<img src="${url}" alt="${emojiChar}" class="inline-block select-none pointer-events-none object-contain" style="width: 1.45em; height: 1.45em; vertical-align: -0.25em;" draggable="false" />`;
+            html += `<img src="${url}" alt="${emojiChar}" class="inline-block select-none pointer-events-none object-contain" style="width: 1.45em; height: 1.45em; vertical-align: -0.35em;" draggable="false" />`;
         }
     });
     return html;
