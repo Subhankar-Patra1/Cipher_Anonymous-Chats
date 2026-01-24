@@ -118,7 +118,11 @@ const LastMessagePreview = ({ room, user, hasSkippedSync }) => {
 
         // [FIX] Handle special markers and empty content
         if (!rawContent || rawContent === 'Waiting for key...' || rawContent === 'Decryption Error' || isDecryptionFailed) {
-            if (hasSkippedSync) return 'History hidden';
+            // [FIX] Only show "History hidden" if:
+            // 1. User skipped sync AND
+            // 2. There's actually encrypted content we couldn't decrypt
+            // If there's no encrypted content (e.g., no messages), show appropriate fallback
+            if (hasSkippedSync && room.last_message_ciphertext) return 'History hidden';
             
             // [FIX] Better fallbacks for E2EE messages on reload
             if (room.last_message_id) {
