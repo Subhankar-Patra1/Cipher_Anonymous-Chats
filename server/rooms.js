@@ -738,12 +738,57 @@ router.get('/:id/messages', async (req, res) => {
                 }
             }
 
+            // [FIX] Fetch Todo Data if applicable
+            let todoData = null;
+            if (msg.type === 'todo') {
+                try {
+                    // todos table has message_id that links to messages
+                    const todoRes = await db.query(`
+                        SELECT t.*, u.display_name as created_by_name
+                        FROM todos t
+                        JOIN users u ON t.created_by = u.id
+                        WHERE t.message_id = $1
+                    `, [msg.id]);
+
+                    if (todoRes.rows.length > 0) {
+                        const todo = todoRes.rows[0];
+
+                        // Get todo items with completed_by names
+                        const itemsRes = await db.query(`
+                            SELECT ti.*, u.display_name as completed_by_name
+                            FROM todo_items ti
+                            LEFT JOIN users u ON ti.completed_by = u.id
+                            WHERE ti.todo_id = $1
+                            ORDER BY ti.order_index ASC
+                        `, [todo.id]);
+
+                        todoData = {
+                            id: todo.id,
+                            title: todo.title,
+                            created_by: todo.created_by,
+                            created_by_name: todo.created_by_name,
+                            items: itemsRes.rows.map(item => ({
+                                id: item.id,
+                                text: item.text,
+                                is_completed: item.is_completed,
+                                completed_by: item.completed_by,
+                                completed_by_name: item.completed_by_name,
+                                completed_at: item.completed_at
+                            }))
+                        };
+                    }
+                } catch (e) {
+                    console.error('Error fetching todo details for message:', msg.id, e);
+                }
+            }
+
             return { 
                 ...msg, 
                 audio_waveform: parsedWaveform,
                 attachments: parsedAttachments,
                 created_at: msg.created_at,
-                poll: pollData // Attach poll data
+                poll: pollData, // Attach poll data
+                todo: todoData // Attach todo data
             };
         }));
         
