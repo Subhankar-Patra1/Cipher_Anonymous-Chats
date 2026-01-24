@@ -1414,7 +1414,7 @@ export default function ProfilePanel({ isOpen = true, userId, roomId, onClose, o
                                     if (profile.is_blocked_by_me) {
                                          setConfirmModal({ 
                                             type: 'unblock', 
-                                            title: `Unblock ${profile.display_name}?`, 
+                                            title: <span>Unblock {renderTextWithEmojis(profile.display_name)}?</span>, 
                                             desc: 'They will be able to send you messages.',
                                             actionReq: handleUnblockUser,
                                             destructive: false
@@ -1422,7 +1422,7 @@ export default function ProfilePanel({ isOpen = true, userId, roomId, onClose, o
                                     } else {
                                         setConfirmModal({ 
                                             type: 'block', 
-                                            title: `Block ${profile.display_name}?`, 
+                                            title: <span>Block {renderTextWithEmojis(profile.display_name)}?</span>, 
                                             desc: 'Blocked contacts will no longer be able to call you or send you messages.',
                                             actionReq: handleBlockUser,
                                             destructive: true

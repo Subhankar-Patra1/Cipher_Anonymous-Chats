@@ -153,7 +153,8 @@ export default function Dashboard() {
             // 4. Notify others to clear popups
             socket?.emit('sync_finished');
 
-            setSyncState({ active: false, status: 'Success!', showBackupPrompt: false, mode: 'approve' });
+            // [FIX] Update status to show progress while keeping modal open
+            setSyncState(prev => ({ ...prev, status: 'Importing keys...' }));
             
             // [NEW] Clear skipped flag on success
             localStorage.removeItem('skipped_sync');
@@ -161,8 +162,26 @@ export default function Dashboard() {
 
             // Trigger animation on next chat open
             setJustRestored(true); 
+            
+            // [FIX] Dispatch keys-updated event so sidebar components know to re-decrypt
+            window.dispatchEvent(new CustomEvent('cipher:keys-updated', { 
+                detail: { type: 'bulk-import' } 
+            }));
+            
+            // [FIX] Update status for sidebar decryption phase
+            setSyncState(prev => ({ ...prev, status: 'Decrypting sidebar messages...' }));
+            
+            // [FIX] Wait for rooms to re-fetch and DECRYPT before closing modal
+            await fetchRooms(true);
+            
+            // [FIX] Give sidebar components time to process the new keys and decrypt previews
+            setSyncState(prev => ({ ...prev, status: 'Finishing up...' }));
+            await new Promise(resolve => setTimeout(resolve, 2500));
+            
+            // [FIX] Close modal AFTER everything is complete
+            setSyncState({ active: false, status: 'Success!', showBackupPrompt: false, mode: 'approve' });
+
             showNotification('Chat history restored successfully!', 'success');
-            fetchRooms();
         } catch (err) {
             console.error('[Restore] Error:', err);
             setRestoreError(err.name === 'OperationError' ? 'Invalid password. Decryption failed.' : 'Restoration failed. Please try again.');
@@ -1407,16 +1426,19 @@ export default function Dashboard() {
                 // 3. Import keys
                 await cryptoManager.importKeysSync(bundle);
                 
+                // [FIX] Update UI to show decryption phase and WAIT for sidebar decryption
+                setSyncState(prev => ({ ...prev, status: 'Decrypting messages...' }));
+                
+                // Decrypt sidebar previews (awaiting ensures we don't close modal too early)
+                await fetchRooms();
+
                 setSyncState({ active: false, status: 'Success!', showBackupPrompt: false, mode: 'approve' });
                 // Trigger animation on next chat open
                 setJustRestored(true);
                 showNotification('Chat history synced successfully!', 'success');
                 
-                // 4. Notify other devices to clear their popups
+                // 4. Notify other devices to clear popups ONLY after decryption is done
                 newSocket.emit('sync_finished');
-
-                // Success: Refresh list to ensure we can decrypt sidebar/etc if needed
-                fetchRooms();
             } catch (e) {
                 console.error('[Sync] Decryption failed', e);
                 setSyncState(prev => ({ ...prev, active: false, status: 'Sync failed.' }));
@@ -2292,7 +2314,7 @@ export default function Dashboard() {
             {/* [PHASE 1 & 2] Key Sync & Restore UI (Global) */}
             {syncState.active && (
                 <div className="fixed inset-0 z-[1000] bg-slate-900/90 backdrop-blur-md flex flex-col items-center justify-center p-4 md:p-8 animate-in fade-in duration-300">
-                    <div className="w-full max-w-md bg-white dark:bg-slate-900 rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-800 overflow-hidden flex flex-col">
+                <div className="w-full max-w-md bg-white dark:bg-slate-900 rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-800 overflow-hidden flex flex-col" onClick={e => e.stopPropagation()}>
                         
                         {/* Tabs */}
                         <div className="flex p-2 bg-slate-100 dark:bg-slate-950/50">
@@ -2348,61 +2370,75 @@ export default function Dashboard() {
                                         </button>
                                     </div>
                                 </div>
-                            ) : (
-                                <form onSubmit={handleManualRestore} className="animate-in fade-in slide-in-from-bottom-4 duration-500 flex flex-col items-stretch">
-                                    <div className="w-16 h-16 bg-violet-100 dark:bg-violet-900/30 rounded-2xl flex items-center justify-center mx-auto mb-4">
-                                        <span className="material-symbols-outlined text-violet-600 dark:text-violet-400 text-3xl">key</span>
-                                    </div>
-                                    <h3 className="text-2xl font-bold text-slate-900 dark:text-white mb-2">History Password</h3>
-                                    <p className="text-slate-500 dark:text-slate-400 text-sm mb-8">
-                                        Enter your global backup password to decrypt your history from the cloud.
-                                    </p>
-                                    
-                                    <div className="text-left space-y-4">
-                                    <div className="relative">
-                                        <input 
-                                            type={showPassword ? "text" : "password"}
-                                            value={restorePassword}
-                                            onChange={(e) => setRestorePassword(e.target.value)}
-                                            placeholder="Enter backup password"
-                                            className="w-full px-5 py-4 rounded-2xl bg-slate-100 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-violet-500 transition-all pr-12"
-                                            required
-                                        />
-                                        <button
-                                            type="button"
-                                            onClick={() => setShowPassword(!showPassword)}
-                                            className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 transition-colors"
-                                        >
-                                            <span className="material-symbols-outlined text-xl">
-                                                {showPassword ? 'visibility_off' : 'visibility'}
-                                            </span>
-                                        </button>
-                                    </div>
-                                        
-                                        {restoreError && (
-                                            <div className="p-4 bg-red-50 dark:bg-red-900/20 border border-red-100 dark:border-red-900/30 rounded-2xl flex items-center gap-3 text-red-600 dark:text-red-400 text-sm font-medium">
-                                                <span className="material-symbols-outlined text-lg">error</span>
-                                                {restoreError}
+                            ) : isRestoring ? (
+                                    <div className="animate-in fade-in slide-in-from-bottom-4 duration-500 flex flex-col items-center py-4">
+                                        <div className="relative mb-6 mx-auto w-24 h-24">
+                                            <div className="absolute inset-0 border-4 border-slate-100 dark:border-slate-800 rounded-full"></div>
+                                            <div className="absolute inset-0 border-t-4 border-violet-500 rounded-full animate-spin"></div>
+                                            <div className="absolute inset-0 flex items-center justify-center">
+                                                <span className="material-symbols-outlined text-violet-500 text-3xl animate-pulse">cloud_download</span>
                                             </div>
-                                        )}
-                                        
-                                        <button 
-                                            type="submit"
-                                            disabled={isRestoring || !restorePassword}
-                                            className="w-full py-4 rounded-2xl bg-violet-600 hover:bg-violet-700 text-white font-bold transition-all shadow-lg shadow-violet-500/20 disabled:opacity-50 flex items-center justify-center gap-3"
-                                        >
-                                            {isRestoring ? (
-                                                <span className="material-symbols-outlined animate-spin">progress_activity</span>
-                                            ) : (
-                                                <>
-                                                    <span className="material-symbols-outlined">cloud_download</span>
-                                                    Decrypt History
-                                                </>
-                                            )}
-                                        </button>
+                                        </div>
+                                        <h3 className="text-2xl font-bold text-slate-900 dark:text-white mb-2">Restoring History</h3>
+                                        <p className="text-violet-600 dark:text-violet-400 text-sm font-medium animate-pulse mb-4">
+                                            {syncState.status || 'Processing...'}
+                                        </p>
+                                        <div className="p-4 bg-violet-50 dark:bg-violet-900/20 rounded-2xl border border-violet-100 dark:border-violet-900/30 max-w-xs">
+                                            <p className="text-xs text-violet-600 dark:text-violet-400 text-center">
+                                                Please wait while we decrypt your chat history. This may take a moment.
+                                            </p>
+                                        </div>
                                     </div>
-                                </form>
-                            )}
+                                ) : (
+                                    <form onSubmit={(e) => { e.preventDefault(); e.stopPropagation(); handleManualRestore(e); }} className="animate-in fade-in slide-in-from-bottom-4 duration-500 flex flex-col items-stretch">
+                                        <div className="w-16 h-16 bg-violet-100 dark:bg-violet-900/30 rounded-2xl flex items-center justify-center mx-auto mb-4">
+                                            <span className="material-symbols-outlined text-violet-600 dark:text-violet-400 text-3xl">key</span>
+                                        </div>
+                                        <h3 className="text-2xl font-bold text-slate-900 dark:text-white mb-2">History Password</h3>
+                                        <p className="text-slate-500 dark:text-slate-400 text-sm mb-8">
+                                            Enter your global backup password to decrypt your history from the cloud.
+                                        </p>
+                                        
+                                        <div className="text-left space-y-4">
+                                        <div className="relative">
+                                            <input 
+                                                type={showPassword ? "text" : "password"}
+                                                value={restorePassword}
+                                                onChange={(e) => setRestorePassword(e.target.value)}
+                                                placeholder="Enter backup password"
+                                                className="w-full px-5 py-4 rounded-2xl bg-slate-100 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-violet-500 transition-all pr-12"
+                                                required
+                                            />
+                                            <button
+                                                type="button"
+                                                onClick={(e) => { e.stopPropagation(); setShowPassword(!showPassword); }}
+                                                className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 transition-colors"
+                                            >
+                                                <span className="material-symbols-outlined text-xl">
+                                                    {showPassword ? 'visibility_off' : 'visibility'}
+                                                </span>
+                                            </button>
+                                        </div>
+                                            
+                                            {restoreError && (
+                                                <div className="p-4 bg-red-50 dark:bg-red-900/20 border border-red-100 dark:border-red-900/30 rounded-2xl flex items-center gap-3 text-red-600 dark:text-red-400 text-sm font-medium">
+                                                    <span className="material-symbols-outlined text-lg">error</span>
+                                                    {restoreError}
+                                                </div>
+                                            )}
+                                            
+                                            <button 
+                                                type="submit"
+                                                disabled={!restorePassword}
+                                                onClick={(e) => e.stopPropagation()}
+                                                className="w-full py-4 rounded-2xl bg-violet-600 hover:bg-violet-700 text-white font-bold transition-all shadow-lg shadow-violet-500/20 disabled:opacity-50 flex items-center justify-center gap-3"
+                                            >
+                                                <span className="material-symbols-outlined">cloud_download</span>
+                                                Decrypt History
+                                            </button>
+                                        </div>
+                                    </form>
+                                )}
                         </div>
                     </div>
                 </div>
@@ -2420,6 +2456,22 @@ export default function Dashboard() {
                     onActionSuccess={(action) => {
                         if (action === 'delete') {
                             setActiveRoom(null);
+                        }
+                        if (action === 'block' || action === 'unblock') {
+                            const isBlocked = action === 'block'; 
+                            // 1. Update Active Room (for ChatWindow)
+                            if (activeRoom && (String(activeRoom.id) === String(profileState.roomId))) {
+                                setActiveRoom(prev => ({ 
+                                    ...prev, 
+                                    is_blocked_by_me: isBlocked 
+                                }));
+                            }
+                             // 2. Update Rooms List
+                            setRooms(prev => prev.map(r => 
+                                String(r.id) === String(profileState.roomId) 
+                                    ? { ...r, is_blocked_by_me: isBlocked } 
+                                    : r
+                            ));
                         }
                         if (action === 'clear') {
                             // Immediately clear last message in sidebar for this room
@@ -2517,13 +2569,14 @@ export default function Dashboard() {
         <RestoreModal 
             isOpen={showRestoreModal}
             onClose={() => setShowRestoreModal(false)}
-            onRestoreSuccess={() => {
-                // [MODIFIED] Don't close immediately, wait for animation
+            onRestoreSuccess={async () => {
+                // [FIX] Wait for full decryption before closing/showing success
+                await fetchRooms(true);
+                
                 localStorage.removeItem('skipped_sync');
                 setHasSkippedSync(false);
                 setJustRestored(true); // Trigger background animation
                 showNotification('Chat history restored!', 'success');
-                fetchRooms();
             }}
             token={token}
             onSwitchToSync={() => {

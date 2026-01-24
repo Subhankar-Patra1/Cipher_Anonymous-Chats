@@ -103,7 +103,8 @@ export default function RestoreModal({ isOpen, onClose, onRestoreSuccess, token,
             setCurrentStep('finalizing');
             await new Promise(r => setTimeout(r, 1500));
 
-            onRestoreSuccess();
+            // [FIX] Await parent success (room decryption)
+            await onRestoreSuccess();
             // Note: Dashboard will close us when animation is done
             setCurrentStep('completed');
         } catch (err) {

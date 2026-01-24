@@ -19,7 +19,7 @@ const Avatar = ({ src, size = "large", pulse = false }) => {
     );
 };
 
-const VideoFeed = ({ stream, isLocal = false, className, videoClassName = "", placeholderAvatar, showPlaceholderText = true, isMinimized = false, isVideoOn = true }) => {
+const VideoFeed = ({ stream, isLocal = false, className, videoClassName = "", placeholderAvatar, showPlaceholderText = true, isMinimized = false, isVideoOn = true, connectionStatus = 'good' }) => {
     const videoRef = useRef(null);
     const [isPlaying, setIsPlaying] = useState(isLocal); // Local stream can be shown instantly
 
@@ -29,6 +29,9 @@ const VideoFeed = ({ stream, isLocal = false, className, videoClassName = "", pl
         }
     }, [stream]);
 
+    const isReconnecting = connectionStatus === 'reconnecting';
+    const showOverlay = !isPlaying || !isVideoOn || isReconnecting;
+
     return (
         <div className={`relative w-full h-full ${className}`}>
             <video 
@@ -37,11 +40,11 @@ const VideoFeed = ({ stream, isLocal = false, className, videoClassName = "", pl
                 playsInline 
                 muted={true}
                 onPlaying={() => setIsPlaying(true)}
-                className={`w-full h-full object-cover transition-opacity duration-300 ${isPlaying && isVideoOn ? 'opacity-100' : 'opacity-0'} ${videoClassName}`}
+                className={`w-full h-full object-cover transition-opacity duration-300 ${!showOverlay ? 'opacity-100' : 'opacity-0'} ${videoClassName}`}
                 draggable="false"
             />
-            {/* --- Placeholder when video is not playing OR turned off --- */}
-            {(!isPlaying || !isVideoOn) && (
+            {/* --- Placeholder when video is not playing OR turned off OR Reconnecting --- */}
+            {showOverlay && (
                 <div className="absolute inset-0 flex flex-col items-center justify-center bg-slate-950 z-10 overflow-hidden text-center p-4">
                     {/* Blurred Background */}
                     <div className="absolute inset-0 z-0">
@@ -55,12 +58,21 @@ const VideoFeed = ({ stream, isLocal = false, className, videoClassName = "", pl
                     
                     {/* Content */}
                     <div className="relative z-10 flex flex-col items-center">
-                        <Avatar src={placeholderAvatar} size={isMinimized ? "small" : "large"} pulse={!isPlaying} />
-                        {(showPlaceholderText && !isMinimized && !isVideoOn && isPlaying) && (
-                            <p className="mt-8 text-white/60 font-medium tracking-wide uppercase text-xs">Camera is off</p>
-                        )}
-                        {(showPlaceholderText && !isMinimized && !isPlaying) && (
-                            <p className="mt-8 text-white/60 animate-pulse font-medium tracking-wide uppercase text-xs">Connecting...</p>
+                        <Avatar src={placeholderAvatar} size={isMinimized ? "small" : "large"} pulse={!isPlaying || isReconnecting} />
+                        
+                        {(showPlaceholderText && !isMinimized) && (
+                            <div className="mt-8 flex flex-col items-center">
+                                {isReconnecting ? (
+                                    <>
+                                        <span className="material-symbols-outlined text-yellow-500 text-3xl mb-2 animate-spin">sync</span>
+                                        <p className="text-yellow-400 animate-pulse font-bold tracking-wide uppercase text-sm">Reconnecting...</p>
+                                    </>
+                                ) : !isVideoOn && isPlaying ? (
+                                    <p className="text-white/60 font-medium tracking-wide uppercase text-xs">Camera is off</p>
+                                ) : (
+                                    <p className="text-white/60 animate-pulse font-medium tracking-wide uppercase text-xs">Connecting...</p>
+                                )}
+                            </div>
                         )}
                     </div>
                 </div>
@@ -83,7 +95,8 @@ const CallModal = () => {
         switchCamera,
         remoteMediaStatus,
         currentFacingMode,
-        hasMultipleCameras
+        hasMultipleCameras,
+        connectionStatus
     } = useCall();
     const [isMicOn, setIsMicOn] = useState(true);
     const [isVideoOn, setIsVideoOn] = useState(true);
@@ -243,6 +256,7 @@ const CallModal = () => {
                                     ? (isLocalMainView ? isVideoOn : remoteMediaStatus.video) 
                                     : isVideoOn
                                 }
+                                connectionStatus={isConnected ? (isLocalMainView ? 'good' : connectionStatus) : 'good'}
                                 className="w-full h-full"
                                 videoClassName={(isOutgoing || (isConnected && isLocalMainView)) && currentFacingMode === 'user' ? "transform scale-x-[-1]" : ""}
                                 showPlaceholderText={!isLocalMainView}
@@ -439,6 +453,7 @@ const CallModal = () => {
                                                 }
                                                 showPlaceholderText={false}
                                                 isMinimized={true}
+                                                connectionStatus={isLocalMainView ? connectionStatus : 'good'}
                                                 videoClassName={!isLocalMainView && currentFacingMode === 'user' ? "transform scale-x-[-1]" : ""} 
                                             />
                                             

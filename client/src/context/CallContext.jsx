@@ -10,6 +10,7 @@ export const CallProvider = ({ children, socket }) => {
     const { user } = useAuth();
 
     const [callStatus, setCallStatus] = useState('idle'); // idle, calling, incoming, connected, ended
+    const [connectionStatus, setConnectionStatus] = useState('good'); // good, reconnecting, failed
     const [localStream, setLocalStream] = useState(null);
     const [remoteStream, setRemoteStream] = useState(null);
     const [callDetails, setCallDetails] = useState(null); // { callerId, callerName, type, roomId }
@@ -114,22 +115,86 @@ export const CallProvider = ({ children, socket }) => {
         };
     }, [socket]);
 
-    const initiateCall = async (userId, roomId, type, targetName, targetAvatar) => {
-        let stream = null;
-        try {
-            stream = await navigator.mediaDevices.getUserMedia({ 
-                video: type === 'video' ? {
-                    facingMode: 'user',
-                    width: { ideal: 1280 },
-                    height: { ideal: 720 },
-                    frameRate: { ideal: 30 }
-                } : false, 
+    const getMediaConstraints = (type) => {
+        const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+        
+        if (type === 'audio') {
+            return {
+                video: false,
                 audio: {
                     echoCancellation: true,
                     noiseSuppression: true,
                     autoGainControl: true
                 }
-            });
+            };
+        }
+
+        if (isMobile) {
+            return {
+                audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+                video: {
+                    facingMode: 'user',
+                    width: { ideal: 480 }, // Low Res (VGA)
+                    height: { ideal: 360 },
+                    frameRate: { ideal: 20, max: 24 } // Low FPS = Low Heat
+                }
+            };
+        }
+        
+        // Desktop defaults (HD)
+        return { 
+            audio: {
+                echoCancellation: true,
+                noiseSuppression: true,
+                autoGainControl: true
+            }, 
+            video: { 
+                width: { ideal: 1280 }, 
+                height: { ideal: 720 },
+                frameRate: { ideal: 30 }
+            } 
+        };
+    };
+
+    const attachConnectionMonitoring = (peer) => {
+        if (!peer) return;
+        
+        // Monitor ICE connection state for "Reconnecting..." UI
+        const checkIceState = () => {
+            if (peer && peer._pc) {
+                const state = peer._pc.iceConnectionState;
+                console.log('[CallContext] ICE State:', state);
+                
+                if (state === 'disconnected' || state === 'checking') {
+                    // Start attempting to reconnect visually
+                    setConnectionStatus('reconnecting');
+                } else if (state === 'connected' || state === 'completed') {
+                    setConnectionStatus('good');
+                } else if (state === 'failed' || state === 'closed') {
+                    setConnectionStatus('failed');
+                }
+            }
+        };
+
+        // We can attach immediately if _pc exists, or wait for connect?
+        // simple-peer creates _pc in constructor, so it should be there.
+        if (peer._pc) {
+            peer._pc.oniceconnectionstatechange = checkIceState;
+            peer._pc.onconnectionstatechange = () => {
+                 console.log('[CallContext] Connection State:', peer._pc.connectionState);
+            };
+        }
+        
+        // Also listen for general peer events
+        peer.on('connect', () => {
+            setConnectionStatus('good');
+        });
+    };
+
+    const initiateCall = async (userId, roomId, type, targetName, targetAvatar) => {
+        let stream = null;
+        try {
+            stream = await navigator.mediaDevices.getUserMedia(getMediaConstraints(type));
         } catch (err) {
             console.error("Media Access denied:", err);
             alert("Could not access camera/microphone. Please check permissions.");
@@ -140,6 +205,7 @@ export const CallProvider = ({ children, socket }) => {
             setLocalStream(stream);
             localStreamRef.current = stream;
             setCallStatus('calling');
+            setConnectionStatus('good');
             
             // [FIX] For outgoing calls, we store the TARGET'S details for display 
             // but send OUR details in the signal so they see us.
@@ -156,8 +222,15 @@ export const CallProvider = ({ children, socket }) => {
             const peer = new SimplePeer({
                 initiator: true,
                 trickle: false,
-                stream: stream
+                stream: stream,
+                // [OPTIMIZATION] Cap bandwidth to 300kbps for stability
+                sdpTransform: (sdp) => {
+                    if (sdp.includes('b=AS:')) return sdp.replace(/b=AS:\d+/, 'b=AS:300');
+                    return sdp.replace(/c=IN IP4 (.*)\r\n/g, 'c=IN IP4 $1\r\nb=AS:300\r\n');
+                },
             });
+
+            attachConnectionMonitoring(peer);
 
             peer.on('signal', (data) => {
                 socket.emit('call:invite', {
@@ -196,6 +269,7 @@ export const CallProvider = ({ children, socket }) => {
             console.error("Call initialization failed:", err);
             alert("Failed to start call: " + (err.message || "Unknown error"));
             setCallStatus('idle');
+            setConnectionStatus('good');
             if (stream) {
                  stream.getTracks().forEach(t => t.stop());
             }
@@ -205,19 +279,7 @@ export const CallProvider = ({ children, socket }) => {
     const answerCall = async () => {
         let stream = null;
         try {
-            stream = await navigator.mediaDevices.getUserMedia({ 
-                video: callDetails.type === 'video' ? {
-                    facingMode: 'user',
-                    width: { ideal: 1280 },
-                    height: { ideal: 720 },
-                    frameRate: { ideal: 30 }
-                } : false, 
-                audio: {
-                    echoCancellation: true,
-                    noiseSuppression: true,
-                    autoGainControl: true
-                }
-            });
+            stream = await navigator.mediaDevices.getUserMedia(getMediaConstraints(callDetails.type));
         } catch (err) {
             console.error("Media Access denied:", err);
             alert("Could not access camera/microphone. Please check permissions.");
@@ -229,12 +291,20 @@ export const CallProvider = ({ children, socket }) => {
             setLocalStream(stream);
             localStreamRef.current = stream;
             setCallStatus('connected');
+            setConnectionStatus('good');
 
             const peer = new SimplePeer({
                 initiator: false,
                 trickle: false,
-                stream: stream
+                stream: stream,
+                // [OPTIMIZATION] Cap bandwidth to 300kbps for stability
+                sdpTransform: (sdp) => {
+                    if (sdp.includes('b=AS:')) return sdp.replace(/b=AS:\d+/, 'b=AS:300');
+                    return sdp.replace(/c=IN IP4 (.*)\r\n/g, 'c=IN IP4 $1\r\nb=AS:300\r\n');
+                },
             });
+            
+            attachConnectionMonitoring(peer);
 
             peer.on('signal', (data) => {
                 socket.emit('call:accept', { 
@@ -332,14 +402,19 @@ export const CallProvider = ({ children, socket }) => {
         const newMode = currentFacingMode === 'user' ? 'environment' : 'user';
         
         try {
-            const newStream = await navigator.mediaDevices.getUserMedia({ 
-                video: { 
-                    facingMode: newMode,
-                    width: { ideal: 1280 },
-                    height: { ideal: 720 }
-                },
-                audio: false
-            });
+        const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+        const constraints = {
+            video: { 
+                facingMode: newMode,
+                width: isMobile ? { ideal: 480 } : { ideal: 1280 },
+                height: isMobile ? { ideal: 360 } : { ideal: 720 },
+                frameRate: isMobile ? { ideal: 20, max: 24 } : { ideal: 30 }
+            },
+            audio: false
+        };
+
+
+            const newStream = await navigator.mediaDevices.getUserMedia(constraints);
 
             const newVideoTrack = newStream.getVideoTracks()[0];
             const oldVideoTrack = localStreamRef.current.getVideoTracks()[0];
@@ -373,6 +448,8 @@ export const CallProvider = ({ children, socket }) => {
     return (
         <CallContext.Provider value={{ 
             callStatus, 
+
+            connectionStatus,
             localStream, 
             remoteStream, 
             callDetails,

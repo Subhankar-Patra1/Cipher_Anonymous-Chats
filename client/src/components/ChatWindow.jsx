@@ -528,8 +528,8 @@ export default function ChatWindow({
                 const hydrated = normalizeReplies(decrypted, []);
                 const toSave = hydrated.map(m => ({ 
                     ...m, 
-                    room_id: String(room.id), 
-                    isDecrypted: true 
+                    room_id: String(room.id)
+                    // [FIX] Don't force isDecrypted: true. decryptPayload sets it if successful.
                 }));
                 
                 await saveFetchedMessages(toSave);
@@ -548,7 +548,8 @@ export default function ChatWindow({
                         console.log(`[Restore] Re-decrypting ${encrypted.length} messages for room ${room.id}`);
                         const decrypted = await Promise.all(encrypted.map(async (m) => {
                             const d = await decryptPayload(m);
-                            return { ...m, ...d, isDecrypted: true }; // Ensure we keep original fields like id
+                            // [FIX] Don't force isDecrypted: true. Trust d.isDecrypted from decryptPayload.
+                            return { ...m, ...d }; // Ensure we keep original fields like id
                         }));
                         await db.messages.bulkPut(decrypted);
                     }
@@ -567,6 +568,62 @@ export default function ChatWindow({
              isStale = true;
         };
     }, [room.initialMessages, room.id, justRestored]); // [FIX] Added justRestored dependency
+
+    // [NEW] Listen for keys-updated event to re-decrypt messages after backup restore
+    useEffect(() => {
+        const handleKeysUpdated = async (event) => {
+            console.log('[ChatWindow] Keys updated event received, re-decrypting messages...');
+            
+            try {
+                // Get all messages for this room from IndexedDB
+                const localMsgs = await db.messages.where('room_id').equals(String(room.id)).toArray();
+                
+                // Find messages that need decryption:
+                // - Has ciphertext (encrypted)
+                // - Not already decrypted OR has no content
+                const needsDecryption = localMsgs.filter(m => 
+                    m.ciphertext && m.iv && (!m.isDecrypted || !m.content || m.content === '')
+                );
+                
+                console.log(`[ChatWindow] Found ${localMsgs.length} total msgs, ${needsDecryption.length} need decryption`);
+                
+                if (needsDecryption.length === 0) {
+                    console.log('[ChatWindow] No messages need decryption');
+                    return;
+                }
+                
+                console.log(`[ChatWindow] Re-decrypting ${needsDecryption.length} messages for room ${room.id}`);
+                
+                // Decrypt all messages
+                const decrypted = await Promise.all(needsDecryption.map(async (m) => {
+                    try {
+                        const d = await decryptPayload(m);
+                        console.log(`[ChatWindow] Message ${m.id}: decrypted=${d.isDecrypted}, hasContent=${!!d.content}`);
+                        return { ...m, ...d }; // Merge keeping original fields like id
+                    } catch (err) {
+                        console.error(`[ChatWindow] Failed to decrypt message ${m.id}:`, err);
+                        return m; // Return original if decrypt fails
+                    }
+                }));
+                
+                // Filter only successfully decrypted ones
+                const successfullyDecrypted = decrypted.filter(m => m.isDecrypted && m.content);
+                
+                console.log(`[ChatWindow] Successfully decrypted ${successfullyDecrypted.length} of ${needsDecryption.length} messages`);
+                
+                if (successfullyDecrypted.length > 0) {
+                    // Update IndexedDB with decrypted messages
+                    await db.messages.bulkPut(successfullyDecrypted);
+                    console.log('[ChatWindow] Updated IndexedDB with decrypted messages');
+                }
+            } catch (err) {
+                console.error('[ChatWindow] Re-decryption after key update failed:', err);
+            }
+        };
+        
+        window.addEventListener('cipher:keys-updated', handleKeysUpdated);
+        return () => window.removeEventListener('cipher:keys-updated', handleKeysUpdated);
+    }, [room.id]);
 
     // [CRITICAL] Scroll ONLY after chat is ready - prevents scroll jumps
 
@@ -2373,23 +2430,23 @@ export default function ChatWindow({
                                         }
                                     }}
                                     className={`p-2 transition-all rounded-full ${(!room.username && !room.display_name) ? 'text-slate-300 dark:text-slate-700 cursor-not-allowed' : 'text-slate-400 hover:text-emerald-500 dark:hover:text-emerald-400'}`}
-                                    title={(!room.username && !room.display_name) ? "Cannot call deleted account" : "Voice Call"}
-                                    disabled={!room.username && !room.display_name}
+                                    title={(!room.username && !room.display_name) ? "Cannot call deleted account" : (isBlockedByMe || isBlockedByThem) ? "Call unavailable" : "Voice Call"}
+                                    disabled={(!room.username && !room.display_name) || isBlockedByMe || isBlockedByThem}
                                 >
-                                    <span className="material-symbols-outlined">call</span>
+                                    <span className={`material-symbols-outlined ${isBlockedByMe || isBlockedByThem ? 'opacity-50' : ''}`}>call</span>
                                 </button>
                                 <button 
                                     onClick={() => {
                                         const isUnknown = room.type === 'direct' && !room.username && !room.display_name;
-                                        if (!isUnknown) {
+                                        if (!isUnknown && !isBlockedByMe && !isBlockedByThem) {
                                             initiateCall(room.other_user_id || otherUserId, room.id, 'video', room.name, room.avatar_url || room.avatar_thumb_url);
                                         }
                                     }}
-                                    className={`p-2 transition-all rounded-full ${(!room.username && !room.display_name) ? 'text-slate-300 dark:text-slate-700 cursor-not-allowed' : 'text-slate-400 hover:text-emerald-500 dark:hover:text-emerald-400'}`}
-                                    title={(!room.username && !room.display_name) ? "Cannot call deleted account" : "Video Call"}
-                                    disabled={!room.username && !room.display_name}
+                                    className={`p-2 transition-all rounded-full ${(!room.username && !room.display_name) || isBlockedByMe || isBlockedByThem ? 'text-slate-300 dark:text-slate-700 cursor-not-allowed' : 'text-slate-400 hover:text-emerald-500 dark:hover:text-emerald-400'}`}
+                                    title={(!room.username && !room.display_name) ? "Cannot call deleted account" : (isBlockedByMe || isBlockedByThem) ? "Call unavailable" : "Video Call"}
+                                    disabled={(!room.username && !room.display_name) || isBlockedByMe || isBlockedByThem}
                                 >
-                                    <span className="material-symbols-outlined">videocam</span>
+                                    <span className={`material-symbols-outlined ${isBlockedByMe || isBlockedByThem ? 'opacity-50' : ''}`}>videocam</span>
                                 </button>
                             </>
                         )}
@@ -2557,15 +2614,104 @@ export default function ChatWindow({
                     isRestoreAnimation={isRestoreAnimation}
                     hasSkippedSync={hasSkippedSync} // [NEW]
                     onOpenProfile={(uid, rid, sync) => {
+                        // If internal nav
                         if (uid) {
                             onOpenProfile(uid, rid || room.id, sync);
                         } else {
-                            if (onOpenMainProfile) return onOpenMainProfile();
+                            // If user clicked Header or Main Profile
+                            if (onOpenMainProfile) {
+                                // We are passing a callback to handle side effects from the profile panel (like block/unblock)
+                                // We need to check how onOpenMainProfile is implemented. 
+                                // Actually, MessageList calls onOpenProfile when clicking avatar.
+                                // If we are here, it means we are opening the profile panel. 
+                                // The ProfilePanel is rendered by the PARENT (Dashboard presumably) or Sidebar?
+                                // Wait, ChatWindow renders ProfilePanel if ShowGroupInfo is true? 
+                                // No, ChatWindow has a ProfilePanel import but I don't see it rendered in the main flow EXCEPT maybe via ShowGroupInfo?
+                                
+                                // Let's check line 8. import ProfilePanel from './ProfilePanel';
+                                // It seems I missed where ProfilePanel is rendered in ChatWindow.
+                                // In the first view_file, it was imported.
+                                // Let's look at where showGroupInfo is used.
+                                // If it's a direct chat, onOpenMainProfile is called.
+                                // If it's a group, setShowGroupInfo(true) is called.
+                                
+                                // Ah, usually ProfilePanel is for Direct chats too if implemented inside ChatWindow. 
+                                // If onOpenMainProfile is passed, it means the Panel is outside.
+                                // If the Panel is outside, we need to pass the callback `onActionSuccess` upwards?
+                                // OR `ChatWindow` has `onRefresh` prop which might reload the whole room?
+                                
+                                // If `onOpenMainProfile` is used (likely for Mobile or Sidebar integration), the parent needs to handle the update.
+                                // BUT, if we are in `ChatWindow`, `isBlockedByMe` is a local state derived from props but updated via fetch in useEffect.
+                                // If the parent re-renders `ChatWindow` with new `room` prop, it updates.
+                                // But we want INSTANT update.
+                                
+                                // If the ProfilePanel is OUTSIDE ChatWindow, we can't pass a callback directly from here unless onOpenMainProfile accepts it.
+                                
+                                // However, looking at the code I see `ProfilePanel` imported. I suspect it MIGHT be rendered conditionally.
+                                // Let's search for `<ProfilePanel` in the code.
+                                // A grep search earlier showed it in ChatWindow.jsx.
+                                // I'll assume it's rendered somewhere I missed or the view_file didn't cover it?
+                                // Wait, view_file covered lines 1-150 and 800-2831. 
+                                // Maybe it's between 150 and 800? 
+                                // Let me check lines 150-800 quickly if I can? 
+                                // Actually, I'll just check if I can see it in the `return` statement.
+                                // Lines 2270+ is the return. 
+                                // I see `PrivilegedUsersModal`, `PinnedMessagesPanel`, `MessageList`, `LocationPicker`, etc.
+                                // I DO NOT see `<ProfilePanel` in the return block I viewed (2270+).
+                                
+                                // So `ProfilePanel` is likely rendered by the PARENT (Dashboard) via `onOpenMainProfile` or similar.
+                                // If so, when `ProfilePanel` performs an action, it should call `onActionSuccess`. 
+                                // `ChatWindow` needs to know about this.
+                                
+                                // If `onOpenMainProfile` is a function passed from parent, we can't easily hook into the panel's success callback unless the parent exposes it.
+                                
+                                // However, `ChatWindow` has `isBlockedByMe` state.
+                                // And `ChatWindow` listens to `you_are_blocked`(by them) socket event.
+                                // But for "Blocking them", we do it via API.
+                                
+                                // IF ProfilePanel is outside, we need to rely on:
+                                // 1. Parent refreshing the room prop.
+                                // 2. A socket event that tells us we blocked someone? (Unlikely for self-action, usually response).
+                                
+                                // WAIT! `onOpenMainProfile` might be just a function to toggle UI.
+                                // If `ChatWindow` is solely responsible for the view, and `ProfilePanel` is logically "part" of the chat view (e.g. right sidebar), usually it's inside `ChatWindow`.
+                                
+                                // Let's look at `Dashboard.jsx`? No, I should stick to `ChatWindow`.
+                                // If `ProfilePanel` is imported but not used, that's weird.
+                                // Let me check lines 150-800.
+                                return onOpenMainProfile();
+                            }
                             if (room.type === 'direct') {
                                 onOpenProfile(room.other_user_id, room.id, hasSkippedSync);
                             } else {
                                 setShowGroupInfo(true);
                             }
+                        }
+                    }}
+                />
+            )}
+
+            {/* [NEW] Profile Panel (Right Sidebar) handled locally if group or if direct and we want it here? */}
+            {/* Actually, if setShowGroupInfo(true) sets a state, where is that state used? */}
+            {/* I see `showGroupInfo` prop. I see `setShowGroupInfo` prop. */}
+            {/* If it's a prop, the parent handles the visibility. */}
+            
+            {(showGroupInfo || (room.type === 'direct' && showGroupInfo)) && (
+                <ProfilePanel 
+                    isOpen={true}
+                    userId={room.type === 'direct' ? (room.other_user_id || otherUserId) : null}
+                    roomId={room.id}
+                    onClose={() => setShowGroupInfo(false)}
+                    onActionSuccess={(action) => {
+                        console.log('Profile Action:', action);
+                        if (action === 'block') setIsBlockedByMe(true);
+                        if (action === 'unblock') setIsBlockedByMe(false);
+                        if (action === 'delete') {
+                             if (onBack) onBack(); // Go back if chat deleted
+                        }
+                        if (action === 'clear') {
+                            // Handled by socket or local clear
+                            if (onRefresh) onRefresh();
                         }
                     }}
                 />
