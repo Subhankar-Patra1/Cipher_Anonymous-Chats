@@ -38,7 +38,10 @@ router.post('/signup', async (req, res) => {
         const os = ua.getOS();
         const device = ua.getDevice();
         
-        const deviceName = device.model ? `${device.vendor || ''} ${device.model}` : `${browser.name || 'Unknown'} on ${os.name || 'Unknown'}`;
+        // [FIX] Only use device model if meaningful (>2 chars and has vendor)
+        const deviceName = (device.model && device.model.length > 2 && device.vendor) 
+            ? `${device.vendor} ${device.model}` 
+            : `${browser.name || 'Unknown'} on ${os.name || 'Unknown'}`;
         const deviceType = device.type || 'desktop'; // default to desktop if undefined
         const sessionId = uuidv4();
         const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
@@ -107,7 +110,10 @@ router.post('/login', async (req, res) => {
         const os = ua.getOS();
         const device = ua.getDevice();
         
-        const deviceName = device.model ? `${device.vendor || ''} ${device.model}` : `${browser.name || 'Unknown'} on ${os.name || 'Unknown'}`;
+        // [FIX] Only use device model if meaningful (>2 chars and has vendor)
+        const deviceName = (device.model && device.model.length > 2 && device.vendor) 
+            ? `${device.vendor} ${device.model}` 
+            : `${browser.name || 'Unknown'} on ${os.name || 'Unknown'}`;
         const deviceType = device.type || 'desktop';
         const sessionId = uuidv4();
         const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
@@ -323,9 +329,12 @@ router.post('/device', async (req, res) => {
     
     let deviceLabel = label;
     if (!deviceLabel) {
-        if (device.model) {
-            deviceLabel = `${device.vendor || ''} ${device.model} (${os.name || 'Android'})`.trim();
+        // [FIX] Only use device model if it's meaningful (>2 chars and has a vendor)
+        // Otherwise fall back to browser name to avoid cryptic labels like "K (Android)"
+        if (device.model && device.model.length > 2 && device.vendor) {
+            deviceLabel = `${device.vendor} ${device.model} (${os.name || 'Android'})`.trim();
         } else {
+            // Use browser name for better readability
             deviceLabel = `${browser.name || 'Browser'} on ${os.name || 'Unknown OS'}`;
         }
     }

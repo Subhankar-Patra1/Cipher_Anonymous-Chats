@@ -28,10 +28,10 @@ export const AuthProvider = ({ children }) => {
             // Ensure init is done (should be fast if prewarmed)
             await cryptoManager.init();
             
-            // Only perform separate registration if we suspect it wasn't bundled
-            // or if this is a re-auth of an existing token where we want to ensure freshness.
-            // For optimized login, this is redundant but harmless as a fallback.
-            
+            // [FIX] Get device info from cryptoManager after init
+            const deviceId = cryptoManager.deviceId;
+            const publicKey = await cryptoManager.getPublicKey();
+            const signingPublicKey = await cryptoManager.getSigningPublicKey();
             
             if (deviceId && publicKey) {
                 console.log('[Auth] Registering/updating device identity...', deviceId);

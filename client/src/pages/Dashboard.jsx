@@ -776,8 +776,9 @@ export default function Dashboard() {
                            room.last_message_status === 'sending');
                       
                       // [FIX] Prevent older messages from overwriting newer optimistic updates
+                      // Use server timestamps (created_at) for comparison to avoid client/server time drift
                       const incomingMsgTime = new Date(msg.created_at).getTime();
-                      const currentMsgTime = room.last_message_at ? new Date(room.last_message_at).getTime() : 0;
+                      const currentMsgTime = room.last_message_created_at ? new Date(room.last_message_created_at).getTime() : 0;
                       const isOlderMessage = incomingMsgTime < currentMsgTime && !isSameMessage && !isOwnMessageEcho;
                       
                       if (isOlderMessage) {
