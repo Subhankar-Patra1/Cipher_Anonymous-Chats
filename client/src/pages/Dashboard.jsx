@@ -12,6 +12,7 @@ import { useNotification } from '../context/NotificationContext';
 // [MODIFIED] Use context, don't provide it here
 import { useChatLock } from '../context/ChatLockContext';
 import Sidebar from '../components/Sidebar';
+import SideNav from '../components/SideNav';
 import ChatWindow from '../components/ChatWindow';
 import AIChatWindow from '../components/AIChatWindow';
 import CreateRoomModal from '../components/CreateRoomModal';
@@ -65,6 +66,7 @@ export default function Dashboard() {
     const { user, token, logout, updateUser } = useAuth();
     const { showNotification, canNotify } = useNotification();
     const [rooms, setRooms] = useState([]);
+    const [activeFilter, setActiveFilter] = useState('direct'); // 'direct' | 'group' | 'ai'
     const [activeRoom, setActiveRoom] = useState(null);
     const [loadingRoomId, setLoadingRoomId] = useState(null); // [NEW] Loading state for chat switching
     const [isLoadingRooms, setIsLoadingRooms] = useState(true); // [NEW] Initial loading state
@@ -120,6 +122,12 @@ export default function Dashboard() {
     const seenMessages = useRef(new Set()); // [NEW] Global Replay Protection
     const [typingByRoom, setTypingByRoom] = useState({}); // [NEW] { roomId: [{ userId, name }] }
     const globalTypingTimeoutsRef = useRef({}); // [NEW] { "roomId:userId": timeoutId }
+
+    // [NEW] Unread counts for SideNav badges
+    const unreadCounts = useMemo(() => ({
+        group: rooms.filter(r => r.type === 'group' && !r.is_archived && r.unread_count > 0).length,
+        direct: rooms.filter(r => r.type === 'direct' && !r.is_archived && r.unread_count > 0).length
+    }), [rooms]);
 
     const handleManualRestore = async (e) => {
         if (e) e.preventDefault();
@@ -345,7 +353,9 @@ export default function Dashboard() {
 
     const resize = useCallback((mouseMoveEvent) => {
         // Optimization: RequestAnimationFrame could be used here if needed, but setState is usually fast enough
-        const newWidth = mouseMoveEvent.clientX;
+        // [MODIFIED] Subtract SideNav width (64px) from clientX to account for the left panel
+        const SIDENAV_WIDTH = 64; // w-16 = 64px
+        const newWidth = mouseMoveEvent.clientX - SIDENAV_WIDTH;
         if (newWidth >= 200 && newWidth <= 600) {
             setSidebarWidth(newWidth);
         }
@@ -2147,6 +2157,14 @@ export default function Dashboard() {
         {!syncState.active && <NotificationPermissionBanner />}
         
         <div className={`fixed inset-0 h-[100dvh] w-full bg-gray-50 dark:bg-slate-950 text-slate-900 dark:text-white overflow-hidden flex ${isResizing ? 'select-none cursor-col-resize' : ''} animate-dashboard-entry transition-colors`}>
+            {/* [NEW] SideNav - Desktop only icon filter bar */}
+            <SideNav 
+                activeFilter={activeFilter}
+                onFilterChange={setActiveFilter}
+                unreadCounts={unreadCounts}
+                onLogout={() => setShowLogoutModal(true)}
+            />
+            
             {/* Mobile: Sidebar hidden if activeRoom exists OR pending unlock. Desktop: Always visible */}
             <div 
                 className={`
@@ -2166,10 +2184,12 @@ export default function Dashboard() {
                     onJoinRoom={() => setShowJoinModal(true)}
                     user={user}
                     onRefresh={fetchRooms}           
-                    hasSkippedSync={hasSkippedSync} // [NEW]
+                    hasSkippedSync={hasSkippedSync}
                     onLogout={() => setShowLogoutModal(true)}
-                    onGoToMessage={handleGoToMessage} // [NEW] Pass global handler
-                    typingByRoom={typingByRoom} // [NEW] Pass typing status
+                    onGoToMessage={handleGoToMessage}
+                    typingByRoom={typingByRoom}
+                    activeFilter={activeFilter}
+                    onFilterChange={setActiveFilter}
                     onRoomLocked={(roomId) => {
                         // Close the chat if the locked room is currently active
                         if (activeRoom && String(activeRoom.id) === String(roomId)) {

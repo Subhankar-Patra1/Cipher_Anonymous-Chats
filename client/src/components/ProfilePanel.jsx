@@ -1028,7 +1028,7 @@ export default function ProfilePanel({ isOpen = true, userId, roomId, onClose, o
                             </div>
                         )}
 
-                        {!isMe && profile && !profile.is_blocked_by_me && !profile.is_blocked_by_them && (
+                        {!isMe && profile && profile.username !== 'deleted' && !profile.is_blocked_by_me && !profile.is_blocked_by_them && (
                             <div className="flex items-center justify-center gap-6 mt-6 pb-2">
                                 <button 
                                     onClick={() => onMessageUser?.(userId)}

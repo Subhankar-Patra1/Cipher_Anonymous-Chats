@@ -462,13 +462,15 @@ const LastMessagePreview = ({ room, user, hasSkippedSync }) => {
     );
 };
 
-export default function Sidebar({ rooms, activeRoom, onSelectRoom, loadingRoomId, isLoading, onCreateRoom, onJoinRoom, user, onLogout, onRefresh, onRoomLocked, onGoToMessage, hasSkippedSync, typingByRoom, onShowProfile }) { // [MODIFIED] Added onShowProfile
+export default function Sidebar({ rooms, activeRoom, onSelectRoom, loadingRoomId, isLoading, onCreateRoom, onJoinRoom, user, onLogout, onRefresh, onRoomLocked, onGoToMessage, hasSkippedSync, typingByRoom, onShowProfile, activeFilter = 'group', onFilterChange }) {
 
     const { presenceMap, fetchStatuses } = usePresence();
     const { hasPasscode, lockApp } = useAppLock();
     const { isRoomLocked, requestUnlock, cancelUnlock } = useChatLock();
     const { theme, toggleTheme } = useTheme();
-    const [tab, setTab] = useState('group'); // 'group' or 'direct'
+    // [MODIFIED] Use external activeFilter prop, with local tab alias for compatibility
+    const tab = activeFilter;
+    const setTab = onFilterChange || (() => {});
     const [searchQuery, setSearchQuery] = useState('');
     const [archivedSearchQuery, setArchivedSearchQuery] = useState('');
     const [showShareProfile, setShowShareProfile] = useState(false);
@@ -523,12 +525,12 @@ export default function Sidebar({ rooms, activeRoom, onSelectRoom, loadingRoomId
         return r.name.toLowerCase().includes(searchQuery.toLowerCase());
     });
     
-    // Reset viewArchived when tab changes
+    // Reset viewArchived when filter changes
     useEffect(() => {
         setViewArchived(false);
         setSearchQuery('');
         setArchivedSearchQuery('');
-    }, [tab]);
+    }, [activeFilter]);
     
     // Fetch status for direct chat users
     useEffect(() => {
@@ -615,9 +617,9 @@ export default function Sidebar({ rooms, activeRoom, onSelectRoom, loadingRoomId
     };
 
     return (
-        <div className="w-full h-full bg-white/90 dark:bg-slate-900/90 backdrop-blur-xl border-r border-slate-200 dark:border-slate-800 flex flex-col shadow-2xl transition-colors">
+        <div className="w-full h-full bg-white/90 dark:bg-slate-900/90 backdrop-blur-xl border-r border-slate-200 dark:border-slate-800 flex flex-col transition-colors">
             {/* ... (Header) ... */}
-            <div className="p-6 border-b border-slate-200/50 dark:border-slate-800/50 flex justify-between items-center bg-white/30 dark:bg-slate-900/30">
+            <div className="p-6 flex justify-between items-center bg-white/30 dark:bg-slate-900/30">
                 <div className="flex items-center gap-3 flex-1 min-w-0 mr-2">
                     <div 
                         className="flex items-center gap-3 cursor-pointer min-w-0"
@@ -650,7 +652,8 @@ export default function Sidebar({ rooms, activeRoom, onSelectRoom, loadingRoomId
                         <span className="material-symbols-outlined text-[14px]">qr_code_2</span>
                     </button>
                 </div>
-                <div className="flex items-center gap-2">
+                {/* [MODIFIED] Hide on desktop - SideNav handles theme/logout there */}
+                <div className="flex items-center gap-2 md:hidden">
                     
                     {/* [NEW] Auto-Backup Status Indicator */}
                     <div 
@@ -712,7 +715,8 @@ export default function Sidebar({ rooms, activeRoom, onSelectRoom, loadingRoomId
                 </div>
             </div>
 
-            <div className="p-4 pb-2">
+            {/* [MODIFIED] Tab buttons - Hidden on desktop (SideNav handles it), visible on mobile */}
+            <div className="p-4 pb-2 md:hidden">
                 <div className="flex p-1 bg-slate-100 dark:bg-slate-950/50 rounded-xl border border-slate-200 dark:border-slate-800/50 transition-colors">
                     <button 
                         className={`flex-1 py-2 text-sm font-medium rounded-lg transition-all duration-200 relative ${tab === 'group' ? 'bg-white dark:bg-slate-800 text-slate-900 dark:text-white shadow-sm' : 'text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200'}`}
