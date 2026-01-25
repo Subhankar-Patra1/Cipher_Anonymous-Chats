@@ -8,9 +8,14 @@
 
 ### Core Messaging
 - **🔒 Truly Anonymous**: No emails, no phone numbers, no passwords. Identity is session-based.
-- **⚡ Real-Time Messaging**: Instant delivery using Socket.IO.
+- **⚡ Real-Time Messaging**: Instant delivery using Socket.IO with typing indicators and online presence.
 - **⏲️ Ephemeral Groups**: Group chat rooms automatically expire and delete after 48 hours.
-- **👥 Direct Messaging**: Private one-on-one chats with other users.
+- **👥 Direct Messaging**: Private one-on-one chats with advanced security.
+- **📞 High-Definition Calls**: CRYSTAL CLEAR video and audio calls.
+    - **Desktop**: Full HD (1080p) targets.
+    - **Mobile**: HD (720p) targets.
+    - **Unlimited Bandwidth**: No artificial capping; scales to your connection speed.
+    - **Smart Fallbacks**: Automatically adjusts quality if your device is busy or connection is weak.
 - **🔗 Smart Invites**: Share rooms via unique codes or direct links (QR codes included!).
 
 ### AI Integration
@@ -21,28 +26,37 @@
 - **� Advanced Emoji Support**: Full emoji picker with smart emoji rendering using Twemoji for consistent cross-platform display.
 - **🎤 Voice Notes**: Record and send audio messages with waveform previews.
 - **🖼️ High-Fidelity Profiles**: Upload high-resolution avatars (up to 2048px) with full-screen zoom interactions.
-- **🖼️ Advanced Media Viewer**: Full touch support with pinch-to-zoom (up to 5x), pan, and swipe navigation for images. Now with optimized quality for profile photos.
-- **🖼️ Smart Image Grouping**: Upload multiple images with individual captions, or group them into a beautiful grid with a shared caption.
-- **📂 Advanced File Sharing**: Share any file type with instant previews and dedicated download controls.
+- **🖼️ Advanced Media Viewer**: Full touch support with pinch-to-zoom (up to 5x), pan, and swipe navigation.
+- **🖼️ Smart Image Grouping**: Upload multiple images into beautiful grids with shared or individual captions.
+- **📂 File Sharing**: Share any file type with instant previews and dedicated download controls.
 - **🎥 GIF Support**: Send animated GIFs powered by Tenor.
+- **📋 Todo Lists**: Create and manage shared checklists right in the chat.
+- **📈 Enhanced Polls**: Real-time voting with multi-option support and emoji integration.
 
 ### Interactive Features
 - **📊 Polls**: Create polls with multiple options and emoji support. See real-time voting results and participation.
 - **📍 Location Sharing**: Share your current location with an interactive map preview powered by OpenStreetMap.
 - **↩️ Enhanced Chat Actions**: Reply to messages (with preview), copy text, and delete messages (for yourself or everyone).
+- **⭐ Starred Messages**: Save important messages for quick access in a dedicated view.
+- **✨ Message Reactions**: React to messages with any emoji to express yourself.
 - **✏️ Edit Messages**: Fix typos or update sent messages instantly.
 
 ### Security & Privacy
 - **🛡️ Secure**: JWT-based authentication and PostgreSQL persistence.
-- **🔐 App Lock**: Secure your access with a robust passcode entry system.
-- **🔒 Secret Chats**: Lock individual chats with separate 4-digit PINs. Each chat can have its own passcode, and if you forget it, you can remove the lock using your account password.
+- **🔐 End-to-End Encryption**: Robust E2EE for all messages.
+    - **Mandatory Backups**: Secure your keys with a mandatory backup password during signup.
+    - **Device Sync**: Securely sync your keys across devices with real-time approval modals.
+- **🔐 App Lock**: Global app-level passcode protection.
+- **🔒 Secret Chats**: Lock individual chats with unique 4-digit PINs.
 
 ### User Experience
 - **� Online Presence**: See who's online and when they were last active.
 - **� Typing Indicators**: See when others are typing in real-time.
 - **📌 Pin Chats**: Pin important conversations to the top of your chat list.
 - **� Archive Chats**: Archive less important chats to keep your inbox clean.
+- **🎨 Morphing UI**: Highly interactive "Morphing Send Button" that animates as you type.
 - **📱 Native-Like Mobile Experience**: Highly polished responsive design with smooth transitions and touch-friendly controls.
+- **📏 Compact Headers**: Optimized UI for maximum screen real estate.
 
 ## 🛠️ Tech Stack
 
