@@ -146,14 +146,14 @@ export const CallProvider = ({ children, socket }) => {
                 audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
                 video: {
                     facingMode: 'user',
-                    width: { ideal: 480 }, // Low Res (VGA)
-                    height: { ideal: 360 },
-                    frameRate: { ideal: 20, max: 24 } // Low FPS = Low Heat
+                    width: { ideal: 1280 }, // HD Quality
+                    height: { ideal: 720 },
+                    frameRate: { ideal: 30 } // Relaxed frameRate (removed max)
                 }
             };
         }
         
-        // Desktop defaults (HD)
+        // Desktop defaults (Full HD)
         return { 
             audio: {
                 echoCancellation: true,
@@ -161,11 +161,67 @@ export const CallProvider = ({ children, socket }) => {
                 autoGainControl: true
             }, 
             video: { 
-                width: { ideal: 1280 }, 
-                height: { ideal: 720 },
+                width: { ideal: 1920 }, 
+                height: { ideal: 1080 },
                 frameRate: { ideal: 30 }
             } 
         };
+    };
+
+    /**
+     * Robust wrapper for getUserMedia with resolution fallbacks
+     */
+    const getSafeUserMedia = async (type) => {
+        const primaryConstraints = getMediaConstraints(type);
+        
+        // If audio only, no fallback needed for resolution
+        if (type === 'audio') {
+            return await navigator.mediaDevices.getUserMedia(primaryConstraints);
+        }
+
+        try {
+            // Level 1: Try HD/Full HD (as requested)
+            console.log('[CallContext] Attempting Level 1 Media (HD/FHD)...');
+            return await navigator.mediaDevices.getUserMedia(primaryConstraints);
+        } catch (err) {
+            console.warn('[CallContext] Level 1 Media failed:', err.name, err.message);
+            
+            // If device is in use, resolution fallbacks might not help, 
+            // but sometimes a specific mode (like FHD) is locked by another app while HD is free.
+            if (err.name === 'NotReadableError') {
+                console.log('[CallContext] Device busy, trying mid-tier fallback...');
+            }
+
+            try {
+                // Level 2: Try standard 720p (if not already tried) or lower
+                console.log('[CallContext] Attempting Level 2 Media (720p)...');
+                const level2Constraints = {
+                    audio: primaryConstraints.audio,
+                    video: { 
+                        width: { ideal: 1280 }, 
+                        height: { ideal: 720 },
+                        frameRate: { ideal: 24 }
+                    }
+                };
+                return await navigator.mediaDevices.getUserMedia(level2Constraints);
+            } catch (err2) {
+                console.error('[CallContext] Level 2 Media failed:', err2.name);
+                
+                try {
+                    // Level 3: Bare minimum 360p
+                    console.log('[CallContext] Attempting Level 3 Media (360p)...');
+                    const level3Constraints = {
+                        audio: primaryConstraints.audio,
+                        video: { width: 640, height: 360 }
+                    };
+                    return await navigator.mediaDevices.getUserMedia(level3Constraints);
+                } catch (err3) {
+                    // If all video attempts fail, throw the original error or a descriptive one
+                    console.error('[CallContext] All video levels failed.');
+                    throw err; 
+                }
+            }
+        }
     };
 
     const attachConnectionMonitoring = (peer) => {
@@ -209,10 +265,14 @@ export const CallProvider = ({ children, socket }) => {
     const initiateCall = async (userId, roomId, type, targetName, targetAvatar) => {
         let stream = null;
         try {
-            stream = await navigator.mediaDevices.getUserMedia(getMediaConstraints(type));
+            stream = await getSafeUserMedia(type);
         } catch (err) {
             console.error("Media Access denied:", err);
-            alert("Could not access camera/microphone. Please check permissions.");
+            if (err.name === 'NotReadableError') {
+                alert("Camera or Microphone is already in use by another application. Please close other apps (like Zoom, Teams, or other browser tabs) and try again.");
+            } else {
+                alert("Could not access camera/microphone. Please check permissions.");
+            }
             return;
         }
 
@@ -237,12 +297,7 @@ export const CallProvider = ({ children, socket }) => {
             const peer = new SimplePeer({
                 initiator: true,
                 trickle: false,
-                stream: stream,
-                // [OPTIMIZATION] Cap bandwidth to 300kbps for stability
-                sdpTransform: (sdp) => {
-                    if (sdp.includes('b=AS:')) return sdp.replace(/b=AS:\d+/, 'b=AS:300');
-                    return sdp.replace(/c=IN IP4 (.*)\r\n/g, 'c=IN IP4 $1\r\nb=AS:300\r\n');
-                },
+                stream: stream
             });
 
             attachConnectionMonitoring(peer);
@@ -294,10 +349,14 @@ export const CallProvider = ({ children, socket }) => {
     const answerCall = async () => {
         let stream = null;
         try {
-            stream = await navigator.mediaDevices.getUserMedia(getMediaConstraints(callDetails.type));
+            stream = await getSafeUserMedia(callDetails.type);
         } catch (err) {
             console.error("Media Access denied:", err);
-            alert("Could not access camera/microphone. Please check permissions.");
+            if (err.name === 'NotReadableError') {
+                alert("Camera or Microphone is already in use by another application. Please close other apps and try again.");
+            } else {
+                alert("Could not access camera/microphone. Please check permissions.");
+            }
             endCall();
             return;
         }
@@ -314,12 +373,7 @@ export const CallProvider = ({ children, socket }) => {
             const peer = new SimplePeer({
                 initiator: false,
                 trickle: false,
-                stream: stream,
-                // [OPTIMIZATION] Cap bandwidth to 300kbps for stability
-                sdpTransform: (sdp) => {
-                    if (sdp.includes('b=AS:')) return sdp.replace(/b=AS:\d+/, 'b=AS:300');
-                    return sdp.replace(/c=IN IP4 (.*)\r\n/g, 'c=IN IP4 $1\r\nb=AS:300\r\n');
-                },
+                stream: stream
             });
             
             attachConnectionMonitoring(peer);
@@ -424,9 +478,9 @@ export const CallProvider = ({ children, socket }) => {
             const constraints = {
                 video: { 
                     facingMode: { exact: newMode }, // Use 'exact' to force the specific camera
-                    width: isMobile ? { ideal: 480 } : { ideal: 1280 },
-                    height: isMobile ? { ideal: 360 } : { ideal: 720 },
-                    frameRate: isMobile ? { ideal: 20, max: 24 } : { ideal: 30 }
+                    width: isMobile ? { ideal: 1280 } : { ideal: 1920 },
+                    height: isMobile ? { ideal: 720 } : { ideal: 1080 },
+                    frameRate: { ideal: 30 }
                 },
                 audio: false
             };
