@@ -8,6 +8,7 @@
 
 ### Core Messaging
 - **🔒 Truly Anonymous**: No emails, no phone numbers, no passwords. Identity is session-based.
+- **🌐 Multi-Platform OAuth**: Seamless login experience using **Google** or **GitHub** accounts for persistent identity without manual signups.
 - **⚡ Real-Time Messaging**: Instant delivery using Socket.IO with typing indicators and online presence.
 - **⏲️ Ephemeral Groups**: Group chat rooms automatically expire and delete after 48 hours.
 - **👥 Direct Messaging**: Private one-on-one chats with advanced security.
