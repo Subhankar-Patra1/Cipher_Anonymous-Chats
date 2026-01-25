@@ -1,8 +1,8 @@
-# ⚡ No Login Chats
+# ⚡ Cipher (Anonymous Chats)
 
 ![License](https://img.shields.io/badge/license-MIT-blue.svg) ![Node](https://img.shields.io/badge/node->=18.0.0-green.svg) ![React](https://img.shields.io/badge/react-18.0.0-blue.svg)
 
-**No Login Chats** is a seamless, anonymous, real-time messaging application designed for instant communication without the friction of sign-up forms or passwords. Just pick a username and start chatting.
+**Cipher (Anonymous Chats)** is a seamless, anonymous, real-time messaging application designed for instant communication without the friction of sign-up forms or passwords. Just pick a username and start chatting.
 
 ## 🚀 Features
 
@@ -85,8 +85,8 @@ Follow these steps to set up the project locally.
 
 ### 1. Clone the Repository
 ```bash
-git clone https://github.com/Subhankar-Patra1/No-Login-Chats.git
-cd No-Login-Chats
+git clone https://github.com/Subhankar-Patra1/Cipher_Anonymous-Chats.git
+cd Cipher_Anonymous-Chats
 ```
 
 ### 2. Backend Setup
