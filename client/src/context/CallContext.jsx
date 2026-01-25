@@ -423,7 +423,7 @@ export const CallProvider = ({ children, socket }) => {
             const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
             const constraints = {
                 video: { 
-                    facingMode: { ideal: newMode },
+                    facingMode: { exact: newMode }, // Use 'exact' to force the specific camera
                     width: isMobile ? { ideal: 480 } : { ideal: 1280 },
                     height: isMobile ? { ideal: 360 } : { ideal: 720 },
                     frameRate: isMobile ? { ideal: 20, max: 24 } : { ideal: 30 }
@@ -431,21 +431,41 @@ export const CallProvider = ({ children, socket }) => {
                 audio: false
             };
 
+            // Get the new video track
             const newStream = await navigator.mediaDevices.getUserMedia(constraints);
             const newVideoTrack = newStream.getVideoTracks()[0];
-            const oldVideoTrack = localStreamRef.current.getVideoTracks()[0];
+            
+            // Get the current video track from the stream
+            const currentVideoTrack = localStreamRef.current.getVideoTracks()[0];
 
-            if (connectionRef.current && oldVideoTrack) {
-                // simple-peer replaceTrack handles the heavy lifting
-                connectionRef.current.replaceTrack(oldVideoTrack, newVideoTrack, localStreamRef.current);
+            if (!currentVideoTrack) {
+                console.error('[Call] No current video track found');
+                newVideoTrack.stop();
+                return;
             }
 
-            // Update local stream ref and state
-            oldVideoTrack.stop();
-            localStreamRef.current.removeTrack(oldVideoTrack);
+            // Replace track in the peer connection
+            if (connectionRef.current) {
+                try {
+                    connectionRef.current.replaceTrack(currentVideoTrack, newVideoTrack, localStreamRef.current);
+                } catch (replaceErr) {
+                    console.warn('[Call] replaceTrack failed, trying alternative method:', replaceErr);
+                    // Fallback: Some versions of simple-peer might not have replaceTrack
+                }
+            }
+
+            // Stop the old track
+            currentVideoTrack.stop();
+            
+            // Update the stream: remove old track and add new one
+            localStreamRef.current.removeTrack(currentVideoTrack);
             localStreamRef.current.addTrack(newVideoTrack);
 
-            // Re-broadcast media toggle to ensure remote sees the update
+            // Update state to trigger re-render of local video
+            setLocalStream(localStreamRef.current);
+            setCurrentFacingMode(newMode);
+            
+            // Notify remote about the video state
             const target = callDetails?.isOutgoing ? callDetails.targetId : callDetails?.callerId;
             if (target && socket) {
                 socket.emit('call:media-toggle', { 
@@ -455,15 +475,37 @@ export const CallProvider = ({ children, socket }) => {
                 });
             }
 
-            // Force a new stream reference to trigger re-renders
-            const updatedStream = new MediaStream(localStreamRef.current.getTracks());
-            setLocalStream(updatedStream);
-            localStreamRef.current = updatedStream;
-            
-            setCurrentFacingMode(newMode);
             console.log(`[Call] Switched camera to ${newMode}`);
         } catch (err) {
-            console.error("Failed to switch camera:", err);
+            console.error("[Call] Failed to switch camera:", err);
+            // If 'exact' constraint fails, try with 'ideal' as fallback
+            if (err.name === 'OverconstrainedError') {
+                try {
+                    const fallbackConstraints = {
+                        video: { 
+                            facingMode: { ideal: newMode }
+                        },
+                        audio: false
+                    };
+                    const fallbackStream = await navigator.mediaDevices.getUserMedia(fallbackConstraints);
+                    const fallbackTrack = fallbackStream.getVideoTracks()[0];
+                    const currentTrack = localStreamRef.current.getVideoTracks()[0];
+                    
+                    if (connectionRef.current && currentTrack) {
+                        connectionRef.current.replaceTrack(currentTrack, fallbackTrack, localStreamRef.current);
+                    }
+                    
+                    currentTrack?.stop();
+                    localStreamRef.current.removeTrack(currentTrack);
+                    localStreamRef.current.addTrack(fallbackTrack);
+                    setLocalStream(localStreamRef.current);
+                    setCurrentFacingMode(newMode);
+                    console.log(`[Call] Switched camera to ${newMode} (fallback)`);
+                    return;
+                } catch (fallbackErr) {
+                    console.error("[Call] Fallback switch also failed:", fallbackErr);
+                }
+            }
             alert("Could not switch camera. This might happen if your device only has one camera or permissions were denied.");
         }
     };
