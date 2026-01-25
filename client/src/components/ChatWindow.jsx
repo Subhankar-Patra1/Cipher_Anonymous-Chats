@@ -447,7 +447,10 @@ export default function ChatWindow({
     const sendMode = room.send_mode || 'everyone';
 
     const canSend = (() => {
+        // [FIX] Priority: Direct chats always allow messages. 
+        // Logic is mirrored on server: only group rooms check group_permissions.
         if (room.type === 'direct') return true;
+        
         if (sendMode === 'everyone') return true;
         if (sendMode === 'admins_only') return ['owner', 'admin'].includes(myRole);
         if (sendMode === 'owner_only') return myRole === 'owner';

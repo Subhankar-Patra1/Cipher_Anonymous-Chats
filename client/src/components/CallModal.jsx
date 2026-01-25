@@ -100,7 +100,7 @@ const CallModal = () => {
     } = useCall();
     const [isMicOn, setIsMicOn] = useState(true);
     const [isVideoOn, setIsVideoOn] = useState(true);
-    const [isMinimized, setIsMinimized] = useState(false);
+    const [isMinimized, setIsMinimized] = useState(callDetails?.type === 'audio');
     const [isLocalMainView, setIsLocalMainView] = useState(false);
     const [duration, setDuration] = useState(0);
     const [showControls, setShowControls] = useState(true);

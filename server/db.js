@@ -298,6 +298,9 @@ const createTables = async () => {
                 completed_at TIMESTAMP,
                 order_index INTEGER DEFAULT 0
             );
+            -- [PERFORMANCE] Indexes for faster room list and unread counts
+            CREATE INDEX IF NOT EXISTS idx_messages_room_id_created_at ON messages(room_id, created_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_room_members_user_id ON room_members(user_id);
         `);
         console.log("Tables created successfully");
     } catch (err) {

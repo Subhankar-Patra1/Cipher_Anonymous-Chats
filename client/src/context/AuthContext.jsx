@@ -53,7 +53,8 @@ export const AuthProvider = ({ children }) => {
     };
 
     useEffect(() => {
-        if (token) {
+        // [OPTIMIZATION] Skip fetch if user is already populated (happens immediately after login)
+        if (token && !user) {
             // Validate token and fetch user
             fetch(`${import.meta.env.VITE_API_URL}/api/auth/me`, {
                 headers: { Authorization: `Bearer ${token}` }

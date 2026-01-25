@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import { useLocation, useSearchParams } from 'react-router-dom';
 import db, {
     saveLocalMessage,
     updateLocalMessage,
@@ -63,6 +64,8 @@ const isStatusBetter = (newStatus, oldStatus) => getStatusPriority(newStatus) > 
 const isStatusWorse = (newStatus, oldStatus) => getStatusPriority(newStatus) < getStatusPriority(oldStatus);
 
 export default function Dashboard() {
+    const location = useLocation();
+    const [searchParams, setSearchParams] = useSearchParams();
     const { user, token, logout, updateUser } = useAuth();
     const { showNotification, canNotify } = useNotification();
     const [rooms, setRooms] = useState([]);
@@ -96,6 +99,8 @@ export default function Dashboard() {
     const handleCloseProfile = useCallback(() => {
         setProfileState(prev => ({ ...prev, isOpen: false }));
     }, []);
+
+    const isProcessingInviteRef = useRef(false);
 
     const [syncState, setSyncState] = useState({ 
         active: false, 
@@ -424,28 +429,10 @@ export default function Dashboard() {
                         }
                     }));
                     
-                    // [NEW] Attempt to decrypt sidebar previews immediately
-                    // This handles the "I just restored keys but sidebar is still encrypted" case
-                    const decryptedRooms = await Promise.all(enriched.map(async (room) => {
-                        if (room.last_message_ciphertext && !room.last_message_plaintext) {
-                             const decrypted = await cryptoManager.decryptMessage(
-                                 room.last_message_ciphertext,
-                                 room.last_message_iv,
-                                 room.last_message_id, // Use ID as salt source as per new protocol
-                                 null, // No room key yet
-                                 null, // No headers yet (could fetch if needed but expensive for list)
-                                 room.id,
-                                 room.last_message_key_version
-                             );
-                             if (decrypted && decrypted !== '[Decryption Error]') {
-                                 return { ...room, last_message_plaintext: decrypted };
-                             }
-                        }
-                        return room;
-                    }));
-
+                    // [OPTIMIZATION] Decryption now happens at component-level for faster UI load
+                    // Removing the blocking Promise.all here allows the dashboard to render instantly
                     setRooms(prev => {
-                        return decryptedRooms.map(newRoom => {
+                        return enriched.map(newRoom => {
                             const existing = prev.find(r => String(r.id) === String(newRoom.id));
                             if (existing) {
                                 // [NEW] Preserve plaintext from UI state if not in server response
@@ -560,7 +547,7 @@ export default function Dashboard() {
         newSocket.on('room_added', (newRoom) => {
             console.log('[DEBUG-CLIENT] room_added received:', newRoom);
             setRooms(prev => {
-                if (prev.find(r => r.id === newRoom.id)) return prev;
+                if (prev.find(r => String(r.id) === String(newRoom.id))) return prev;
                 return sortRooms([newRoom, ...prev]);
             });
             newSocket.emit('join_room', newRoom.id);
@@ -1602,43 +1589,66 @@ export default function Dashboard() {
 
 
         fetchRooms();
+    }, [token, fetchRooms]);
+
+    // [NEW] Dedicated Effect for Handling Invites/URL Params
+    useEffect(() => {
+        if (!token || isLoadingRooms) return;
 
         const handlePendingInvite = async () => {
-             const params = new URLSearchParams(window.location.search);
-             const joinCode = params.get('joinCode');
-             const chatUser = params.get('chatUser');
+             const joinCode = searchParams.get('joinCode');
+             const chatUser = searchParams.get('chatUser');
  
+             if (!joinCode && !chatUser) return;
+             if (isProcessingInviteRef.current) return;
+             isProcessingInviteRef.current = true;
+
+             // [FIX] Use setSearchParams for cleaner React Router sync
+             setSearchParams({});
+
              if (joinCode) {
-                 window.history.replaceState({}, document.title, window.location.pathname);
                  await handleJoinRoom(joinCode);
+                 isProcessingInviteRef.current = false;
                  return;
              }
  
              if (chatUser) {
-                 window.history.replaceState({}, document.title, window.location.pathname);
                  try {
+                     const existingRoom = rooms.find(r => 
+                         r.type === 'direct' && 
+                         (r.username === chatUser || r.username === `@${chatUser}`)
+                     );
+
+                     if (existingRoom) {
+                         handleSelectRoom(existingRoom);
+                         isProcessingInviteRef.current = false;
+                         return;
+                     }
+
                      const searchRes = await fetch(`${import.meta.env.VITE_API_URL}/api/auth/search?q=${chatUser}`, {
                          headers: { Authorization: `Bearer ${token}` }
                      });
                      const users = await searchRes.json();
                      const target = users.find(u => u.username === chatUser);
                      if (target) {
-                         await handleCreateRoom({ type: 'direct', targetUserId: target.id });
+                         const existingById = rooms.find(r => r.type === 'direct' && String(r.other_user_id) === String(target.id));
+                         if (existingById) {
+                             handleSelectRoom(existingById);
+                         } else {
+                             await handleCreateRoom({ type: 'direct', targetUserId: target.id });
+                         }
                      }
                  } catch (err) {
                      console.error('Error resolving invite:', err);
+                 } finally {
+                     isProcessingInviteRef.current = false;
                  }
                  return;
              }
         };
 
-        (async () => {
-             const params = new URLSearchParams(window.location.search);
-             if (params.get('joinCode') || params.get('chatUser')) {
-                 await handlePendingInvite(); 
-             }
-        })();
-    }, [token, fetchRooms]); // fetchRooms in dep array? It depends on token so stable.
+        handlePendingInvite();
+    }, [token, isLoadingRooms, location.search, rooms.length]);
 
     // Re-implement handlePendingInvite since we cut it in the diff?
     // Wait, the original block lines 297-355 was large. 
@@ -1790,11 +1800,15 @@ export default function Dashboard() {
             if (res.ok) {
                 const newRoom = await res.json();
                 
-                // Check if room already exists in list
-                const exists = rooms.find(r => r.id === newRoom.id);
-                if (!exists) {
-                    setRooms(prev => sortRooms([newRoom, ...prev]));
-                }
+                // [FIX] Use functional state update to prevent duplicates and race conditions
+                setRooms(prev => {
+                    const exists = prev.find(r => String(r.id) === String(newRoom.id));
+                    if (exists) {
+                        // Preserve existing room data (like plaintext preview) if it's already there
+                        return prev;
+                    }
+                    return sortRooms([newRoom, ...prev]);
+                });
                 
                 setShowCreateModal(false);
                 await handleSelectRoom(newRoom);
@@ -1829,7 +1843,7 @@ export default function Dashboard() {
             const newRoom = await res.json();
             if (res.ok) {
                 // Check if already in list
-                if (!rooms.find(r => r.id === newRoom.id)) {
+                if (!rooms.find(r => String(r.id) === String(newRoom.id))) {
                     setRooms(prev => sortRooms([newRoom, ...prev]));
                 }
                 setShowJoinModal(false);
