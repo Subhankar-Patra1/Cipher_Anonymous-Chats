@@ -4,7 +4,10 @@ import { VitePWA } from 'vite-plugin-pwa'
 import { nodePolyfills } from 'vite-plugin-node-polyfills'
 
 // https://vitejs.dev/config/
-export default defineConfig({
+export default defineConfig(({ mode }) => ({
+  esbuild: {
+    drop: mode === 'production' ? ['console', 'debugger'] : [],
+  },
   plugins: [
     react(),
     nodePolyfills({
@@ -52,7 +55,7 @@ export default defineConfig({
   define: {
     global: 'window',
   },
-})
+}))
 
 
 
