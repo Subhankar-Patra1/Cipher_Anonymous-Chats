@@ -7,7 +7,8 @@ const UAParser = require('ua-parser-js');
 const { v4: uuidv4 } = require('uuid');
 
 const router = express.Router();
-const JWT_SECRET = process.env.JWT_SECRET || 'supersecretkey';
+const JWT_SECRET = process.env.JWT_SECRET;
+if (!JWT_SECRET) throw new Error('JWT_SECRET environment variable is required');
 
 router.post('/signup', async (req, res) => {
     const { username, displayName, password } = req.body;
@@ -361,7 +362,7 @@ router.get('/devices', async (req, res) => {
     if (!token) return res.status(401).json({ error: 'No token' });
     
     try {
-        const decoded = require('jsonwebtoken').verify(token, process.env.JWT_SECRET || 'supersecretkey');
+        const decoded = require('jsonwebtoken').verify(token, JWT_SECRET);
         const userId = decoded.id;
 
         const { rows } = await db.query(
@@ -381,7 +382,7 @@ router.delete('/devices/:deviceId', async (req, res) => {
     if (!token) return res.status(401).json({ error: 'No token' });
     
     try {
-        const decoded = require('jsonwebtoken').verify(token, process.env.JWT_SECRET || 'supersecretkey');
+        const decoded = require('jsonwebtoken').verify(token, JWT_SECRET);
         const userId = decoded.id;
         const deviceId = req.params.deviceId;
 

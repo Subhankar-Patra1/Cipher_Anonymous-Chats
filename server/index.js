@@ -56,6 +56,32 @@ app.use(cors({
 }));
 app.use(express.json());
 
+// [SECURITY] Rate Limiting
+const rateLimit = require('express-rate-limit');
+
+// General API rate limit: 100 requests per 15 minutes
+const apiLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000, // 15 minutes
+    max: 100,
+    message: { error: 'Too many requests, please try again later.' },
+    standardHeaders: true,
+    legacyHeaders: false,
+});
+
+// Stricter limit for auth endpoints: 10 attempts per 15 minutes
+const authLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 10,
+    message: { error: 'Too many login attempts, please try again later.' },
+    standardHeaders: true,
+    legacyHeaders: false,
+});
+
+// Apply to API routes
+app.use('/api/', apiLimiter);
+app.use('/api/auth/login', authLimiter);
+app.use('/api/auth/signup', authLimiter);
+
 // [OAuth] Session middleware for Passport.js
 const session = require('express-session');
 const pgSession = require('connect-pg-simple')(session);
@@ -205,8 +231,9 @@ app.patch('/api/users/me/privacy', async (req, res) => {
     if (!token) return res.status(401).json({ error: 'Unauthorized' });
     
     try {
-        const jwt = require('jsonwebtoken'); // Lazy load or move top
-        const decoded = jwt.verify(token, process.env.JWT_SECRET || 'supersecretkey');
+        const jwtLib = require('jsonwebtoken');
+        if (!process.env.JWT_SECRET) return res.status(500).json({ error: 'Server configuration error' });
+        const decoded = jwtLib.verify(token, process.env.JWT_SECRET);
         const userId = decoded.id;
         const { share_presence } = req.body;
 
@@ -259,7 +286,8 @@ app.get('/', (req, res) => {
 
 const jwt = require('jsonwebtoken');
 
-const JWT_SECRET = process.env.JWT_SECRET || 'supersecretkey';
+const JWT_SECRET = process.env.JWT_SECRET;
+if (!JWT_SECRET) throw new Error('JWT_SECRET environment variable is required');
 
 // [NEW] Track pending sync requests: userId -> { requesterDeviceId, senderPublicKey, deviceInfo }
 const pendingSyncs = new Map();

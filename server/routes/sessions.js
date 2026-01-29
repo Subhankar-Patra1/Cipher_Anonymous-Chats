@@ -3,7 +3,8 @@ const router = express.Router();
 const db = require('../db');
 const jwt = require('jsonwebtoken');
 
-const JWT_SECRET = process.env.JWT_SECRET || 'supersecretkey';
+const JWT_SECRET = process.env.JWT_SECRET;
+if (!JWT_SECRET) throw new Error('JWT_SECRET environment variable is required');
 
 // Middleware to verify token and extract user
 const authenticate = async (req, res, next) => {

@@ -26,7 +26,8 @@ async function handleGetSession(req, res) {
         const token = req.headers.authorization?.split(' ')[1];
         if (!token) throw new Error('No token');
         const jwt = require('jsonwebtoken');
-        const decoded = jwt.verify(token, process.env.JWT_SECRET || 'supersecretkey');
+        if (!process.env.JWT_SECRET) throw new Error('JWT_SECRET not configured');
+        const decoded = jwt.verify(token, process.env.JWT_SECRET);
         userId = decoded.id;
     } catch (e) {
         return res.status(401).json({ error: 'Unauthorized' });
@@ -136,7 +137,8 @@ async function handleSaveAiMessage(req, res) {
         const token = req.headers.authorization?.split(' ')[1];
         if (!token) throw new Error('No token');
         const jwt = require('jsonwebtoken');
-        const decoded = jwt.verify(token, process.env.JWT_SECRET || 'supersecretkey');
+        if (!process.env.JWT_SECRET) throw new Error('JWT_SECRET not configured');
+        const decoded = jwt.verify(token, process.env.JWT_SECRET);
         userId = decoded.id;
     } catch (e) {
         return res.status(401).json({ error: 'Unauthorized' });
@@ -229,7 +231,8 @@ async function handleSaveUserMessage(req, res) {
         const token = req.headers.authorization?.split(' ')[1];
         if (!token) throw new Error('No token');
         const jwt = require('jsonwebtoken');
-        const decoded = jwt.verify(token, process.env.JWT_SECRET || 'supersecretkey');
+        if (!process.env.JWT_SECRET) throw new Error('JWT_SECRET not configured');
+        const decoded = jwt.verify(token, process.env.JWT_SECRET);
         userId = decoded.id;
     } catch (e) {
         return res.status(401).json({ error: 'Unauthorized' });

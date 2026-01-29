@@ -7,7 +7,8 @@ const { uploadFile, generateGetPresignedUrl, getKeyFromUrl } = require('./s3');
 // Middleware to check auth
 const authenticate = (req, res, next) => {
     const jwt = require('jsonwebtoken');
-    const JWT_SECRET = process.env.JWT_SECRET || 'supersecretkey';
+    const JWT_SECRET = process.env.JWT_SECRET;
+    if (!JWT_SECRET) throw new Error('JWT_SECRET environment variable is required');
     
     let token = req.headers.authorization?.split(' ')[1];
     

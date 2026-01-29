@@ -10,7 +10,8 @@ const crypto = require('crypto'); // [NEW]
 const bcrypt = require('bcryptjs'); // [NEW]
 
 const router = express.Router();
-const JWT_SECRET = process.env.JWT_SECRET || 'supersecretkey';
+const JWT_SECRET = process.env.JWT_SECRET;
+if (!JWT_SECRET) throw new Error('JWT_SECRET environment variable is required');
 
 // Passport serialize/deserialize (for session management)
 passport.serializeUser((user, done) => {

@@ -5,7 +5,8 @@ const { generatePresignedUrl, checkObjectExists, deleteObject, bucketName, regio
 const crypto = require('crypto');
 
 const router = express.Router();
-const JWT_SECRET = process.env.JWT_SECRET || 'supersecretkey';
+const JWT_SECRET = process.env.JWT_SECRET;
+if (!JWT_SECRET) throw new Error('JWT_SECRET environment variable is required');
 const S3_AVATAR_FOLDER = process.env.S3_AVATAR_FOLDER || 'avatars/';
 
 // Middleware to verify token
