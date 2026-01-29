@@ -260,17 +260,48 @@ export default function Dashboard() {
                 senderPublicKey: myPubBase64
             });
             
-            // [MODIFIED] Do not close modal immediately. Wait for sync_finished event.
-            // Update state to show loading UI in the modal.
-            setPendingSyncRequest(prev => ({ ...prev, status: 'approving' }));
-            // showNotification('Chat history synced successfully!', 'success'); // defer this too? OR just keep it. 
-            // Actually, "Synced successfully" implies done. Let's say "Keys sent" or just wait.
+            // [FIX] Keep modal open in "Syncing..." state
+            // It will only close when the receiving device confirms completion OR when user manually closes.
+            // Or if this is the APPROVING device, we might close it now because our job is done?
+            // Wait, user said "new device detect modal stay untill fully decript messages in new device"
+            // This usually refers to the NEW device.
+            // BUT if this is the OLD device approving the sync, the user might want visual confirmation 
+            // that the keys were actually RECEIVED by the new device.
+            // Let's keep it open with a success message or "Sending keys..." status until `sync_finished`.
+            
+            setPendingSyncRequest(prev => ({ 
+                ...prev, 
+                status: 'approving',
+                approvingState: 'sent' // New internal state to show "Keys Sent, Waiting for confirmation..."
+            }));
 
         } catch (e) {
             console.error('[Sync] Failed to provide keys', e);
             setPendingSyncRequest(null);
+            alert('Failed to send keys');
         }
     };
+
+    // [NEW] Effect to handle sync completion event (for the Approving Device)
+    useEffect(() => {
+        if (!socket) return;
+        
+        const onSyncFinished = () => {
+            console.log('[Dashboard] Sync confirmed by new device.');
+            // Only close if we are currently showing the approval modal in a "sent" state
+            setPendingSyncRequest(prev => {
+                if (prev && prev.status === 'approving') {
+                    return null; // Close modal
+                }
+                return prev;
+            });
+            // Optional: Show toast
+            // showNotification('Device synced successfully', 'success');
+        };
+
+        socket.on('sync_finished', onSyncFinished);
+        return () => socket.off('sync_finished', onSyncFinished);
+    }, [socket]);
 
     const triggerSync = useCallback(async () => {
         if (!socket) {
@@ -403,6 +434,15 @@ export default function Dashboard() {
             });
             if (res.ok) {
                 const data = await res.json();
+                
+                // [OPTIMIZATION] Parallel Key Pre-fetch
+                // This triggers the IndexedDB fetch for all rooms at once
+                try {
+                    await cryptoManager.prefetchKeys(data);
+                } catch (e) {
+                    console.warn('[Dashboard] Key prefetch failed:', e);
+                }
+
                 if (Array.isArray(data)) {
                     const enriched = data.map(room => ({
                         ...room,
@@ -1452,6 +1492,9 @@ export default function Dashboard() {
                 
                 // Decrypt sidebar previews (awaiting ensures we don't close modal too early)
                 await fetchRooms();
+
+                // [UX] Small delay to ensure user sees the "Decrypting" status and allows UI to settle
+                await new Promise(resolve => setTimeout(resolve, 1500));
 
                 setSyncState({ active: false, status: 'Success!', showBackupPrompt: false, mode: 'approve' });
                 // Trigger animation on next chat open

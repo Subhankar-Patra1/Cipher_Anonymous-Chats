@@ -1015,3 +1015,38 @@ html.locked-no-scroll body {
 .animate-dot-wave {
   animation: dot-wave 1.4s cubic-bezier(0.45, 0, 0.55, 1) infinite;
 }
+
+/* Custom Scrollbar - Violet Theme (Overrides global) */
+.custom-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: #c4b5fd transparent;
+}
+
+html.dark .custom-scrollbar {
+  scrollbar-color: #5b21b6 transparent;
+}
+
+.custom-scrollbar::-webkit-scrollbar {
+  width: 5px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: #c4b5fd; /* violet-300 */
+  border-radius: 10px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: #a78bfa; /* violet-400 */
+}
+
+html.dark .custom-scrollbar::-webkit-scrollbar-thumb {
+  background: #5b21b6; /* violet-800 */
+}
+
+html.dark .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: #6d28d9; /* violet-700 */
+}

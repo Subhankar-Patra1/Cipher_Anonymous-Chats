@@ -23,6 +23,8 @@ const LastMessagePreview = ({ room, user, hasSkippedSync }) => {
     const [localPlaintext, setLocalPlaintext] = useState(room.last_message_plaintext || null);
     // [FIX] Track the last message ID we've seen to detect changes
     const lastSeenIdRef = useRef(room.last_message_id);
+    // [FIX] Robust retry trigger using counter
+    const [retryCount, setRetryCount] = useState(0);
 
     useEffect(() => {
         // [FIX] If room has no last message (cleared), reset local state
@@ -186,15 +188,15 @@ const LastMessagePreview = ({ room, user, hasSkippedSync }) => {
     // [NEW] Listen for key updates to trigger re-decryption
     useEffect(() => {
         const handleKeysUpdated = (e) => {
+            // console.log('[Sidebar] cipher:keys-updated received', e.detail);
             // If it's a bulk import (restore) or specific to this room
             if (e.detail?.type === 'bulk-import' || String(e.detail?.roomId) === String(room.id)) {
                 // Only trigger if we are currently encrypted or failed
                 if (!localPlaintext || localPlaintext === '__DECRYPT_FAILED__' || localPlaintext === '__NO_KEY__') {
+                    // console.log('[Sidebar] Retrying decryption for room', room.id);
                     decryptAttemptedRef.current = false;
                     // Force a re-run of the decryption effect
-                    setLocalPlaintext(prev => prev === '__RETRY__' ? null : '__RETRY__');
-                    // Reset to null after a micro-tick to ensure the second effect runs
-                    setTimeout(() => setLocalPlaintext(null), 0);
+                    setRetryCount(prev => prev + 1);
                 }
             }
         };
@@ -268,7 +270,7 @@ const LastMessagePreview = ({ room, user, hasSkippedSync }) => {
     }, [room, room.id, room.last_message_ciphertext, room.last_message_iv, 
         room.last_message_key_version, room.last_message_plaintext, 
         room.last_message_temp_id, room.last_message_id,
-        localPlaintext, hasSkippedSync]);
+        localPlaintext, hasSkippedSync, retryCount]);
 
     // [NEW] Reaction Summary
     const reactionSummary = useMemo(() => {

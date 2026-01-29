@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { renderTextWithEmojis } from '../utils/emojiRenderer';
+import { AnimatePresence, motion } from 'framer-motion';
 
 export default function CreateRoomModal({ onClose, onCreate }) {
     const { token } = useAuth();
@@ -54,69 +55,93 @@ export default function CreateRoomModal({ onClose, onCreate }) {
     };
 
     return (
-        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center z-50 transition-colors duration-300 p-4">
-            <div className="bg-white dark:bg-slate-900 p-6 rounded-2xl w-full max-w-sm border border-slate-200 dark:border-slate-800 shadow-2xl animate-modal-scale transition-colors">
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 transition-opacity duration-300 p-4">
+            <div className="bg-white dark:bg-[#1e1e24] p-6 rounded-2xl w-full max-w-[420px] shadow-2xl shadow-black/40 border border-slate-100 dark:border-slate-800 animate-modal-scale relative">
+                
+                {/* Header */}
                 <div className="flex justify-between items-center mb-6">
-                    <h3 className="text-xl font-bold text-slate-800 dark:text-white">Create New Room</h3>
-                    <button onClick={onClose} className="text-slate-400 hover:text-slate-600 dark:hover:text-white transition-colors">
-                        <span className="material-symbols-outlined">close</span>
+                    <h3 className="text-xl font-bold text-slate-800 dark:text-white tracking-tight">Create Room</h3>
+                    <button onClick={onClose} className="w-10 h-10 rounded-full flex items-center justify-center text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-700/50 hover:text-slate-900 dark:hover:text-white transition-all">
+                        <span className="material-symbols-outlined text-xl">close</span>
                     </button>
                 </div>
                 
-                <form onSubmit={handleSubmit} className="space-y-5">
-                    <div>
-                        <label className="block text-slate-500 dark:text-slate-400 text-xs font-bold uppercase tracking-wider mb-1.5">Type</label>
-                        <div className="grid grid-cols-2 gap-2">
-                            <button
-                                type="button"
-                                onClick={() => { setType('group'); setSelectedUser(null); }}
-                                className={`p-3 rounded-xl border text-sm font-medium transition-all ${
-                                    type === 'group' 
-                                    ? 'bg-violet-600/10 border-violet-500/50 text-violet-600 dark:text-violet-300' 
-                                    : 'bg-slate-50 dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-700'
-                                }`}
-                            >
-                                <span className="material-symbols-outlined block text-2xl mb-1">group</span>
-                                Group
-                            </button>
-                            <button
-                                type="button"
-                                onClick={() => setType('direct')}
-                                className={`p-3 rounded-xl border text-sm font-medium transition-all ${
-                                    type === 'direct' 
-                                    ? 'bg-violet-600/10 border-violet-500/50 text-violet-600 dark:text-violet-300' 
-                                    : 'bg-slate-50 dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-700'
-                                }`}
-                            >
-                                <span className="material-symbols-outlined block text-2xl mb-1">person</span>
-                                Direct
-                            </button>
-                        </div>
+                <form onSubmit={handleSubmit} className="space-y-6">
+                    
+                    {/* Pill Tabs (Toggle) */}
+                    <div className="bg-slate-100 dark:bg-slate-800/50 rounded-full p-1.5 grid grid-cols-2 relative ring-1 ring-slate-900/5 dark:ring-white/5">
+                        {/* Animated Background Pill */}
+                        <div 
+                            className={`absolute top-1.5 bottom-1.5 w-[calc(50%-6px)] bg-white dark:bg-slate-700 rounded-full shadow-sm transition-all duration-300 ease-out ${
+                                type === 'group' ? 'left-1.5' : 'left-[calc(50%+1.5px)]'
+                            }`}
+                        />
+                        
+                        <button
+                            type="button"
+                            onClick={() => { setType('group'); setSelectedUser(null); }}
+                            className={`relative z-10 py-2.5 rounded-full text-sm font-bold transition-colors duration-300 flex items-center justify-center gap-2 ${
+                                type === 'group' 
+                                ? 'text-slate-900 dark:text-white' 
+                                : 'text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200'
+                            }`}
+                        >
+                            <span className="material-symbols-outlined text-[18px]">group</span>
+                            Group
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => setType('direct')}
+                            className={`relative z-10 py-2.5 rounded-full text-sm font-bold transition-colors duration-300 flex items-center justify-center gap-2 ${
+                                type === 'direct' 
+                                ? 'text-slate-900 dark:text-white' 
+                                : 'text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200'
+                            }`}
+                        >
+                            <span className="material-symbols-outlined text-[18px]">person</span>
+                            Direct
+                        </button>
                     </div>
 
+                    <div className="min-h-[140px]">
                     {type === 'group' ? (
-                        <div>
-                            <label className="block text-slate-500 dark:text-slate-400 text-xs font-bold uppercase tracking-wider mb-1.5">Room Name</label>
-                            <input 
-                                type="text" 
-                                className="w-full bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white rounded-xl p-3 focus:outline-none focus:ring-2 focus:ring-violet-500/50 border border-slate-200 dark:border-slate-700 focus:border-violet-500/50 transition-all placeholder:text-slate-400 dark:placeholder:text-slate-600"
-                                value={name}
-                                onChange={e => setName(e.target.value)}
-                                placeholder="e.g. Project Alpha"
-                                required
-                            />
-                            <p className="text-xs text-slate-500 mt-2 flex items-center gap-1">
-                                <span className="material-symbols-outlined text-[14px]">info</span>
-                                Group rooms expire automatically after 48 hours.
-                            </p>
+                        <div className="animate-in fade-in slide-in-from-bottom-2 duration-300 space-y-5">
+                            <div>
+                                <label className="block text-slate-700 dark:text-slate-300 text-xs font-bold uppercase tracking-wider mb-2.5 ml-1">
+                                    Room Name
+                                </label>
+                                <div className="relative group/input">
+                                    <span className="material-symbols-outlined absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 dark:text-slate-500 group-focus-within/input:text-violet-500 transition-colors pointer-events-none">tag</span>
+                                    <input 
+                                        type="text" 
+                                        className="w-full bg-slate-50 hover:bg-slate-100 dark:bg-black/20 dark:hover:bg-black/30 text-slate-900 dark:text-white rounded-xl py-3.5 pl-12 pr-4 focus:outline-none ring-1 ring-slate-200 dark:ring-slate-700 focus:ring-2 focus:ring-violet-500 border-none transition-all placeholder:text-slate-400 dark:placeholder:text-slate-600 font-medium"
+                                        value={name}
+                                        onChange={e => setName(e.target.value)}
+                                        placeholder="e.g. Project Alpha"
+                                        required
+                                        autoFocus
+                                    />
+                                </div>
+                            </div>
+                            <div className="p-3.5 bg-violet-50 dark:bg-violet-500/10 rounded-xl flex gap-3 border border-violet-100 dark:border-violet-500/20">
+                                <span className="material-symbols-outlined text-violet-500 dark:text-violet-400 mt-0.5">timer</span>
+                                <div>
+                                    <p className="text-sm font-bold text-slate-800 dark:text-white">Auto-Expiries</p>
+                                    <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">Group chats automatically delete after 48 hours of inactivity to keep things clean.</p>
+                                </div>
+                            </div>
                         </div>
                     ) : (
-                        <div>
-                            <label className="block text-slate-500 dark:text-slate-400 text-xs font-bold uppercase tracking-wider mb-1.5">Search User</label>
-                            <div className="relative">
+                        <div className="animate-in fade-in slide-in-from-bottom-2 duration-300 pt-2">
+                            <label className="block text-slate-700 dark:text-slate-300 text-xs font-bold uppercase tracking-wider mb-2.5 ml-1">
+                                Search User
+                            </label>
+                            <div className="relative group/search mb-2">
+                                <span className="material-symbols-outlined absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 dark:text-slate-500 group-focus-within/search:text-violet-500 transition-colors pointer-events-none">search</span>
+                                
                                 <input 
                                     type="text" 
-                                    className="w-full bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white rounded-xl p-3 pl-10 focus:outline-none focus:ring-2 focus:ring-violet-500/50 border border-slate-200 dark:border-slate-700 focus:border-violet-500/50 transition-all placeholder:text-slate-400 dark:placeholder:text-slate-600"
+                                    className="w-full bg-slate-50 hover:bg-slate-100 dark:bg-black/20 dark:hover:bg-black/30 text-slate-900 dark:text-white rounded-xl py-3.5 pl-12 pr-10 focus:outline-none ring-1 ring-slate-200 dark:ring-slate-700 focus:ring-2 focus:ring-violet-500 border-none transition-all placeholder:text-slate-400 dark:placeholder:text-slate-600 font-medium"
                                     value={selectedUser ? selectedUser.username : searchQuery}
                                     onChange={e => {
                                         setSearchQuery(e.target.value);
@@ -124,76 +149,86 @@ export default function CreateRoomModal({ onClose, onCreate }) {
                                     }}
                                     placeholder="Search by username..."
                                     required={!selectedUser}
+                                    autoFocus
                                 />
-                                <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 dark:text-slate-500">search</span>
+                                
                                 {isSearching && (
-                                    <span className="material-symbols-outlined absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 dark:text-slate-500 animate-spin">progress_activity</span>
+                                    <span className="material-symbols-outlined absolute right-3.5 top-1/2 -translate-y-1/2 text-violet-500 animate-spin text-[18px] pointer-events-none">progress_activity</span>
                                 )}
                             </div>
 
-                            {/* Search Results */}
-                            {!selectedUser && searchQuery && searchResults.length > 0 && (
-                                <div className="mt-2 bg-white dark:bg-slate-800 rounded-lg border border-slate-200 dark:border-slate-700 overflow-hidden max-h-48 shadow-lg z-10 relative">
-                                    <div className="overflow-y-auto max-h-48 custom-scrollbar p-1">
-                                        {searchResults.map(user => (
-                                            <button
-                                                key={user.id}
-                                                type="button"
-                                                onClick={() => {
-                                                    setSelectedUser(user);
-                                                    setSearchQuery('');
-                                                    setSearchResults([]);
-                                                }}
-                                                className="w-full text-left p-3 hover:bg-slate-50 dark:hover:bg-slate-700 rounded-lg flex items-center gap-3 transition-colors"
-                                            >
-                                                {user.avatar_thumb_url ? (
-                                                    <img 
-                                                        src={user.avatar_thumb_url} 
-                                                        alt={user.display_name} 
-                                                        className="w-8 h-8 rounded-full object-cover shrink-0 bg-slate-200 dark:bg-slate-700" 
-                                                    />
-                                                ) : (
-                                                    <div className="w-8 h-8 rounded-full bg-gradient-to-br from-violet-500 to-indigo-600 flex items-center justify-center text-white text-xs font-bold shrink-0">
-                                                        {user.display_name[0].toUpperCase()}
+                            {/* Search Results Dropdown */}
+                            {/* Search Results Dropdown */}
+                            <AnimatePresence>
+                                {!selectedUser && searchQuery && searchResults.length > 0 && (
+                                    <motion.div
+                                        initial={{ opacity: 0, y: -10, height: 0, marginTop: 0 }}
+                                        animate={{ opacity: 1, y: 0, height: 'auto', marginTop: 8 }}
+                                        exit={{ opacity: 0, y: -10, height: 0, marginTop: 0 }}
+                                        transition={{ duration: 0.3, ease: "easeInOut" }}
+                                        className="w-full bg-white dark:bg-zinc-900 rounded-lg border border-slate-100 dark:border-zinc-700 shadow-sm z-10 overflow-hidden ring-1 ring-black/5"
+                                    >
+                                        <div className="max-h-56 overflow-y-auto custom-scrollbar p-1.5">
+                                            {searchResults.map(user => (
+                                                <button
+                                                    key={user.id}
+                                                    type="button"
+                                                    onClick={() => {
+                                                        setSelectedUser(user);
+                                                        setSearchQuery('');
+                                                        setSearchResults([]);
+                                                    }}
+                                                    className="w-full text-left p-2.5 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded-lg flex items-center gap-3 transition-colors group/item"
+                                                >
+                                                    {user.avatar_thumb_url ? (
+                                                        <img 
+                                                            src={user.avatar_thumb_url} 
+                                                            alt={user.display_name} 
+                                                            className="w-10 h-10 rounded-full object-cover shrink-0 ring-2 ring-white dark:ring-slate-800 shadow-sm" 
+                                                        />
+                                                    ) : (
+                                                        <div className="w-10 h-10 rounded-full bg-gradient-to-br from-violet-500 to-indigo-600 flex items-center justify-center text-white text-sm font-bold shrink-0 ring-2 ring-white dark:ring-slate-800 shadow-sm shadow-violet-500/20">
+                                                            {user.display_name[0].toUpperCase()}
+                                                        </div>
+                                                    )}
+                                                    <div className="min-w-0 flex-1">
+                                                        <p className="text-sm font-bold text-slate-800 dark:text-white truncate">{renderTextWithEmojis(user.display_name)}</p>
+                                                        <p className="text-xs text-slate-500 dark:text-slate-400 truncate font-medium">
+                                                            {user.username.startsWith('@') ? user.username : `@${user.username}`}
+                                                        </p>
                                                     </div>
-                                                )}
-                                                <div className="min-w-0">
-                                                    <p className="text-sm font-medium text-slate-800 dark:text-white truncate">{renderTextWithEmojis(user.display_name)}</p>
-                                                    <p className="text-xs text-slate-500 dark:text-slate-400 truncate">
-                                                        {user.username.startsWith('@') ? user.username : `@${user.username}`}
-                                                    </p>
-                                                </div>
-                                            </button>
-                                        ))}
-                                    </div>
-                                </div>
-                            )}
+                                                </button>
+                                            ))}
+                                        </div>
+                                    </motion.div>
+                                )}
+                            </AnimatePresence>
 
                             {selectedUser && (
-                                <div className="mt-2 p-3 bg-violet-50 dark:bg-violet-600/10 border border-violet-200 dark:border-violet-500/20 rounded-xl flex items-center justify-between">
+                                <div className="mt-4 p-2 pr-3 bg-violet-50 dark:bg-violet-500/10 border border-violet-100 dark:border-violet-500/20 rounded-xl flex items-center justify-between animate-in slide-in-from-top-2 duration-300">
                                     <div className="flex items-center gap-3">
                                         {selectedUser.avatar_thumb_url ? (
                                             <img 
                                                 src={selectedUser.avatar_thumb_url} 
                                                 alt={selectedUser.display_name} 
-                                                className="w-8 h-8 rounded-full object-cover shrink-0 bg-slate-200 dark:bg-slate-700" 
+                                                className="w-10 h-10 rounded-full object-cover shrink-0 ring-2 ring-violet-200 dark:ring-violet-900" 
                                             />
                                         ) : (
-                                            <div className="w-8 h-8 rounded-full bg-gradient-to-br from-violet-500 to-indigo-600 flex items-center justify-center text-white text-xs font-bold">
+                                            <div className="w-10 h-10 rounded-full bg-gradient-to-br from-violet-500 to-indigo-600 flex items-center justify-center text-white text-xs font-bold ring-2 ring-violet-200 dark:ring-violet-900 shadow-sm shadow-violet-500/20">
                                                 {selectedUser.display_name[0].toUpperCase()}
                                             </div>
                                         )}
                                         <div>
-                                            <p className="text-sm font-medium text-slate-800 dark:text-white">{renderTextWithEmojis(selectedUser.display_name)}</p>
-                                            <p className="text-xs text-slate-500 dark:text-slate-400">
-                                                {selectedUser.username.startsWith('@') ? selectedUser.username : `@${selectedUser.username}`}
+                                            <p className="text-sm font-bold text-slate-900 dark:text-white">{renderTextWithEmojis(selectedUser.display_name)}</p>
+                                            <p className="text-xs text-violet-600 dark:text-violet-400 font-bold">
+                                                Selected for chat
                                             </p>
                                         </div>
                                     </div>
                                     <button 
                                         type="button"
                                         onClick={() => setSelectedUser(null)}
-                                        className="text-slate-400 hover:text-slate-600 dark:hover:text-white"
+                                        className="w-8 h-8 flex items-center justify-center rounded-full bg-white dark:bg-slate-800 text-slate-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors shadow-sm"
                                     >
                                         <span className="material-symbols-outlined text-lg">close</span>
                                     </button>
@@ -201,26 +236,33 @@ export default function CreateRoomModal({ onClose, onCreate }) {
                             )}
                         </div>
                     )}
+                    </div>
 
-                    <div className="flex gap-3 mt-8">
+                    <div className="pt-4 flex justify-end gap-3 border-t border-slate-100 dark:border-slate-800">
                         <button 
                             type="button" 
                             onClick={onClose}
-                            className="flex-1 px-4 py-2.5 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-600 dark:text-slate-300 rounded-xl font-medium transition-colors"
+                            className="px-5 py-2.5 text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800/50 rounded-xl font-bold transition-colors text-sm"
                         >
                             Cancel
                         </button>
                         <button 
                             type="submit" 
-                            disabled={(type === 'direct' && !selectedUser) || loading}
-                            className={`flex-1 px-4 py-2.5 rounded-xl font-bold shadow-lg transition-all flex items-center justify-center gap-2 ${
-                                type === 'direct' && !selectedUser
+                            disabled={(type === 'direct' && !selectedUser) || (type === 'group' && !name.trim()) || loading}
+                            className={`px-6 py-2.5 rounded-xl font-bold text-sm transition-all flex items-center gap-2 shadow-lg shadow-indigo-500/20 active:scale-[0.98] ${
+                                (type === 'direct' && !selectedUser) || (type === 'group' && !name.trim())
                                 ? 'bg-slate-100 dark:bg-slate-800 text-slate-400 dark:text-slate-500 cursor-not-allowed shadow-none'
-                                : 'bg-violet-600 hover:bg-violet-500 text-white shadow-violet-500/20'
+                                : 'bg-slate-900 hover:bg-slate-800 dark:bg-white dark:hover:bg-slate-200 text-white dark:text-slate-900'
                             }`}
                         >
-                            {loading && <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"/>}
-                            {type === 'direct' ? 'Start Chat' : 'Create'}
+                            {loading ? (
+                                <span className="w-4 h-4 border-2 border-white/30 dark:border-slate-900/30 border-t-white dark:border-t-slate-900 rounded-full animate-spin"/>
+                            ) : (
+                                <>
+                                    <span>Create</span>
+                                    <span className="material-symbols-outlined text-lg">arrow_forward</span>
+                                </>
+                            )}
                         </button>
                     </div>
                 </form>

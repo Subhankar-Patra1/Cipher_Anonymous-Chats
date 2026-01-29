@@ -5,7 +5,7 @@ import { usePresence } from '../context/PresenceContext';
 import { useCall } from '../context/CallContext';
 import MessageList from './MessageList';
 import MessageInput from './MessageInput';
-import ProfilePanel from './ProfilePanel';
+
 import { useNotification } from '../context/NotificationContext';
 import ImagePreviewModal from './ImagePreviewModal';
 import FilePreviewModal from './FilePreviewModal';
@@ -2713,26 +2713,7 @@ export default function ChatWindow({
             {/* I see `showGroupInfo` prop. I see `setShowGroupInfo` prop. */}
             {/* If it's a prop, the parent handles the visibility. */}
             
-            {(showGroupInfo || (room.type === 'direct' && showGroupInfo)) && (
-                <ProfilePanel 
-                    isOpen={true}
-                    userId={room.type === 'direct' ? (room.other_user_id || otherUserId) : null}
-                    roomId={room.id}
-                    onClose={() => setShowGroupInfo(false)}
-                    onActionSuccess={(action) => {
-                        console.log('Profile Action:', action);
-                        if (action === 'block') setIsBlockedByMe(true);
-                        if (action === 'unblock') setIsBlockedByMe(false);
-                        if (action === 'delete') {
-                             if (onBack) onBack(); // Go back if chat deleted
-                        }
-                        if (action === 'clear') {
-                            // Handled by socket or local clear
-                            if (onRefresh) onRefresh();
-                        }
-                    }}
-                />
-            )}
+
 
             
 

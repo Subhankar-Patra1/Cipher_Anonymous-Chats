@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState, useLayoutEffect } from 'react';
+import React, { useEffect, useRef, useState, useLayoutEffect, useMemo } from 'react';
 import { linkifyText } from '../utils/linkify';
 import UnreadDivider from './UnreadDivider';
 import { useAuth } from '../context/AuthContext';
@@ -151,6 +151,18 @@ export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone,
     const [showReactionPicker, setShowReactionPicker] = useState(false); // [NEW]
     const menuRef = useRef(null);
     const reactionButtonRef = useRef(null); // [NEW] Add ref for reaction button
+    
+    // [NEW] Read More Logic
+    const [isExpanded, setIsExpanded] = useState(false);
+    const isLongMessage = useMemo(() => {
+        if (!msg.content) return false;
+        const CHAR_LIMIT = 450;
+        const LINE_LIMIT = 10;
+        const isLongText = msg.content.length > CHAR_LIMIT;
+        const hasManyLines = (msg.content.match(/\n/g) || []).length > LINE_LIMIT;
+        return isLongText || hasManyLines;
+    }, [msg.content]);
+
     const { user, token } = useAuth(); 
     const isAudio = msg.type === 'audio';
     const [imgLoaded, setImgLoaded] = useState(false);
@@ -1334,34 +1346,52 @@ export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone,
                                 </div>
                             ) : (
                             <div className={`pr-2 ${!isMe && isAi ? 'markdown-content' : 'pr-6'}`}>
-                                {isAi && !isMe ? (
-                                    <ReactMarkdown
-                                        remarkPlugins={[remarkGfm, remarkMath]}
-                                        rehypePlugins={[rehypeHighlight, rehypeKatex]}
-                                        components={{
-                                            code: CodeBlock
-                                        }}
-                                    >
-                                        {/* [FIX] Pre-process API content: Replace literal <br> with newlines, and normalize math syntax */}
-                                        {msg.content
-                                            .replace(/<br\s*\/?>/gi, '\n')
-                                            .replace(/\\\[([\s\S]*?)\\\]/g, '$$$$$1$$$$') // \[...\] -> $$...$$
-                                            .replace(/\\\(([\s\S]*?)\\\)/g, '$$$1$$')     // \(...\) -> $...$
-                                        }
-                                    </ReactMarkdown>
-                                ) : (
-                                     <>
-                                        {linkifyText(msg.content, searchTerm, linkClass)}
-                                        {msg.edited_at && (
-                                            <span className="text-[10px] opacity-60 ml-1">(edited)</span>
-                                        )}
-                                        {/* Music Link Previews */}
-                                        {hasMusicLinks(msg.content) && renderMusicPreviews(msg.content, isMe)}
-                                     </>
-                                )}
+                                <div className={`
+                                    ${!isExpanded && isLongMessage ? 'max-h-[300px] overflow-hidden relative' : ''}
+                                    transition-all duration-200
+                                `}>
+                                    {!isExpanded && isLongMessage && (
+                                         <div className={`absolute bottom-0 left-0 w-full h-12 bg-gradient-to-t ${isMe ? 'from-violet-600' : (isAi ? 'from-white dark:from-slate-800' : 'from-white dark:from-slate-800')} to-transparent z-10 pointer-events-none`} />
+                                    )}
+
+                                    {isAi && !isMe ? (
+                                        <ReactMarkdown
+                                            remarkPlugins={[remarkGfm, remarkMath]}
+                                            rehypePlugins={[rehypeHighlight, rehypeKatex]}
+                                            components={{
+                                                code: CodeBlock
+                                            }}
+                                        >
+                                            {/* [FIX] Pre-process API content: Replace literal <br> with newlines, and normalize math syntax */}
+                                            {msg.content
+                                                .replace(/<br\s*\/?>/gi, '\n')
+                                                .replace(/\\\[([\s\S]*?)\\\]/g, '$$$$$1$$$$') // \[...\] -> $$...$$
+                                                .replace(/\\\(([\s\S]*?)\\\)/g, '$$$1$$')     // \(...\) -> $...$
+                                            }
+                                        </ReactMarkdown>
+                                    ) : (
+                                         <>
+                                            {linkifyText(msg.content, searchTerm, linkClass)}
+                                            {msg.edited_at && (
+                                                <span className="text-[10px] opacity-60 ml-1">(edited)</span>
+                                            )}
+                                            {/* Music Link Previews */}
+                                            {hasMusicLinks(msg.content) && renderMusicPreviews(msg.content, isMe)}
+                                         </>
+                                    )}
+                                </div>
                     
                                 {msg.isStreaming && (
                                     <span className="inline-block w-1.5 h-4 bg-fuchsia-500 ml-0.5 align-middle animate-pulse rounded-full" />
+                                )}
+
+                                {isLongMessage && (
+                                    <button 
+                                        onClick={(e) => { e.stopPropagation(); setIsExpanded(!isExpanded); }}
+                                        className={`text-xs font-bold mt-1 hover:underline focus:outline-none ${isMe ? 'text-violet-200' : 'text-violet-500 dark:text-violet-400'}`}
+                                    >
+                                        {isExpanded ? 'Read less' : 'Read more'}
+                                    </button>
                                 )}
                             </div>
                         )}

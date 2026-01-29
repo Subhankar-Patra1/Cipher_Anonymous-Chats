@@ -10,6 +10,13 @@ export default function Auth() {
     const navigate = useNavigate();
     const location = useLocation(); // [NEW]
 
+    // [OPTIMIZATION] Pre-warm crypto keys immediately
+    useEffect(() => {
+        // This ensures keys are ready before the user even types their password.
+        // It runs once on mount.
+        cryptoManager.init().catch(err => console.error('[Auth] Pre-warm failed:', err));
+    }, []);
+
     // [Refined] Initialize directly from location state to prevent flash
     const isOAuthSuccess = location.state && location.state.view === 'oauth_success' && location.state.recoveryCode;
 
