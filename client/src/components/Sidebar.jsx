@@ -13,7 +13,7 @@ import SidebarContextMenu from './SidebarContextMenu';
 import { ChatListSkeleton } from './SkeletonLoaders';
 import PollIcon from './icons/PollIcon';
 import ViewOnceIcon from './icons/ViewOnceIcon';
-import emptySidebarGif from '../assets/empty_sidebar.gif';
+
 import { cryptoManager } from '../lib/crypto/CryptoManager';
 import db from '../utils/db';
 
@@ -110,7 +110,7 @@ const LastMessagePreview = ({ room, user, hasSkippedSync }) => {
         rawContent = room.last_message_file_name;
     }
     
-    const isDecryptionFailed = rawContent === '__NO_KEY__' || rawContent === '__DECRYPT_FAILED__';
+    const isDecryptionFailed = rawContent === '__NO_KEY__' || rawContent === '__DECRYPT_FAILED__' || rawContent === '[Decryption Error]';
     const content = isDecryptionFailed ? '' : rawContent; // Empty string triggers fallback
 
     // [NEW] Helper to render preview with mentions highlighted
@@ -119,7 +119,7 @@ const LastMessagePreview = ({ room, user, hasSkippedSync }) => {
         if (rawContent === '__RETRY_DELAY__') return 'Waiting for keys...';
 
         // [FIX] Handle special markers and empty content
-        if (!rawContent || rawContent === 'Waiting for key...' || rawContent === 'Decryption Error' || isDecryptionFailed) {
+        if (!rawContent || rawContent === 'Waiting for key...' || rawContent === 'Decryption Error' || rawContent === '[Decryption Error]' || isDecryptionFailed) {
             // [FIX] Only show "History hidden" if:
             // 1. User skipped sync AND
             // 2. There's actually encrypted content we couldn't decrypt
@@ -188,14 +188,44 @@ const LastMessagePreview = ({ room, user, hasSkippedSync }) => {
     // [NEW] Listen for key updates to trigger re-decryption
     useEffect(() => {
         const handleKeysUpdated = (e) => {
-            // console.log('[Sidebar] cipher:keys-updated received', e.detail);
-            // If it's a bulk import (restore) or specific to this room
-            if (e.detail?.type === 'bulk-import' || String(e.detail?.roomId) === String(room.id)) {
-                // Only trigger if we are currently encrypted or failed
-                if (!localPlaintext || localPlaintext === '__DECRYPT_FAILED__' || localPlaintext === '__NO_KEY__') {
-                    // console.log('[Sidebar] Retrying decryption for room', room.id);
+            console.log('[Sidebar] cipher:keys-updated received', e.detail, 'for room', room.id);
+            
+            // If it's a bulk import (restore), trigger re-decryption ONLY if needed
+            // Add small delay to ensure IndexedDB writes are committed
+            if (e.detail?.type === 'bulk-import') {
+                // [FIX] DON'T reset if we already have valid decrypted content
+                // This prevents the second event from undoing successful decryption
+                if (localPlaintext && 
+                    localPlaintext !== '__RETRY__' && 
+                    localPlaintext !== '__DECRYPT_FAILED__' && 
+                    localPlaintext !== '__NO_KEY__' &&
+                    localPlaintext !== '__RETRY_DELAY__') {
+                    console.log('[Sidebar] Room', room.id, 'already has valid content, skipping re-decryption');
+                    return;
+                }
+                
+                console.log('[Sidebar] Bulk import detected, scheduling re-decryption for room', room.id);
+                
+                // Small delay to ensure IndexedDB is ready
+                setTimeout(() => {
+                    console.log('[Sidebar] Triggering re-decryption for room', room.id);
                     decryptAttemptedRef.current = false;
-                    // Force a re-run of the decryption effect
+                    setLocalPlaintext(null);
+                    setRetryCount(prev => prev + 1);
+                }, 100);
+                return;
+            }
+            
+            // If specific room update, check if this room needs retry
+            if (String(e.detail?.roomId) === String(room.id)) {
+                if (!localPlaintext || 
+                    localPlaintext === '__DECRYPT_FAILED__' || 
+                    localPlaintext === '__NO_KEY__' ||
+                    localPlaintext === '__RETRY_DELAY__' ||
+                    localPlaintext === '__RETRY__') {
+                    console.log('[Sidebar] Retrying decryption for room', room.id);
+                    decryptAttemptedRef.current = false;
+                    setLocalPlaintext(null);
                     setRetryCount(prev => prev + 1);
                 }
             }
@@ -205,16 +235,40 @@ const LastMessagePreview = ({ room, user, hasSkippedSync }) => {
         return () => window.removeEventListener('cipher:keys-updated', handleKeysUpdated);
     }, [room.id, localPlaintext]);
 
+
     useEffect(() => {
         const decryptFromRoom = async () => {
-            // Skip if already have plaintext
-            if (localPlaintext && localPlaintext !== '__RETRY__') return;
+            console.log(`[Sidebar] decryptFromRoom called for room ${room.id}`, {
+                localPlaintext,
+                hasCiphertext: !!room.last_message_ciphertext,
+                hasIv: !!room.last_message_iv,
+                retryCount,
+                hasSkippedSync
+            });
+            
+            // Skip if already have plaintext (and it's a valid message, not an error state we want to retry)
+            // [FIX] Allow retry if state is FAILED or NO_KEY
+            if (localPlaintext && 
+                localPlaintext !== '__RETRY__' && 
+                localPlaintext !== '__DECRYPT_FAILED__' && 
+                localPlaintext !== '__NO_KEY__') {
+                
+                // [NEW] If already decrypted, notify anyway (idempotent)
+                window.dispatchEvent(new CustomEvent('cipher:room-decrypted', { 
+                    detail: { roomId: room.id } 
+                }));
+                return;
+            }
             // Skip if no encrypted data
-            if (!room.last_message_ciphertext || !room.last_message_iv) return;
+            if (!room.last_message_ciphertext || !room.last_message_iv) {
+                console.log(`[Sidebar] Room ${room.id}: No ciphertext/iv, skipping`);
+                return;
+            }
             // Skip if user doesn't have keys (skipped sync)
             if (hasSkippedSync) return;
-            // [FIX] Skip if already attempted for this message
-            if (decryptAttemptedRef.current) return;
+            
+            // [FIX] Removed strict decryptAttemptedRef check to allow retries
+            // if (decryptAttemptedRef.current) return;
             
             decryptAttemptedRef.current = true; // Mark as attempted
             
@@ -224,8 +278,11 @@ const LastMessagePreview = ({ room, user, hasSkippedSync }) => {
                 const salt = room.last_message_temp_id || room.last_message_id;
                 
                 // Get key from CryptoManager
+                console.log(`[Sidebar] Room ${room.id}: Fetching key v${keyVersion}...`);
                 const keyData = await cryptoManager.getRoomKey(roomId, keyVersion);
+                
                 if (!keyData?.key) {
+                    console.log(`[Sidebar] Room ${room.id}: KEY STILL MISSING after restore!`);
                     // [MODIFIED] If key is missing, allow retry later (don't mark as permanently failed)
                     decryptAttemptedRef.current = false;
                     // Trigger a retry after a short delay (e.g. keys might be loading)
@@ -237,6 +294,8 @@ const LastMessagePreview = ({ room, user, hasSkippedSync }) => {
                     }, 2000);
                     return;
                 }
+                
+                console.log(`[Sidebar] Room ${room.id}: Got key v${keyData.version}, decrypting...`);
                 
                 // Decrypt directly from room data
                 const decrypted = await cryptoManager.decryptMessage(
@@ -251,18 +310,33 @@ const LastMessagePreview = ({ room, user, hasSkippedSync }) => {
                 
                 // [FIX] Only set if decrypted has actual content (not empty string)
                 if (decrypted && decrypted.trim()) {
+                    console.log(`[Sidebar] Room ${room.id}: Decryption SUCCESS - "${decrypted.substring(0, 30)}..."`);
                     setLocalPlaintext(decrypted);
+                    
+                    // [NEW] Notify Dashboard that this room is decrypted (for real-time modal closing)
+                    window.dispatchEvent(new CustomEvent('cipher:room-decrypted', { 
+                        detail: { roomId: room.id } 
+                    }));
                     
                     // [OPTIMIZATION] Cache to Dexie - prevents re-decryption on reload
                     try {
                         db.rooms.put({ id: room.id, last_message_plaintext: decrypted });
                     } catch (e) { /* Ignore write errors */ }
                 } else {
+                    console.log(`[Sidebar] Room ${room.id}: Decryption returned empty/null`);
                     setLocalPlaintext('__DECRYPT_FAILED__');
+                    // [NEW] Also report failed decryptions so we don't wait forever
+                    window.dispatchEvent(new CustomEvent('cipher:room-decrypted', { 
+                        detail: { roomId: room.id, failed: true } 
+                    }));
                 }
             } catch (err) {
                 console.warn('[Sidebar] Direct decryption failed:', err);
                 setLocalPlaintext('__DECRYPT_FAILED__');
+                // [NEW] Report decryption failure
+                window.dispatchEvent(new CustomEvent('cipher:room-decrypted', { 
+                    detail: { roomId: room.id, failed: true } 
+                }));
             }
         };
         
@@ -365,7 +439,7 @@ const LastMessagePreview = ({ room, user, hasSkippedSync }) => {
     
     const reactionNotification = useMemo(() => {
         // [NEW] First check for latest_reaction (reactions on ANY message, not just last)
-        if (room.latest_reaction && reactionPreview) {
+        if (room.last_message_id && room.latest_reaction && reactionPreview) {
             const lr = room.latest_reaction;
             
             // [FIX] Only show reaction notification if it's more recent than the last message
@@ -856,9 +930,9 @@ export default function Sidebar({ rooms, activeRoom, onSelectRoom, loadingRoomId
                         ) : (
                             <div className="flex flex-col items-center justify-center py-12 px-4 text-center">
                                 <img 
-                                    src={emptySidebarGif} 
+                                    src="/no_chat.png" 
                                     alt="No chats" 
-                                    className="w-28 h-28 object-contain opacity-90 grayscale-[0.2] mix-blend-multiply dark:mix-blend-screen dark:invert dark:hue-rotate-180 dark:opacity-80" 
+                                    className="w-28 h-28 object-contain opacity-90 dark:invert"
                                 />
                                 <p className="text-slate-700 dark:text-slate-200 font-medium text-base mt-2">
                                     No {tab} chats yet

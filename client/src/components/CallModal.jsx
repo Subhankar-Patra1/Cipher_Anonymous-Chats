@@ -19,15 +19,37 @@ const Avatar = ({ src, size = "large", pulse = false }) => {
     );
 };
 
-const VideoFeed = ({ stream, isLocal = false, className, videoClassName = "", placeholderAvatar, showPlaceholderText = true, isMinimized = false, isVideoOn = true, connectionStatus = 'good' }) => {
-    const videoRef = useRef(null);
+const VideoFeed = React.forwardRef(({ stream, isLocal = false, className, videoClassName = "", placeholderAvatar, showPlaceholderText = true, isMinimized = false, isVideoOn = true, connectionStatus = 'good' }, ref) => {
+    const internalRef = useRef(null);
+    const videoRef = ref || internalRef;
     const [isPlaying, setIsPlaying] = useState(isLocal); // Local stream can be shown instantly
 
     useEffect(() => {
         if (videoRef.current && stream && videoRef.current.srcObject !== stream) {
             videoRef.current.srcObject = stream;
         }
-    }, [stream]);
+    }, [stream, videoRef]);
+
+    // [NEW] Robust PiP Handling
+    useEffect(() => {
+        const videoEl = videoRef.current;
+        if (!videoEl) return;
+
+        // Force property set
+        videoEl.autoPictureInPicture = true;
+        
+        // Listeners for state sync if needed (optional for now, but good for debugging)
+        const onEnterPiP = () => console.log('[PiP] Entered');
+        const onLeavePiP = () => console.log('[PiP] Left');
+        
+        videoEl.addEventListener('enterpictureinpicture', onEnterPiP);
+        videoEl.addEventListener('leavepictureinpicture', onLeavePiP);
+        
+        return () => {
+            videoEl.removeEventListener('enterpictureinpicture', onEnterPiP);
+            videoEl.removeEventListener('leavepictureinpicture', onLeavePiP);
+        };
+    }, [videoRef]);
 
     const isReconnecting = connectionStatus === 'reconnecting';
     const showOverlay = !isPlaying || !isVideoOn || isReconnecting;
@@ -42,6 +64,7 @@ const VideoFeed = ({ stream, isLocal = false, className, videoClassName = "", pl
                 onPlaying={() => setIsPlaying(true)}
                 className={`w-full h-full object-cover transition-opacity duration-300 ${!showOverlay ? 'opacity-100' : 'opacity-0'} ${videoClassName}`}
                 draggable="false"
+                disablePictureInPicture={false}
             />
             {/* --- Placeholder when video is not playing OR turned off OR Reconnecting --- */}
             {showOverlay && (
@@ -79,7 +102,7 @@ const VideoFeed = ({ stream, isLocal = false, className, videoClassName = "", pl
             )}
         </div>
     );
-};
+});
 
 const CallModal = () => {
     const { user } = useAuth();
@@ -107,6 +130,15 @@ const CallModal = () => {
     const controlsTimeoutRef = useRef(null);
     const persistentRemoteAudioRef = useRef(null);
     const callAreaRef = useRef(null);
+    const constraintsRef = useRef(null);
+    const mainVideoRef = useRef(null); // [NEW] Ref for manual PiP control
+
+    const shouldRender = (callStatus !== 'idle' && callDetails);
+    const safeCallDetails = callDetails || {};
+    const isVideoCall = safeCallDetails.type === 'video';
+    const isIncoming = callStatus === 'incoming';
+    const isOutgoing = callStatus === 'calling';
+    const isConnected = callStatus === 'connected';
 
     // Initial config based on call type
     useEffect(() => {
@@ -201,6 +233,42 @@ const CallModal = () => {
         };
     }, [isMinimized, callStatus, callDetails]);
 
+    // [NEW] Visibility Change Listener for PiP
+    useEffect(() => {
+        const handleVisibilityChange = async () => {
+            if (document.visibilityState === 'hidden' && mainVideoRef.current && isVideoCall && isConnected) {
+                try {
+                    // Only request if not already in PiP
+                    if (document.pictureInPictureElement !== mainVideoRef.current) {
+                        await mainVideoRef.current.requestPictureInPicture();
+                    }
+                } catch (err) {
+                    console.warn('[PiP] Failed to auto-trigger:', err);
+                }
+            }
+        };
+
+        document.addEventListener('visibilitychange', handleVisibilityChange);
+        return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
+    }, [isConnected, isVideoCall]);
+
+    // [NEW] Manual PiP Toggle
+    const togglePiP = async (e) => {
+        e.stopPropagation();
+        if (mainVideoRef.current) {
+            try {
+                if (document.pictureInPictureElement) {
+                    await document.exitPictureInPicture();
+                } else {
+                    await mainVideoRef.current.requestPictureInPicture();
+                }
+            } catch (err) {
+                console.error('[PiP] Toggle failed:', err);
+                // Optionally show toast to user
+            }
+        }
+    };
+
     // Reset playing state when status changes
 
     // Reset playing state when status changes
@@ -212,23 +280,24 @@ const CallModal = () => {
         }
     }, [callStatus]);
 
-    const shouldRender = (callStatus !== 'idle' && callDetails);
-    const safeCallDetails = callDetails || {};
-    const isVideoCall = safeCallDetails.type === 'video';
-    const isIncoming = callStatus === 'incoming';
-    const isOutgoing = callStatus === 'calling';
-    const isConnected = callStatus === 'connected';
+    // Ref for constraints
 
     // Ref for constraints
 
     return (
-        <AnimatePresence>
-             {shouldRender && (
-                <motion.div
-                    key="modal-container"
-                    ref={callAreaRef}
-                    drag={isMinimized}
-                    dragMomentum={false}
+        <>
+             {shouldRender && isMinimized && (
+                <div ref={constraintsRef} className="fixed inset-0 pointer-events-none z-[0]" />
+             )}
+            <AnimatePresence>
+                 {shouldRender && (
+                    <motion.div
+                        key="modal-container"
+                        ref={callAreaRef}
+                        drag={isMinimized}
+                        dragConstraints={constraintsRef}
+                        dragElastic={0.05}
+                        dragMomentum={false}
                     initial={{ opacity: 0 }}
                     animate={isMinimized 
                         ? { opacity: 1, width: 320, height: isVideoCall ? 180 : 80, x: window.innerWidth - 340, y: window.innerHeight - 200, borderRadius: 12 } 
@@ -246,6 +315,7 @@ const CallModal = () => {
                     {(isConnected || (isOutgoing && isVideoCall)) && isVideoCall && (
                         <div className="absolute inset-0 bg-black z-0">
                             <VideoFeed 
+                                ref={mainVideoRef}
                                 stream={isConnected 
                                     ? (isLocalMainView ? localStream : remoteStream) 
                                     : localStream
@@ -407,9 +477,19 @@ const CallModal = () => {
                                         {showControls && (
                                             <>
                                                 <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="absolute top-0 left-0 right-0 p-6 flex justify-between items-start bg-gradient-to-b from-black/70 to-transparent z-20 pointer-events-auto">
-                                                    <button onClick={() => setIsMinimized(true)} className="w-10 h-10 flex items-center justify-center rounded-full bg-black/20 hover:bg-black/40 text-white backdrop-blur-md transition-colors shrink-0">
-                                                        <span className="material-symbols-outlined">expand_more</span>
-                                                    </button>
+                                                    <div className="flex items-center gap-3">
+                                                        <button onClick={() => setIsMinimized(true)} className="w-10 h-10 flex items-center justify-center rounded-full bg-black/20 hover:bg-black/40 text-white backdrop-blur-md transition-colors shrink-0">
+                                                            <span className="material-symbols-outlined">expand_more</span>
+                                                        </button>
+                                                        <motion.button 
+                                                            onClick={togglePiP} 
+                                                            whileTap={{ scale: 0.95 }}
+                                                            className="w-10 h-10 rounded-full bg-black/20 hover:bg-black/40 text-white backdrop-blur-md flex items-center justify-center transition-colors shrink-0"
+                                                            title="Pop out video"
+                                                        >
+                                                            <span className="material-symbols-outlined text-lg">picture_in_picture_alt</span>
+                                                        </motion.button>
+                                                    </div>
                                                     <div className="flex flex-col items-end">
                                                         <h3 className="text-white font-bold drop-shadow-md">{renderTextWithEmojis(safeCallDetails.callerName, "1.2em")}</h3>
                                                         <p className="text-white/80 text-sm font-mono drop-shadow-md">{formatTime(duration)}</p>
@@ -519,6 +599,7 @@ const CallModal = () => {
                 </motion.div>
              )}
         </AnimatePresence>
+        </>
     );
 };
 

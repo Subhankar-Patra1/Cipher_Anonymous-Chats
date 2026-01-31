@@ -59,22 +59,30 @@ app.use(express.json());
 // [SECURITY] Rate Limiting
 const rateLimit = require('express-rate-limit');
 
-// General API rate limit: 100 requests per 15 minutes
+// Skip rate limiting for localhost during development
+const skipForLocalhost = (req) => {
+    const ip = req.ip || req.connection.remoteAddress;
+    return ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1';
+};
+
+// General API rate limit: 500 requests per 15 minutes
 const apiLimiter = rateLimit({
     windowMs: 15 * 60 * 1000, // 15 minutes
-    max: 100,
+    max: 500,
     message: { error: 'Too many requests, please try again later.' },
     standardHeaders: true,
     legacyHeaders: false,
+    skip: process.env.NODE_ENV !== 'production' ? skipForLocalhost : undefined,
 });
 
-// Stricter limit for auth endpoints: 10 attempts per 15 minutes
+// Stricter limit for auth endpoints: 50 attempts per 15 minutes
 const authLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
-    max: 10,
+    max: 50,
     message: { error: 'Too many login attempts, please try again later.' },
     standardHeaders: true,
     legacyHeaders: false,
+    skip: process.env.NODE_ENV !== 'production' ? skipForLocalhost : undefined,
 });
 
 // Apply to API routes
@@ -292,6 +300,9 @@ if (!JWT_SECRET) throw new Error('JWT_SECRET environment variable is required');
 // [NEW] Track pending sync requests: userId -> { requesterDeviceId, senderPublicKey, deviceInfo }
 const pendingSyncs = new Map();
 
+// [NEW] Track active calls: socketId -> targetUserId (for disconnect handling)
+const activeCalls = new Map();
+
 // Socket Auth Middleware
 io.use(async (socket, next) => {
     // console.log(`[DEBUG] Handshake attempt: SocketID=${socket.id}`);
@@ -408,11 +419,19 @@ io.on('connection', async (socket) => {
 
     socket.on('provide_key_sync', ({ targetDeviceId, encryptedBlob, senderPublicKey }) => {
         const userId = socket.user.id;
+        const uId = String(userId);
         const targetSocketId = socketMap.getSocketId(userId, targetDeviceId);
 
         if (!targetSocketId) {
             console.warn(`[Sync] Target device ${targetDeviceId} went offline while preparing sync.`);
             return;
+        }
+
+        // [FIX] Clear pending sync state immediately when keys are provided
+        // This prevents stale requests from being re-emitted on page refresh
+        if (pendingSyncs.has(uId)) {
+            console.log(`[Sync] Clearing pending sync for user ${uId} after keys provided`);
+            pendingSyncs.delete(uId);
         }
 
         console.log(`[Sync] Forwarding key bundle from ${socket.deviceId} to ${targetDeviceId}`);
@@ -563,6 +582,23 @@ io.on('connection', async (socket) => {
         await redisClient.heartbeatSession(sessionId);
     });
 
+    // [NEW] Explicit Call Registration for Disconnect Handling
+    socket.on('call:register', ({ targetUserId }) => {
+        activeCalls.set(socket.id, targetUserId);
+    });
+    
+    socket.on('call:end', ({ to }) => {
+        // Clear local tracking
+        activeCalls.delete(socket.id);
+        
+        // Forward event as before
+        const targetSocketId = socketMap.getSocketId(to, null); // We might need specific device targeting if P2P? 
+        // Actually, P2P usually targets a specific socket ID or broadcasts to user.
+        // Existing logic in CallContext emits 'call:end' with 'to' as userId. 
+        // We need to broadcast to that user's devices.
+        io.to(`user:${to}`).emit('call:ended');
+    });
+
     // Handle explicit disconnect
     socket.on('disconnect', async () => {
         // console.log('User disconnected:', socket.user.username);
@@ -570,6 +606,17 @@ io.on('connection', async (socket) => {
         // [NEW] Unregister Device
         if (socket.deviceId) {
             socketMap.unregisterSocket(socket.user.id, socket.id);
+        }
+
+        // [NEW] Handle Disconnect during Active Call
+        if (activeCalls.has(socket.id)) {
+            const targetUserId = activeCalls.get(socket.id);
+            console.log(`[Call] User ${socket.user.id} disconnected while in call with ${targetUserId}. Auto-ending call.`);
+            
+            // Notify the peer to end the call
+            io.to(`user:${targetUserId}`).emit('call:ended');
+            
+            activeCalls.delete(socket.id);
         }
 
         const remaining = await redisClient.removeSession(socket.user.id, sessionId);

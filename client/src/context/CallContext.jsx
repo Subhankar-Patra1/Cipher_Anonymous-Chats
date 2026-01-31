@@ -300,6 +300,11 @@ export const CallProvider = ({ children, socket }) => {
                 stream: stream
             });
 
+            // [NEW] Register call with server for disconnect handling
+            if (socket) {
+                socket.emit('call:register', { targetUserId: userId });
+            }
+
             attachConnectionMonitoring(peer);
 
             peer.on('signal', (data) => {
@@ -376,6 +381,12 @@ export const CallProvider = ({ children, socket }) => {
                 stream: stream
             });
             
+            
+            // [NEW] Register call with server for disconnect handling
+            if (socket && callDetails?.callerId) {
+                socket.emit('call:register', { targetUserId: callDetails.callerId });
+            }
+
             attachConnectionMonitoring(peer);
 
             peer.on('signal', (data) => {

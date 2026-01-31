@@ -20,7 +20,7 @@ const FUN_FACTS = [
     "Fun fact: Cipher uses end-to-end encryption for everything."
 ];
 
-export default function RestoreModal({ isOpen, onClose, onRestoreSuccess, token, onSwitchToSync }) {
+export default function RestoreModal({ isOpen, onClose, onSkip, onRestoreSuccess, token, onSwitchToSync }) {
     const [password, setPassword] = useState('');
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState('');
@@ -43,21 +43,16 @@ export default function RestoreModal({ isOpen, onClose, onRestoreSuccess, token,
     // [NEW] Handle smooth closing
     const handleClose = () => {
         setIsClosing(true);
+        // [FIX] Call onSkip to mark as skipped so user can restore later from settings
+        if (onSkip) onSkip();
         setTimeout(() => {
             onClose();
             setIsClosing(false); // Reset for next time (though unmount happens first)
         }, 300); // Match animation duration
     };
 
-    // [NEW] Auto-close on success
-    useEffect(() => {
-        if (currentStep === 'completed') {
-            const timer = setTimeout(() => {
-                handleClose();
-            }, 3000); 
-            return () => clearTimeout(timer);
-        }
-    }, [currentStep]);
+    // [REMOVED] Auto-close removed - parent controls closing via onRestoreSuccess callback
+    // Modal stays open until parent explicitly sets isOpen to false
 
     if (!isOpen) return null;
 
@@ -100,13 +95,17 @@ export default function RestoreModal({ isOpen, onClose, onRestoreSuccess, token,
             // [NEW] Enable auto-backup so future room keys are automatically backed up
             await cryptoManager.enableAutoBackup(password, data.salt, token);
 
+            // NOTE: cipher:keys-updated event is already dispatched by importKeysSync()
+            // No need to dispatch it again here
+
             setCurrentStep('finalizing');
             await new Promise(r => setTimeout(r, 1500));
 
-            // [FIX] Await parent success (room decryption)
-            await onRestoreSuccess();
-            // Note: Dashboard will close us when animation is done
+            // [FIX] Set to 'completed' but DON'T close - parent will close after decryption
             setCurrentStep('completed');
+            
+            // [FIX] Call parent's success handler which will wait for decryption and close us
+            await onRestoreSuccess();
         } catch (err) {
             console.error('[Restore] Error:', err);
             setError(err.name === 'OperationError' ? 'Invalid password. Decryption failed.' : 'Restoration failed. Please try again.');
@@ -178,7 +177,7 @@ export default function RestoreModal({ isOpen, onClose, onRestoreSuccess, token,
                         
                         {currentStep === 'completed' && (
                             <p className="mt-4 text-xs text-slate-500 animate-pulse">
-                                Reassembling your chats... please wait.
+                                Decrypting your messages...
                             </p>
                         )}
                     </div>

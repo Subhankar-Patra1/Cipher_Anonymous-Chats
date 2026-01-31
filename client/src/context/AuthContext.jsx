@@ -55,24 +55,48 @@ export const AuthProvider = ({ children }) => {
     useEffect(() => {
         // [OPTIMIZATION] Skip fetch if user is already populated (happens immediately after login)
         if (token && !user) {
-            // Validate token and fetch user
+            // [FIX] Add timeout and proper error handling to prevent infinite loading
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
+
             fetch(`${import.meta.env.VITE_API_URL}/api/auth/me`, {
-                headers: { Authorization: `Bearer ${token}` }
+                headers: { Authorization: `Bearer ${token}` },
+                signal: controller.signal
             })
             .then(res => {
+                clearTimeout(timeoutId);
                 if (res.ok) return res.json();
-                throw new Error('Invalid token');
+                // [FIX] Only throw for actual auth failures (401/403), not network issues
+                if (res.status === 401 || res.status === 403) {
+                    throw new Error('AUTH_INVALID');
+                }
+                throw new Error('SERVER_ERROR');
             })
             .then(async data => {
                 setUser(data.user);
                 // Initialize crypto in background after user load
-                await initializeCrypto(token);
+                initializeCrypto(token).catch(e => console.warn('[Auth] Crypto init warning:', e));
                 setLoading(false);
             })
-            .catch(() => {
-                logout();
+            .catch((error) => {
+                clearTimeout(timeoutId);
+                // [FIX] Only logout on actual auth failures, not network/timeout errors
+                if (error.message === 'AUTH_INVALID') {
+                    console.warn('[Auth] Token invalid, logging out');
+                    logout();
+                } else {
+                    // Network error or timeout - keep the token, user might still be valid
+                    console.warn('[Auth] Session validation failed (network/timeout):', error.message);
+                    // Try to use cached user data if available, otherwise clear loading
+                    // The app will retry on next interaction
+                }
                 setLoading(false);
             });
+
+            return () => {
+                clearTimeout(timeoutId);
+                controller.abort();
+            };
         } else {
             setLoading(false);
         }
@@ -87,7 +111,8 @@ export const AuthProvider = ({ children }) => {
         
         setLoading(true); 
         if (isNew) {
-            localStorage.setItem('skipped_sync', 'true');
+            // [FIX] No longer setting 'skipped_sync' for new users.
+            // New users start fresh, so "Restore" option shouldn't be forced on them.
         }
         localStorage.setItem('token', newToken);
         setToken(newToken);

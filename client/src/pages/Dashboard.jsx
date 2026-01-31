@@ -109,6 +109,13 @@ export default function Dashboard() {
         mode: 'approve' // 'approve' or 'password'
     });
     const [pendingSyncRequest, setPendingSyncRequest] = useState(null);
+    const pendingSyncRequestRef = useRef(null); // [FIX] Ref to avoid stale closure in socket handlers
+    
+    // [FIX] Keep ref in sync with state
+    useEffect(() => {
+        pendingSyncRequestRef.current = pendingSyncRequest;
+    }, [pendingSyncRequest]);
+
     const ecdhKeysRef = useRef(null);
     const syncTimeoutRef = useRef(null);
 
@@ -124,6 +131,11 @@ export default function Dashboard() {
     const [hasSkippedSync, setHasSkippedSync] = useState(() => localStorage.getItem('skipped_sync') === 'true');
     const [showRestoreModal, setShowRestoreModal] = useState(false); // [NEW] For profile-triggered restore
     const [showPassword, setShowPassword] = useState(false); // [NEW] Password visibility toggle
+    // [NEW] Track when history was hidden to allow new chats to skip the banner
+    const [historyHiddenAt, setHistoryHiddenAt] = useState(() => {
+        const saved = localStorage.getItem('history_hidden_at');
+        return saved ? parseInt(saved, 10) : null;
+    });
     const seenMessages = useRef(new Set()); // [NEW] Global Replay Protection
     const [typingByRoom, setTypingByRoom] = useState({}); // [NEW] { roomId: [{ userId, name }] }
     const globalTypingTimeoutsRef = useRef({}); // [NEW] { "roomId:userId": timeoutId }
@@ -133,6 +145,55 @@ export default function Dashboard() {
         group: rooms.filter(r => r.type === 'group' && !r.is_archived && r.unread_count > 0).length,
         direct: rooms.filter(r => r.type === 'direct' && !r.is_archived && r.unread_count > 0).length
     }), [rooms]);
+
+    // [NEW] Helper to wait for all rooms to finish decrypting (real-time completion)
+    const waitForAllDecryptions = useCallback((roomsList) => {
+        return new Promise((resolve) => {
+            // Get rooms that have encrypted content that needs decryption
+            const encryptedRoomIds = new Set(
+                roomsList
+                    .filter(r => r.last_message_ciphertext && r.last_message_iv)
+                    .map(r => String(r.id))
+            );
+            
+            // If no encrypted rooms, resolve immediately
+            if (encryptedRoomIds.size === 0) {
+                resolve();
+                return;
+            }
+            
+            const decryptedRoomIds = new Set();
+            const maxWaitTime = 15000; // 15 second max wait
+            let timeoutId;
+            
+            const handleRoomDecrypted = (e) => {
+                const roomId = String(e.detail?.roomId);
+                if (encryptedRoomIds.has(roomId)) {
+                    decryptedRoomIds.add(roomId);
+                    
+                    // Check if all encrypted rooms are now decrypted
+                    if (decryptedRoomIds.size >= encryptedRoomIds.size) {
+                        cleanup();
+                        resolve();
+                    }
+                }
+            };
+            
+            const cleanup = () => {
+                clearTimeout(timeoutId);
+                window.removeEventListener('cipher:room-decrypted', handleRoomDecrypted);
+            };
+            
+            // Safety timeout - don't wait forever
+            timeoutId = setTimeout(() => {
+                console.log('[Dashboard] Decryption wait timeout. Completed:', decryptedRoomIds.size, '/', encryptedRoomIds.size);
+                cleanup();
+                resolve();
+            }, maxWaitTime);
+            
+            window.addEventListener('cipher:room-decrypted', handleRoomDecrypted);
+        });
+    }, []);
 
     const handleManualRestore = async (e) => {
         if (e) e.preventDefault();
@@ -182,14 +243,18 @@ export default function Dashboard() {
             }));
             
             // [FIX] Update status for sidebar decryption phase
-            setSyncState(prev => ({ ...prev, status: 'Decrypting sidebar messages...' }));
+            setSyncState(prev => ({ ...prev, status: 'Decrypting your messages...' }));
             
-            // [FIX] Wait for rooms to re-fetch and DECRYPT before closing modal
-            await fetchRooms(true);
+            // [FIX] Fetch rooms first to know which need decryption
+            const freshRooms = await fetchRooms(true);
             
-            // [FIX] Give sidebar components time to process the new keys and decrypt previews
-            setSyncState(prev => ({ ...prev, status: 'Finishing up...' }));
-            await new Promise(resolve => setTimeout(resolve, 2500));
+            // [FIX] Dispatch keys-updated event to trigger sidebar re-decryption
+            window.dispatchEvent(new CustomEvent('cipher:keys-updated', { 
+                detail: { type: 'bulk-import' } 
+            }));
+            
+            // [NEW] Wait for ALL rooms to actually finish decrypting (real-time, not fixed timeout)
+            await waitForAllDecryptions(freshRooms || rooms);
             
             // [FIX] Close modal AFTER everything is complete
             setSyncState({ active: false, status: 'Success!', showBackupPrompt: false, mode: 'approve' });
@@ -217,10 +282,11 @@ export default function Dashboard() {
         // 2. Close local modal
         setSyncState({ active: false, status: '', showBackupPrompt: false, mode: 'approve' });
 
-        // [NEW] Mark as skipped so we show the "Restore" option in settings
         localStorage.setItem('skipped_sync', 'true');
-        localStorage.setItem('history_hidden_at', Date.now().toString()); // [NEW] Mark when history was hidden
+        const now = Date.now();
+        localStorage.setItem('history_hidden_at', now.toString()); // [NEW] Mark when history was hidden
         setHasSkippedSync(true);
+        setHistoryHiddenAt(now);
         
         // 3. Ensure we have fallback identity (CryptoManager handles init automatically on load, so we are good)
         // Just show a small toast for clarity
@@ -491,6 +557,9 @@ export default function Dashboard() {
                             return newRoom;
                         });
                     });
+                    
+                    // [FIX] Return enriched data so callers can use it immediately (for wait logic)
+                    return enriched;
                 }
             }
         } catch (err) {
@@ -517,36 +586,28 @@ export default function Dashboard() {
             
             syncAttemptedRef.current = true; // Prevent loop
 
-            // [NEW] Flow Logic based on Auth Method
-            // OAuth users -> Prioritize Cloud Restore (Backup Password)
-            // Local users -> Prioritize Device Sync (Approval)
-            const isOAuth = user?.auth_method === 'oauth' || user?.auth_method === 'multiple';
-            
-            // If OAuth, check cloud backup first
-            if (isOAuth) {
-                try {
-                    // 1. Check if Cloud Backup exists
-                    const res = await fetch(`${import.meta.env.VITE_API_URL}/api/auth/backup`, {
-                        headers: { Authorization: `Bearer ${token}` }
-                    });
-                    
-                    // If backup exists, trigger Restore Modal
-                    if (res.ok) {
-                        const data = await res.json();
-                        if (data && (data.encrypted_blob || data.hasBackup)) {
-                            console.log('[Restore] Backup found (OAuth). Prompting restore...');
-                            setShowRestoreModal(true);
-                            return;
-                        }
+            // [FIX] Always check cloud backup first for ALL users (not just OAuth)
+            // This ensures keys are synced before showing messages
+            try {
+                const res = await fetch(`${import.meta.env.VITE_API_URL}/api/auth/backup`, {
+                    headers: { Authorization: `Bearer ${token}` }
+                });
+                
+                // If backup exists, trigger Restore Modal
+                if (res.ok) {
+                    const data = await res.json();
+                    if (data && (data.encrypted_blob || data.hasBackup)) {
+                        console.log('[Restore] Backup found. Prompting restore...');
+                        setShowRestoreModal(true);
+                        return;
                     }
-                } catch (err) {
-                    console.warn('[Restore] Failed to check backup status:', err);
                 }
+            } catch (err) {
+                console.warn('[Restore] Failed to check backup status:', err);
             }
 
-            // 2. Fallback (or Primary for Local) -> P2P Sync
-            // Local users skip straight to here
-            console.log(`[Sync] ${isOAuth ? 'No backup found' : 'Local User'}. Starting Device Sync...`);
+            // Fallback: P2P Device Sync (if no cloud backup exists)
+            console.log('[Sync] No cloud backup found. Starting Device Sync...');
             setTimeout(() => {
                  triggerSync();
             }, 1500);
@@ -788,7 +849,9 @@ export default function Dashboard() {
                 if (roomIndex > -1) {
                      const room = { ...updatedRooms[roomIndex] };
                       const isActiveRoom = activeRoomRef.current && String(activeRoomRef.current.id) === String(room.id);
-                      if (!isActiveRoom && !isSilent) {
+                      const isOwnMessage = String(msg.user_id) === String(user.id);
+                      // [FIX] Don't increment unread_count for our own messages (from other devices)
+                      if (!isActiveRoom && !isSilent && !isOwnMessage) {
                           room.unread_count = (room.unread_count || 0) + 1;
                           if (msg.mention_user_ids?.map(Number).includes(Number(user.id))) {
                               room.mention_count = (room.mention_count || 0) + 1;
@@ -864,6 +927,14 @@ export default function Dashboard() {
                       if (msg.viewed_by !== undefined) room.last_message_viewed_by = msg.viewed_by;
                       if (msg.attachments_count !== undefined) room.last_message_attachments_count = msg.attachments_count;
                       else if (msg.attachments) room.last_message_attachments_count = msg.attachments.length;
+
+                      // [FIX] Update encryption fields so Sidebar can decrypt real-time messages
+                      room.last_message_ciphertext = processedMsg.ciphertext;
+                      room.last_message_iv = processedMsg.iv;
+                      room.last_message_key_version = processedMsg.key_version;
+                      room.last_message_temp_id = processedMsg.temp_id;
+                      // Ensure salt is set (usually temp_id or id)
+                      room.last_message_salt = processedMsg.salt || processedMsg.temp_id || processedMsg.id;
 
                       room.official_last_message = { ...processedMsg, id: processedMsg.id };
                       updatedRooms[roomIndex] = room;
@@ -1201,13 +1272,13 @@ export default function Dashboard() {
             }
         });
 
-        newSocket.on('chat:cleared', ({ roomId }) => {
+        newSocket.on('chat:cleared', async ({ roomId }) => {
             // Update rooms list
             setRooms(prev => prev.map(r => 
                 String(r.id) === String(roomId) ? { 
                     ...r, 
                     unread_count: 0, 
-                    mention_count: 0, // [NEW] Clear mentions
+                    mention_count: 0,
                     initialMessages: [],
                     last_message_content: null,
                     last_message_type: null,
@@ -1223,23 +1294,64 @@ export default function Dashboard() {
                     last_message_attachments: null,
                     last_message_attachments_count: 0,
                     last_message_is_deleted: false,
-                    last_message_temp_id: null // [FIX] Clear temp ID
+                    last_message_temp_id: null,
+                    last_message_plaintext: null,
+                    last_message_ciphertext: null,
+                    last_message_iv: null,
+                    last_message_key_version: null,
+                    last_message_reactions: null,
+                    latest_reaction: null
                 } : r
             ));
             
             // Update active room if matches
             setActiveRoom(prev => {
                 if (prev && String(prev.id) === String(roomId)) {
-                    return { ...prev, initialMessages: [] };
+                    return { ...prev, initialMessages: [], last_message_id: null };
                 }
                 return prev;
             });
+
+            // [FIX] Clear local Dexie cache for this room on this device
+            try {
+                await db.messages.where('room_id').equals(String(roomId)).delete();
+                await db.rooms.update(parseInt(roomId), {
+                    last_message_id: null,
+                    last_message_content: null,
+                    last_message_plaintext: null,
+                    last_message_ciphertext: null,
+                    last_message_iv: null,
+                    last_message_type: null,
+                    last_message_sender_id: null,
+                    last_message_created_at: null,
+                    last_message_reactions: null,
+                    latest_reaction: null
+                });
+            } catch (e) {
+                console.warn('[Sync] Could not clear Dexie cache on socket event:', e);
+            }
         });
 
-        newSocket.on('chat:deleted', ({ roomId }) => {
+        newSocket.on('chat:deleted', async ({ roomId }) => {
             setRooms(prev => prev.filter(r => String(r.id) !== String(roomId)));
             if (activeRoomRef.current && String(activeRoomRef.current.id) === String(roomId)) {
                 setActiveRoom(null);
+            }
+
+            // [FIX] Also clear local Dexie data for this room
+            try {
+                await db.messages.where('room_id').equals(String(roomId)).delete();
+                // Optionally hide or delete from db.rooms too
+                await db.rooms.update(parseInt(roomId), {
+                    is_hidden: 1, 
+                    last_message_id: null,
+                    last_message_content: null,
+                    last_message_plaintext: null,
+                    last_message_reactions: null,
+                    latest_reaction: null
+                });
+            } catch (e) {
+                console.warn('[Sync] Could not clear Dexie for deleted chat:', e);
             }
         });
 
@@ -1458,8 +1570,17 @@ export default function Dashboard() {
             });
         });
         // --- [PHASE 1] KEY SYNC HANDLERS (GLOBAL) ---
+        // --- [PHASE 1] KEY SYNC HANDLERS (GLOBAL) ---
         newSocket.on('request_key_sync', async (payload) => {
-            console.log(`[Sync] Received sync request from ${payload.targetDeviceId}`, payload);
+            console.log(`[Sync] Received sync request for ${payload.targetDeviceId}`, payload);
+            
+            // [FIX] Ignore spurious requests if we JUST restored via password (prevent ghost session loops)
+            const lastRestore = localStorage.getItem('last_restore_timestamp');
+            if (lastRestore && (Date.now() - parseInt(lastRestore)) < 120000) { // 2 minutes grace period
+                console.log('[Sync] Ignoring sync request due to recent manual restore');
+                return;
+            }
+
             console.log('[Sync] Setting pending request state', payload);
             setPendingSyncRequest(payload);
             
@@ -1487,16 +1608,27 @@ export default function Dashboard() {
                 // 3. Import keys
                 await cryptoManager.importKeysSync(bundle);
                 
-                // [FIX] Update UI to show decryption phase and WAIT for sidebar decryption
-                setSyncState(prev => ({ ...prev, status: 'Decrypting messages...' }));
+                // [FIX] Dispatch keys-updated event so sidebar components re-decrypt
+                window.dispatchEvent(new CustomEvent('cipher:keys-updated', { 
+                    detail: { type: 'bulk-import' } 
+                }));
                 
-                // Decrypt sidebar previews (awaiting ensures we don't close modal too early)
-                await fetchRooms();
+                // [FIX] Update UI to show decryption phase and WAIT for sidebar decryption
+                setSyncState(prev => ({ ...prev, status: 'Decrypting your messages...' }));
+                
+                // [FIX] Fetch rooms to know which need decryption
+                const freshRooms = await fetchRooms();
+                
+                // [FIX] Dispatch keys-updated event to trigger sidebar re-decryption
+                window.dispatchEvent(new CustomEvent('cipher:keys-updated', { 
+                    detail: { type: 'bulk-import' } 
+                }));
 
-                // [UX] Small delay to ensure user sees the "Decrypting" status and allows UI to settle
-                await new Promise(resolve => setTimeout(resolve, 1500));
+                // [NEW] Wait for ALL rooms to actually finish decrypting (real-time)
+                await waitForAllDecryptions(freshRooms || rooms);
 
-                setSyncState({ active: false, status: 'Success!', showBackupPrompt: false, mode: 'approve' });
+                // [FIX] Enable backup prompt so user sets up auto-backup on this new device
+                setSyncState({ active: false, status: 'Success!', showBackupPrompt: true, mode: 'approve' });
                 // Trigger animation on next chat open
                 setJustRestored(true);
                 showNotification('Chat history synced successfully!', 'success');
@@ -1545,8 +1677,8 @@ export default function Dashboard() {
 
         newSocket.on('sync_finished', () => {
             console.log('[Sync] Cleanup: Sync finished on another device.');
-            // Only show notification if we were the one approving (i.e. we have the modal open)
-            if (pendingSyncRequest) {
+            // [FIX] Use ref instead of state to correctly check for active request (avoid stale closure)
+            if (pendingSyncRequestRef.current) {
                  showNotification('Sync completed successfully!', 'success');
             }
             setPendingSyncRequest(null);
@@ -2213,7 +2345,7 @@ export default function Dashboard() {
         {/* Notification Permission Banner */}
         {!syncState.active && <NotificationPermissionBanner />}
         
-        <div className={`fixed inset-0 h-[100dvh] w-full bg-gray-50 dark:bg-slate-950 text-slate-900 dark:text-white overflow-hidden flex ${isResizing ? 'select-none cursor-col-resize' : ''} animate-dashboard-entry transition-colors`}>
+        <div className={`fixed inset-0 h-[100dvh] w-full bg-gray-50 dark:bg-slate-950 text-slate-900 dark:text-white overflow-hidden flex border border-slate-200 dark:border-slate-800 ${isResizing ? 'select-none cursor-col-resize' : ''} animate-dashboard-entry transition-colors`}>
             {/* [NEW] SideNav - Desktop only icon filter bar */}
             <SideNav 
                 activeFilter={activeFilter}
@@ -2292,6 +2424,7 @@ export default function Dashboard() {
                             onBack={() => setActiveRoom(null)}
                             showGroupInfo={showGroupInfo}
                             setShowGroupInfo={setShowGroupInfo}
+                            historyHiddenAt={historyHiddenAt} // [NEW]
                             highlightMessageId={highlightMessageId} // [NEW]
                             onGoToMessage={(msgId) => handleGoToMessage(activeRoom.id, msgId)} // [FIXED] Pass correct signature for local room usage
                             onRefresh={fetchRooms} 
@@ -2567,8 +2700,18 @@ export default function Dashboard() {
                     roomId={profileState.roomId}
                     onClose={handleCloseProfile}
                     onActionSuccess={(action) => {
+                        if (action === 'backup_created') {
+                            localStorage.removeItem('skipped_sync');
+                            setHasSkippedSync(false);
+                        }
                         if (action === 'delete') {
-                            setActiveRoom(null);
+                            const roomIdToDelete = profileState.roomId || (activeRoom && activeRoom.id);
+                            if (roomIdToDelete) {
+                                setRooms(prev => prev.filter(r => String(r.id) !== String(roomIdToDelete)));
+                                if (activeRoom && String(activeRoom.id) === String(roomIdToDelete)) {
+                                    setActiveRoom(null);
+                                }
+                            }
                         }
                         if (action === 'block' || action === 'unblock') {
                             const isBlocked = action === 'block'; 
@@ -2588,7 +2731,6 @@ export default function Dashboard() {
                         }
                         if (action === 'clear') {
                             // Immediately clear last message in sidebar for this room
-                            // Use profileState.roomId or fall back to activeRoom.id
                             const roomIdToClear = profileState.roomId || activeRoom?.id;
                             if (roomIdToClear) {
                                 setRooms(prev => prev.map(r => 
@@ -2601,10 +2743,33 @@ export default function Dashboard() {
                                             last_message_status: null,
                                             last_message_sender_id: null,
                                             last_message_created_at: null,
-                                            last_message_plaintext: null
+                                            last_message_plaintext: null,
+                                            last_message_ciphertext: null,
+                                            last_message_iv: null,
+                                            last_message_key_version: null,
+                                            last_message_temp_id: null,
+                                            last_message_reactions: null,
+                                            latest_reaction: null,
+                                            unread_count: 0,
+                                            mention_count: 0,
+                                            official_last_message: { id: null, content: null, type: null }
                                         } 
                                         : r
                                 ));
+
+                                // Update active room if matches
+                                setActiveRoom(prev => {
+                                    if (prev && String(prev.id) === String(roomIdToClear)) {
+                                        return { 
+                                            ...prev, 
+                                            initialMessages: [], 
+                                            last_message_id: null,
+                                            last_message_content: null,
+                                            last_message_plaintext: null
+                                        };
+                                    }
+                                    return prev;
+                                });
                             }
                         }
                         fetchRooms();
@@ -2614,6 +2779,7 @@ export default function Dashboard() {
                         handleGoToMessage(profileState.roomId, msgId);
                     }}
                     showRestoreOption={profileState.showRestoreOption}
+                    hasSkippedSync={hasSkippedSync}
                     onRequestSync={() => {
                         handleCloseProfile();
                         setShowRestoreModal(true);
@@ -2683,13 +2849,47 @@ export default function Dashboard() {
         <RestoreModal 
             isOpen={showRestoreModal}
             onClose={() => setShowRestoreModal(false)}
+            onSkip={() => {
+                // [FIX] Mark as skipped so restore option shows in profile settings
+                localStorage.setItem('skipped_sync', 'true');
+                const now = Date.now();
+                localStorage.setItem('history_hidden_at', now.toString());
+                setHasSkippedSync(true);
+                setHistoryHiddenAt(now);
+                showNotification('You can restore chat history later from Profile settings.', 'info');
+            }}
             onRestoreSuccess={async () => {
-                // [FIX] Wait for full decryption before closing/showing success
-                await fetchRooms(true);
+                // NOTE: cipher:keys-updated event is already dispatched by CryptoManager.importKeysSync()
+                // But at that point, messages aren't in IndexedDB yet. We dispatch again AFTER fetchRooms.
+                
+                // [FIX] Clear any pending sync request since user already restored via password
+                setPendingSyncRequest(null);
+                setSyncState({ active: false, status: '', showBackupPrompt: false, mode: 'approve' });
+                
+                // [FIX] Record timestamp to suppress spurious sync requests for 2 mins
+                localStorage.setItem('last_restore_timestamp', Date.now().toString());
+                
+                // Fetch rooms to get fresh data (this also saves messages to IndexedDB)
+                const freshRooms = await fetchRooms(true);
+                
+                // Wait a tick for React to re-render with new rooms AND for IndexedDB writes to complete
+                await new Promise(r => setTimeout(r, 200));
+                
+                // [FIX] NOW dispatch keys-updated so ChatWindow can re-decrypt from IndexedDB
+                // This must happen AFTER fetchRooms because ChatWindow reads from IndexedDB
+                window.dispatchEvent(new CustomEvent('cipher:keys-updated', { 
+                    detail: { type: 'bulk-import', source: 'dashboard-post-fetch' } 
+                }));
+                
+                // Wait for ALL rooms to actually finish decrypting (real-time)
+                await waitForAllDecryptions(freshRooms || rooms);
                 
                 localStorage.removeItem('skipped_sync');
                 setHasSkippedSync(false);
                 setJustRestored(true); // Trigger background animation
+                
+                // Close modal AFTER decryption is complete
+                setShowRestoreModal(false);
                 showNotification('Chat history restored!', 'success');
             }}
             token={token}

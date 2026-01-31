@@ -32,6 +32,17 @@ export default function Auth() {
     const [isSubmitting, setIsSubmitting] = useState(false);
     const [copied, setCopied] = useState(false); // [NEW] Track copy state
     
+    // [NEW] Rate Limiting State
+    const [failedAttempts, setFailedAttempts] = useState(() => {
+        const stored = localStorage.getItem('auth_failed_attempts');
+        return stored ? parseInt(stored, 10) : 0;
+    });
+    const [lockoutUntil, setLockoutUntil] = useState(() => {
+        const stored = localStorage.getItem('auth_lockout_until');
+        return stored ? parseInt(stored, 10) : 0;
+    });
+    const [lockoutRemaining, setLockoutRemaining] = useState(0);
+    
     // Backup Setup State
     const [backupPassword, setBackupPassword] = useState('');
     const [confirmBackupPassword, setConfirmBackupPassword] = useState('');
@@ -49,6 +60,33 @@ export default function Auth() {
     const [showPassword, setShowPassword] = useState(false);
     // [NEW] Track focus for username requirements visibility
     const [isUsernameFocused, setIsUsernameFocused] = useState(false);
+    
+    // [NEW] Rate limiting constants
+    const MAX_ATTEMPTS = 5;
+    const LOCKOUT_DURATION = 30; // seconds
+
+    // [NEW] Countdown timer effect
+    useEffect(() => {
+        if (lockoutUntil <= Date.now()) {
+            setLockoutRemaining(0);
+            return;
+        }
+        
+        const updateRemaining = () => {
+            const remaining = Math.ceil((lockoutUntil - Date.now()) / 1000);
+            if (remaining <= 0) {
+                setLockoutRemaining(0);
+                setLockoutUntil(0);
+                localStorage.removeItem('auth_lockout_until');
+            } else {
+                setLockoutRemaining(remaining);
+            }
+        };
+        
+        updateRemaining();
+        const interval = setInterval(updateRemaining, 1000);
+        return () => clearInterval(interval);
+    }, [lockoutUntil]);
 
     // Debounce Username Check
     // Debounce Username Check
@@ -114,6 +152,13 @@ export default function Auth() {
     const handleSubmit = async (e) => {
         e.preventDefault();
         setError('');
+        
+        // [NEW] Check if locked out
+        if (lockoutRemaining > 0) {
+            setError(`Too many attempts. Please wait ${lockoutRemaining} seconds.`);
+            return;
+        }
+        
         setIsSubmitting(true);
 
         if (view === 'signup') {
@@ -154,27 +199,75 @@ export default function Auth() {
 
             const endpoint = view === 'login' ? '/api/auth/login' : '/api/auth/signup';
             
-            // [OPTIMIZATION] Bundle Device Identity with Login
-            let identityPayload = {};
+            // [OPTIMIZATION] For login: Start API call immediately, fetch crypto keys in parallel
             if (view === 'login') {
-                try {
-                    // Keys should be pre-warmed by AuthContext, so this is fast
-                    const deviceId = cryptoManager.deviceId;
-                    const publicKey = await cryptoManager.getPublicKey();
-                    const signingPublicKey = await cryptoManager.getSigningPublicKey();
-                    
-                    if (deviceId && publicKey) {
-                        identityPayload = { deviceId, publicKey, signingPublicKey };
-                    }
-                } catch (e) {
-                    console.warn('[Login] Failed to bundle identity:', e);
+                // Start both operations in parallel for maximum speed
+                const [apiResponse, cryptoKeys] = await Promise.all([
+                    // 1. Start login API call immediately (don't wait for crypto)
+                    fetch(`${import.meta.env.VITE_API_URL}${endpoint}`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(formData)
+                    }),
+                    // 2. Fetch crypto keys in parallel (these are pre-warmed, so fast)
+                    (async () => {
+                        try {
+                            return {
+                                deviceId: cryptoManager.deviceId,
+                                publicKey: await cryptoManager.getPublicKey(),
+                                signingPublicKey: await cryptoManager.getSigningPublicKey()
+                            };
+                        } catch (e) {
+                            console.warn('[Login] Crypto keys not ready:', e);
+                            return null;
+                        }
+                    })()
+                ]);
+
+                const data = await apiResponse.json();
+                if (!apiResponse.ok) throw new Error(data.error || 'Something went wrong');
+
+                // [NEW] Track Last Used Login Method
+                localStorage.setItem('last_login_method', 'password');
+
+                // Register device in background (non-blocking) if we have keys
+                if (cryptoKeys?.deviceId && cryptoKeys?.publicKey) {
+                    fetch(`${import.meta.env.VITE_API_URL}/api/auth/device`, {
+                        method: 'POST',
+                        headers: { 
+                            'Content-Type': 'application/json',
+                            'Authorization': `Bearer ${data.token}`
+                        },
+                        body: JSON.stringify(cryptoKeys)
+                    }).catch(e => console.warn('[Login] Background device registration failed:', e));
                 }
+
+                login(data.token, data.user, false);
+
+                // Check for pending invite logic...
+                const pendingInvite = localStorage.getItem('pendingInvite');
+                if (pendingInvite) {
+                    try {
+                        const { type, value } = JSON.parse(pendingInvite);
+                        localStorage.removeItem('pendingInvite');
+                        if (type === 'group') navigate(`/dashboard?joinCode=${value}`);
+                        else if (type === 'direct') navigate(`/dashboard?chatUser=${value}`);
+                        else navigate('/');
+                        return;
+                    } catch (e) {
+                        console.error('Invalid pending invite', e);
+                    }
+                }
+
+                navigate('/');
+                return;
             }
 
+            // Signup flow (unchanged)
             const res = await fetch(`${import.meta.env.VITE_API_URL}${endpoint}`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ ...formData, ...identityPayload }) // Bundle it!
+                body: JSON.stringify(formData)
             });
             
             const data = await res.json();
@@ -189,9 +282,6 @@ export default function Auth() {
                 setIsSubmitting(false);
                 return;
             }
-
-            // [NEW] Track Last Used Login Method
-            localStorage.setItem('last_login_method', 'password');
 
             login(data.token, data.user, view === 'signup');
 
@@ -213,6 +303,23 @@ export default function Auth() {
             navigate('/');
         } catch (err) {
             setError(err.message);
+            
+            // [NEW] Track failed attempts for login only
+            if (view === 'login') {
+                const newAttempts = failedAttempts + 1;
+                setFailedAttempts(newAttempts);
+                localStorage.setItem('auth_failed_attempts', newAttempts.toString());
+                
+                if (newAttempts >= MAX_ATTEMPTS) {
+                    const lockUntil = Date.now() + (LOCKOUT_DURATION * 1000);
+                    setLockoutUntil(lockUntil);
+                    localStorage.setItem('auth_lockout_until', lockUntil.toString());
+                    setFailedAttempts(0);
+                    localStorage.setItem('auth_failed_attempts', '0');
+                    setError(`Too many failed attempts. Please wait ${LOCKOUT_DURATION} seconds.`);
+                }
+            }
+            
             setIsSubmitting(false);
         }
     };
@@ -438,7 +545,31 @@ export default function Auth() {
                         </p>
                     </div>
 
-                    {error && (
+                    {/* [NEW] Lockout Timer Display */}
+                    {lockoutRemaining > 0 && (
+                        <div className="bg-amber-500/10 border border-amber-500/30 p-4 rounded-xl animate-pulse">
+                            <div className="flex items-center gap-3 mb-3">
+                                <div className="w-10 h-10 rounded-full bg-amber-500/20 flex items-center justify-center">
+                                    <span className="material-symbols-outlined text-amber-500 text-xl">hourglass_top</span>
+                                </div>
+                                <div>
+                                    <h4 className="text-amber-400 font-bold text-sm">Too Many Attempts</h4>
+                                    <p className="text-amber-500/70 text-xs">Please wait before trying again</p>
+                                </div>
+                            </div>
+                            <div className="relative h-2 bg-slate-800 rounded-full overflow-hidden">
+                                <div 
+                                    className="absolute inset-y-0 left-0 bg-gradient-to-r from-amber-500 to-orange-500 rounded-full transition-all duration-1000"
+                                    style={{ width: `${(lockoutRemaining / LOCKOUT_DURATION) * 100}%` }}
+                                />
+                            </div>
+                            <p className="text-center text-amber-400 font-mono font-bold text-lg mt-2">
+                                {lockoutRemaining}s
+                            </p>
+                        </div>
+                    )}
+
+                    {error && !lockoutRemaining && (
                         <div className="bg-red-500/10 border border-red-500/20 text-red-400 p-4 rounded-xl text-sm flex items-center gap-3">
                             <span className="material-symbols-outlined text-xl">error</span>
                             {error}
@@ -619,6 +750,24 @@ export default function Auth() {
                         </div>
                     ) : (
                         <form onSubmit={handleSubmit} className="space-y-6">
+                            {/* Display Name Field */}
+                            {view === 'signup' && (
+                                <div className="space-y-2">
+                                    <label className="text-sm font-medium text-slate-300">Display Name</label>
+                                    <div className="relative">
+                                        <input 
+                                            type="text" 
+                                            className="w-full bg-slate-900/50 text-white rounded-xl pl-10 pr-4 py-3 focus:outline-none focus:ring-2 focus:ring-violet-500/50 border border-slate-800 focus:border-violet-500/50 transition-all placeholder:text-slate-600"
+                                            placeholder="Shadow"
+                                            value={formData.displayName}
+                                            onChange={e => setFormData({...formData, displayName: e.target.value})}
+                                            required={view === 'signup'}
+                                        />
+                                        <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 text-lg">badge</span>
+                                    </div>
+                                </div>
+                            )}
+
                             {/* Username Field */}
                             <div className="space-y-2">
                                 <label className="text-sm font-medium text-slate-300">Username</label>
@@ -804,14 +953,19 @@ export default function Auth() {
                             
                             <button 
                                 type="submit" 
-                                disabled={isSubmitting || (view === 'signup' && (usernameStatus !== 'available' || !passwordValid))}
+                                disabled={isSubmitting || lockoutRemaining > 0 || (view === 'signup' && (usernameStatus !== 'available' || !passwordValid))}
                                 className={`w-full font-bold py-3.5 rounded-xl transition-all duration-200 shadow-lg flex items-center justify-center gap-2 ${
-                                    isSubmitting || (view === 'signup' && (usernameStatus !== 'available' || !passwordValid))
+                                    isSubmitting || lockoutRemaining > 0 || (view === 'signup' && (usernameStatus !== 'available' || !passwordValid))
                                     ? 'bg-slate-800 text-slate-500 cursor-not-allowed'
                                     : 'bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 text-white shadow-violet-500/20 transform hover:scale-[1.01] active:scale-[0.99]'
                                 }`}
                             >
-                                {isSubmitting ? (
+                                {lockoutRemaining > 0 ? (
+                                    <>
+                                        <span className="material-symbols-outlined text-lg">timer</span>
+                                        Try again in {lockoutRemaining}s
+                                    </>
+                                ) : isSubmitting ? (
                                     <>
                                         <span className="material-symbols-outlined text-lg animate-spin">progress_activity</span>
                                         {view === 'login' ? 'Signing In...' : view === 'signup' ? 'Creating Account...' : 'Resetting...'}

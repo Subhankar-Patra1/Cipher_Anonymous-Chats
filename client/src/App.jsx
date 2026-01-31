@@ -16,12 +16,16 @@ import CompleteProfile from './pages/CompleteProfile'; // [NEW]
 
 
 const PrivateRoute = ({ children }) => {
-    const { user } = useAuth();
+    const { user, loading, token } = useAuth();
+    // [FIX] If loading or have token (validating), don't redirect yet
+    if (loading || (!user && token)) return null;
     return user ? children : <Navigate to="/auth" />;
 };
 
 const PublicRoute = ({ children }) => {
-    const { user } = useAuth();
+    const { user, loading, token } = useAuth();
+    // [FIX] If loading or have token (validating), don't show public page yet - prevents flash
+    if (loading || (!user && token)) return null;
     // If user is logged in, redirect to dashboard, otherwise show public content
     return user ? <Navigate to="/dashboard" /> : children;
 };

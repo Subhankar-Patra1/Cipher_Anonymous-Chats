@@ -81,10 +81,11 @@ const AppLockSetting = () => {
     );
 };
 
-export default function ProfilePanel({ isOpen = true, userId, roomId, onClose, onActionSuccess, onGoToMessage, onRequestSync, showRestoreOption, socket, onMessageUser }) {
+export default function ProfilePanel({ isOpen = true, userId, roomId, onClose, onActionSuccess, onGoToMessage, onRequestSync, showRestoreOption, hasSkippedSync, socket, onMessageUser }) {
     const { token, user: currentUser, updateUser, logout } = useAuth();
     const { presenceMap, fetchStatuses } = usePresence();
-    const { initiateCall } = useCall();
+    const { initiateCall, callStatus } = useCall();
+    const isCallActive = callStatus !== 'idle' && callStatus !== 'ended';
     const { 
         isSupported: notificationsSupported, 
         permission: notificationPermission, 
@@ -586,9 +587,13 @@ export default function ProfilePanel({ isOpen = true, userId, roomId, onClose, o
                         last_message_id: null,
                         last_message_content: null,
                         last_message_plaintext: null,
+                        last_message_ciphertext: null,
+                        last_message_iv: null,
                         last_message_type: null,
                         last_message_sender_id: null,
-                        last_message_created_at: null
+                        last_message_created_at: null,
+                        last_message_reactions: null,
+                        latest_reaction: null
                     });
                 } catch (e) {
                     console.warn('Could not clear Dexie cache:', e);
@@ -614,6 +619,26 @@ export default function ProfilePanel({ isOpen = true, userId, roomId, onClose, o
 
             if (res.ok) {
                 setConfirmModal(null);
+                
+                // [FIX] Clear local Dexie cache for this room
+                try {
+                    await db.messages.where('room_id').equals(String(roomId)).delete();
+                    await db.rooms.update(roomId, {
+                        last_message_id: null,
+                        last_message_content: null,
+                        last_message_plaintext: null,
+                        last_message_ciphertext: null,
+                        last_message_iv: null,
+                        last_message_type: null,
+                        last_message_sender_id: null,
+                        last_message_created_at: null,
+                        last_message_reactions: null,
+                        latest_reaction: null
+                    });
+                } catch (e) {
+                    console.warn('Could not clear Dexie cache on delete:', e);
+                }
+
                 onClose(); // Close panel first
                 if (onActionSuccess) onActionSuccess('delete');
             }
@@ -806,7 +831,7 @@ export default function ProfilePanel({ isOpen = true, userId, roomId, onClose, o
                         </div>
                      </div>
                 ) : (
-                <div className="flex-1 overflow-y-auto custom-scrollbar bg-white dark:bg-slate-900 transition-colors">
+                <div className={`flex-1 custom-scrollbar bg-white dark:bg-slate-900 transition-colors ${showCreateBackup ? 'overflow-hidden' : 'overflow-y-auto'}`}>
                     {/* Profile Header */}
                     <div className="p-6 flex flex-col items-center border-b border-slate-200/50 dark:border-slate-800/50 bg-gray-50/30 dark:bg-slate-900 transition-colors">
                          {/* Avatar with Photo Count */}
@@ -1041,23 +1066,27 @@ export default function ProfilePanel({ isOpen = true, userId, roomId, onClose, o
                                 </button>
 
                                 <button 
-                                    onClick={() => initiateCall(userId, roomId, 'audio', profile.display_name, profile.avatar_url)}
-                                    className="flex flex-col items-center gap-1.5 group"
+                                    onClick={() => !isCallActive && initiateCall(userId, roomId, 'audio', profile.display_name, profile.avatar_url)}
+                                    className={`flex flex-col items-center gap-1.5 group ${isCallActive ? 'cursor-not-allowed' : ''}`}
+                                    disabled={isCallActive}
+                                    title={isCallActive ? "Call in progress" : "Audio Call"}
                                 >
-                                    <div className="w-12 h-12 rounded-full bg-slate-100 dark:bg-slate-800 flex items-center justify-center text-emerald-500 group-hover:bg-emerald-500 group-hover:text-white transition-all shadow-sm">
-                                        <span className="material-symbols-outlined text-[24px]">call</span>
+                                    <div className={`w-12 h-12 rounded-full bg-slate-100 dark:bg-slate-800 flex items-center justify-center ${isCallActive ? 'text-slate-400' : 'text-emerald-500 group-hover:bg-emerald-500 group-hover:text-white'} transition-all shadow-sm`}>
+                                        <span className={`material-symbols-outlined text-[24px] ${isCallActive ? 'opacity-50' : ''}`}>call</span>
                                     </div>
-                                    <span className="text-[11px] font-bold text-slate-500 dark:text-slate-400 group-hover:text-emerald-500 transition-colors">Audio</span>
+                                    <span className={`text-[11px] font-bold ${isCallActive ? 'text-slate-400' : 'text-slate-500 dark:text-slate-400 group-hover:text-emerald-500'} transition-colors`}>Audio</span>
                                 </button>
 
                                 <button 
-                                    onClick={() => initiateCall(userId, roomId, 'video', profile.display_name, profile.avatar_url)}
-                                    className="flex flex-col items-center gap-1.5 group"
+                                    onClick={() => !isCallActive && initiateCall(userId, roomId, 'video', profile.display_name, profile.avatar_url)}
+                                    className={`flex flex-col items-center gap-1.5 group ${isCallActive ? 'cursor-not-allowed' : ''}`}
+                                    disabled={isCallActive}
+                                    title={isCallActive ? "Call in progress" : "Video Call"}
                                 >
-                                    <div className="w-12 h-12 rounded-full bg-slate-100 dark:bg-slate-800 flex items-center justify-center text-emerald-500 group-hover:bg-emerald-500 group-hover:text-white transition-all shadow-sm">
-                                        <span className="material-symbols-outlined text-[24px]">videocam</span>
+                                    <div className={`w-12 h-12 rounded-full bg-slate-100 dark:bg-slate-800 flex items-center justify-center ${isCallActive ? 'text-slate-400' : 'text-emerald-500 group-hover:bg-emerald-500 group-hover:text-white'} transition-all shadow-sm`}>
+                                        <span className={`material-symbols-outlined text-[24px] ${isCallActive ? 'opacity-50' : ''}`}>videocam</span>
                                     </div>
-                                    <span className="text-[11px] font-bold text-slate-500 dark:text-slate-400 group-hover:text-emerald-500 transition-colors">Video</span>
+                                    <span className={`text-[11px] font-bold ${isCallActive ? 'text-slate-400' : 'text-slate-500 dark:text-slate-400 group-hover:text-emerald-500'} transition-colors`}>Video</span>
                                 </button>
                             </div>
                         )}
@@ -1328,7 +1357,7 @@ export default function ProfilePanel({ isOpen = true, userId, roomId, onClose, o
                                     <span className="material-symbols-outlined text-slate-400 group-hover:text-blue-500 transition-colors text-[20px]">chevron_right</span>
                                 </button>
                                 
-                                 {showRestoreOption && (
+                                 {(showRestoreOption || hasSkippedSync) && (
                                     <button 
                                         onClick={onRequestSync}
                                         className="w-full flex items-center justify-between group"
@@ -1349,19 +1378,6 @@ export default function ProfilePanel({ isOpen = true, userId, roomId, onClose, o
 
                             </div>
                         </div>
-                    )}
-
-                    {isMe && (
-                        <CreateBackupModal 
-                            isOpen={showCreateBackup}
-                            onClose={() => setShowCreateBackup(false)}
-                            token={token}
-                            hasActiveBackup={hasActiveBackup}
-                            onBackupSuccess={() => {
-                                setHasActiveBackup(true);
-                                showNotification(hasActiveBackup ? 'Cloud backup updated successfully!' : 'Cloud backup created successfully!', 'success');
-                            }}
-                        />
                     )}
 
                     {/* [NEW] Starred Messages Button */}
@@ -1389,7 +1405,8 @@ export default function ProfilePanel({ isOpen = true, userId, roomId, onClose, o
                     )}
 
 
-                    {/* Groups in Common */}
+                    {/* Groups in Common - Only show for other users, not for self */}
+                    {!isMe && (
                     <div className="p-4 border-b border-slate-200/50 dark:border-slate-800/50 transition-colors">
                         <div className="flex items-center justify-between mb-3">
                             <h3 className="text-slate-500 text-xs font-bold uppercase tracking-wider flex justify-between items-center">
@@ -1434,11 +1451,12 @@ export default function ProfilePanel({ isOpen = true, userId, roomId, onClose, o
                             <p className="text-slate-500 dark:text-slate-600 text-sm italic">No groups in common</p>
                         )}
                     </div>
+                    )}
 
 
 
                      {/* [NEW] Restore Option (Visible on all profiles if skipped sync) - Removed redundant duplicate for non-me as it should ideally be in one place or logic unified */}
-                    {!isMe && showRestoreOption && (
+                    {!isMe && (showRestoreOption || hasSkippedSync) && (
                         <div className="p-4 border-b border-slate-100 dark:border-slate-800">
                             <button 
                                 onClick={onRequestSync}
@@ -1588,6 +1606,21 @@ export default function ProfilePanel({ isOpen = true, userId, roomId, onClose, o
                         )}
                     </div>
                     </div>
+                )}
+            
+                {/* Backup Modal - renders at panel level to overlay content */}
+                {isMe && showCreateBackup && (
+                    <CreateBackupModal 
+                        isOpen={showCreateBackup}
+                        onClose={() => setShowCreateBackup(false)}
+                        token={token}
+                        hasActiveBackup={hasActiveBackup}
+                        onBackupSuccess={() => {
+                            setHasActiveBackup(true);
+                            showNotification(hasActiveBackup ? 'Cloud backup updated successfully!' : 'Cloud backup created successfully!', 'success');
+                            if (onActionSuccess) onActionSuccess('backup_created');
+                        }}
+                    />
                 )}
             </div>
 

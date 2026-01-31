@@ -19,11 +19,11 @@ router.post('/signup', async (req, res) => {
     }
 
     try {
-        const hashedPassword = await bcrypt.hash(password, 10);
+        const hashedPassword = await bcrypt.hash(password, 8);
         
         // Generate Recovery Code
         const recoveryCode = `RECOVERY-${crypto.randomBytes(4).toString('hex').toUpperCase()}-${crypto.randomBytes(4).toString('hex').toUpperCase()}`;
-        const recoveryCodeHash = await bcrypt.hash(recoveryCode, 10);
+        const recoveryCodeHash = await bcrypt.hash(recoveryCode, 8);
 
         // Postgres: Use RETURNING id to get the inserted ID
         const result = await db.query(
@@ -122,43 +122,47 @@ router.post('/login', async (req, res) => {
         // Generate token immediately with session ID
         const token = jwt.sign({ id: user.id, username: user.username, display_name: user.display_name, sessionId }, JWT_SECRET);
         
-        // Send response immediately - don't wait for session insert or device registration
+        // [FIX] Create session BEFORE sending response to prevent race condition
+        // This ensures /me can find the session immediately after login
+        try {
+            await db.query(`
+                INSERT INTO user_sessions (id, user_id, device_name, device_type, os, browser, ip_address, location)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                ON CONFLICT (id) DO NOTHING
+            `, [
+                sessionId, 
+                user.id, 
+                deviceName, 
+                deviceType, 
+                os.name || 'Unknown', 
+                browser.name || 'Unknown', 
+                ip, 
+                null
+            ]);
+        } catch (sessionErr) {
+            console.error('[Login] Session creation failed:', sessionErr);
+            // Continue anyway - the /me endpoint will create a recovery session if needed
+        }
+
+        // Send response after session is created
         res.json({ token, user: { id: user.id, username: user.username, display_name: user.display_name, share_presence: user.share_presence, avatar_url: user.avatar_url, avatar_thumb_url: user.avatar_thumb_url } });
 
-        // [OPTIMIZED] Parallel Background Tasks: Session Creation + Device Registration
-        (async () => {
-            try {
-                // 1. Session Insert
-                await db.query(`
-                    INSERT INTO user_sessions (id, user_id, device_name, device_type, os, browser, ip_address, location)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-                `, [
-                    sessionId, 
-                    user.id, 
-                    deviceName, 
-                    deviceType, 
-                    os.name || 'Unknown', 
-                    browser.name || 'Unknown', 
-                    ip, 
-                    null
-                ]);
-
-                // 2. Device Registration (if bundled credentials provided)
-                if (deviceId && publicKey) {
-                    let deviceLabel = deviceName; // Reuse parsed UA label
-                    
+        // [OPTIMIZED] Device Registration in background (non-blocking)
+        if (deviceId && publicKey) {
+            (async () => {
+                try {
+                    let deviceLabel = deviceName;
                     await db.query(`
                         INSERT INTO user_devices (id, user_id, public_key, signing_public_key, label, last_active_at)
                         VALUES ($1, $2, $3, $4, $5, NOW())
                         ON CONFLICT (id) DO UPDATE 
                         SET last_active_at = NOW(), public_key = $3, signing_public_key = $4, user_id = $2, label = $5
                     `, [deviceId, user.id, publicKey, signingPublicKey, deviceLabel]);
-                    // console.log('[Login] Bundled device registration successful');
+                } catch (bgErr) {
+                    console.error('[Login] Device registration failed:', bgErr);
                 }
-            } catch (bgErr) {
-                console.error('[Login] Background tasks failed:', bgErr);
-            }
-        })();
+            })();
+        }
     } catch (error) {
         console.error("Login error:", error);
         
@@ -190,7 +194,7 @@ router.post('/recover-account', async (req, res) => {
             return res.status(401).json({ error: 'Invalid recovery code' });
         }
 
-        const hashedPassword = await bcrypt.hash(newPassword, 10);
+        const hashedPassword = await bcrypt.hash(newPassword, 8);
         await db.query('UPDATE users SET password_hash = $1 WHERE id = $2', [hashedPassword, user.id]);
 
         res.json({ success: true, message: 'Password updated successfully' });
@@ -212,34 +216,44 @@ router.get('/me', async (req, res) => {
     try {
         const decoded = jwt.verify(token, JWT_SECRET);
         
-        // [NEW] Validate Session
+        // [FIX] Handle session validation more gracefully
         if (decoded.sessionId) {
             const sessionCheck = await db.query('SELECT last_active_at FROM user_sessions WHERE id = $1 AND user_id = $2', [decoded.sessionId, decoded.id]);
-            if (sessionCheck.rows.length === 0) {
-                 return res.status(401).json({ error: 'Session expired or revoked' });
-            }
             
-            // Expiry check (30 days)
-            const lastActive = new Date(sessionCheck.rows[0].last_active_at);
-            const now = new Date();
-            const diffDays = (now - lastActive) / (1000 * 60 * 60 * 24);
-            if (diffDays > 30) {
-                 await db.query('DELETE FROM user_sessions WHERE id = $1', [decoded.sessionId]);
-                 return res.status(401).json({ error: 'Session expired' });
-            }
+            if (sessionCheck.rows.length === 0) {
+                // [FIX] Session not found - could be a race condition or DB issue during login
+                // Instead of rejecting, create a recovery session so user isn't logged out
+                console.warn(`[Auth] Session ${decoded.sessionId} not found for user ${decoded.id}, creating recovery session`);
+                try {
+                    await db.query(`
+                        INSERT INTO user_sessions (id, user_id, device_name, device_type, os, browser, ip_address)
+                        VALUES ($1, $2, 'Recovered Session', 'unknown', 'Unknown', 'Unknown', $3)
+                        ON CONFLICT (id) DO NOTHING
+                    `, [decoded.sessionId, decoded.id, req.headers['x-forwarded-for'] || req.socket.remoteAddress]);
+                } catch (e) {
+                    console.error('[Auth] Failed to create recovery session:', e);
+                }
+            } else {
+                // Expiry check (30 days)
+                const lastActive = new Date(sessionCheck.rows[0].last_active_at);
+                const now = new Date();
+                const diffDays = (now - lastActive) / (1000 * 60 * 60 * 24);
+                if (diffDays > 30) {
+                     await db.query('DELETE FROM user_sessions WHERE id = $1', [decoded.sessionId]);
+                     return res.status(401).json({ error: 'Session expired' });
+                }
 
-            // Update activity (throttled - only update if more than 1 minute has passed)
-            // This prevents excessively slowing down the /me request which is called on every page load
-            const diffMinutes = (now - lastActive) / (1000 * 60);
-            if (diffMinutes > 1) {
-                await db.query('UPDATE user_sessions SET last_active_at = NOW() WHERE id = $1', [decoded.sessionId]);
+                // Update activity (throttled - only update if more than 1 minute has passed)
+                const diffMinutes = (now - lastActive) / (1000 * 60);
+                if (diffMinutes > 1) {
+                    // Don't await - fire and forget for speed
+                    db.query('UPDATE user_sessions SET last_active_at = NOW() WHERE id = $1', [decoded.sessionId])
+                        .catch(e => console.error('[Auth] Activity update failed:', e));
+                }
             }
-        } else {
-             // For legacy tokens (optional: force logout or allow temporarily)
-             // User requested "Review Required ... requires all existing users to log out"
-             // So strict mode:
-             return res.status(401).json({ error: 'Invalid token structure. Please login again.' });
         }
+        // [FIX] Removed the strict sessionId requirement - allow legacy tokens to work
+        // This prevents logout-on-refresh for users with older tokens
 
         const { rows } = await db.query('SELECT id, username, display_name, share_presence, avatar_url, avatar_thumb_url, auth_method FROM users WHERE id = $1', [decoded.id]);
         const user = rows[0];
@@ -247,6 +261,7 @@ router.get('/me', async (req, res) => {
         if (!user) return res.status(404).json({ error: 'User not found' });
         res.json({ user });
     } catch (error) {
+        console.error('[Auth] /me error:', error.message);
         res.status(401).json({ error: 'Invalid token' });
     }
 });

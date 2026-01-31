@@ -141,8 +141,8 @@ export default function CreateBackupModal({ isOpen, onClose, token, onBackupSucc
     };
 
     return (
-        <div className={`fixed inset-0 bg-white dark:bg-slate-900 flex items-start md:items-center justify-center z-[200] p-4 overflow-y-auto transition-opacity duration-300 ${isExiting ? 'opacity-0' : 'opacity-100'}`}>
-            <div className={`p-6 w-full max-w-md relative my-auto transition-all duration-300 ${isExiting ? 'scale-95 opacity-0' : 'scale-100 opacity-100'} ${!isExiting && 'scale-in'}`}>
+        <div className={`absolute inset-0 bg-white dark:bg-slate-900 flex flex-col z-[60] overflow-y-auto transition-opacity duration-300 ${isExiting ? 'opacity-0' : 'opacity-100'}`}>
+            <div className={`p-6 pb-10 w-full transition-all duration-300 ${isExiting ? 'scale-95 opacity-0' : 'scale-100 opacity-100'} ${!isExiting && 'scale-in'}`}>
                 {/* Back Button */}
                 {!showSuccess && (
                     <button 
@@ -242,13 +242,13 @@ export default function CreateBackupModal({ isOpen, onClose, token, onBackupSucc
                                 <div className="mt-2 space-y-1">
                                     <p className={`text-[10px] flex items-center gap-1.5 font-medium transition-colors ${password.length >= 8 ? 'text-emerald-600 dark:text-emerald-500' : 'text-slate-500'}`}>
                                         <span className="material-symbols-outlined text-[14px]">
-                                            {password.length >= 8 ? 'check_circle' : 'circle'}
+                                            {password.length >= 8 ? 'check_circle' : 'radio_button_unchecked'}
                                         </span>
                                         Minimum 8 characters
                                     </p>
                                     <p className={`text-[10px] flex items-center gap-1.5 font-medium transition-colors ${/[0-9]/.test(password) ? 'text-emerald-600 dark:text-emerald-500' : 'text-slate-500'}`}>
                                         <span className="material-symbols-outlined text-[14px]">
-                                            {/[0-9]/.test(password) ? 'check_circle' : 'circle'}
+                                            {/[0-9]/.test(password) ? 'check_circle' : 'radio_button_unchecked'}
                                         </span>
                                         At least one number
                                     </p>

@@ -5,6 +5,7 @@ import PickerPanel from './PickerPanel';
 import ContentEditable from 'react-contenteditable';
 import { linkifyText, textToHtml } from '../utils/linkify';
 import { renderTextWithEmojis } from '../utils/emojiRenderer';
+import db from '../utils/db';
 
 import AvatarEditorModal from './AvatarEditorModal';
 import GroupPermissionsView from './GroupPermissionsView';
@@ -682,6 +683,25 @@ export default function GroupInfoModal({ room, onClose, onLeave, onKick, socket,
                                             body: JSON.stringify({ deleteMedia: deleteMediaInfo }) // [NEW] Pass flag
                                         });
                                         if (res.ok) {
+                                            // [FIX] Clear local Dexie cache for this room
+                                            try {
+                                                await db.messages.where('room_id').equals(String(room.id)).delete();
+                                                await db.rooms.update(room.id, {
+                                                    last_message_id: null,
+                                                    last_message_content: null,
+                                                    last_message_plaintext: null,
+                                                    last_message_ciphertext: null,
+                                                    last_message_iv: null,
+                                                    last_message_type: null,
+                                                    last_message_sender_id: null,
+                                                    last_message_created_at: null,
+                                                    last_message_reactions: null,
+                                                    latest_reaction: null
+                                                });
+                                            } catch (e) {
+                                                console.warn('Could not clear Dexie cache on clear:', e);
+                                            }
+
                                             // Handle success
                                             setIsClearModalOpen(false);
                                             setMediaRefreshKey(k => k + 1); // [NEW] Force SharedMedia refetch

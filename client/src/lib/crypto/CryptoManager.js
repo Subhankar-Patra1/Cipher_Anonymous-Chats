@@ -709,13 +709,21 @@ class CryptoManager {
         await saveBulkRoomKeys(deserializedRoomKeys);
         await saveBulkTrustedKeys(trustedKeys);
         
-        // Clear in-memory cache to force refresh from DB
+        // Clear ALL in-memory caches to force refresh from DB
         this.roomKeyCache.clear();
+        this.keyDistributionLog.clear();
         
         console.log(`[Crypto] Successfully synced ${roomKeys.length} room keys and ${trustedKeys.length} trusted keys.`);
+        console.log('[Crypto] Caches cleared. Dispatching cipher:keys-updated event...');
         
-        // [NEW] Notify UI
-        window.dispatchEvent(new CustomEvent('cipher:keys-updated', { detail: { type: 'bulk-import' } }));
+        // [ENHANCED] Notify UI with key counts for debugging
+        window.dispatchEvent(new CustomEvent('cipher:keys-updated', { 
+            detail: { 
+                type: 'bulk-import',
+                roomKeyCount: roomKeys.length,
+                trustedKeyCount: trustedKeys.length
+            } 
+        }));
     }
 
     /**

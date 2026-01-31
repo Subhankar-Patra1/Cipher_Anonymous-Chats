@@ -148,22 +148,28 @@ export default function ChatWindow({
     typingByRoom, // [NEW]
     onOpenMainProfile, // [NEW]
     onOpenProfile, // [NEW]
+    historyHiddenAt // [NEW]
 }) {
     const { token } = useAuth();
     const { presenceMap, fetchStatuses } = usePresence();
     const { showNotification } = useNotification();
-    const { initiateCall } = useCall();
+    const { initiateCall, callStatus } = useCall();
+    const isCallActive = callStatus !== 'idle' && callStatus !== 'ended';
 
 
     // [NEW] Capture restore state on mount
     // We utilize the fact that ChatWindow is remounted on room change (key={room.id} in parent)
     const [isRestoreAnimation, setIsRestoreAnimation] = useState(justRestored);
     
+    // [FIX] Force refresh key for useLiveQuery - increment to force re-query after decryption
+    const [refreshKey, setRefreshKey] = useState(0);
+    
     // [DEXIE] messages comes from useLiveQuery
     // [FIX] Removed '|| []' to distinguish between 'loading' (undefined) and 'empty' ([])
+    // [FIX] Added refreshKey to deps to force re-query after decryption
     const messages = useLiveQuery(
         () => db.messages.where('room_id').equals(String(room.id)).sortBy('created_at'),
-        [room.id]
+        [room.id, refreshKey]
     );
 
     // [NEW] Cache for Sender Signing Keys (deviceId -> publicKey)
@@ -525,45 +531,57 @@ export default function ChatWindow({
         // [NEW] Stale Guard for async decryption
         let isStale = false;
 
-        // If we have initial messages, hydrate and save them
-        if (room.initialMessages) {
-            Promise.all(room.initialMessages.map(m => decryptPayload(m))).then(async (decrypted) => {
-                if (isStale) return; 
-
-                const hydrated = normalizeReplies(decrypted, []);
-                const toSave = hydrated.map(m => ({ 
-                    ...m, 
-                    room_id: String(room.id)
-                    // [FIX] Don't force isDecrypted: true. decryptPayload sets it if successful.
-                }));
-                
-                await saveFetchedMessages(toSave);
-                
-                // Mark as ready ONLY after hydration is done
-                if (!isStale) setIsChatReady(true);
-            });
-        } else if (justRestored) {
-            // [NEW] If we just restored keys, re-decrypt the messages in the current room
-            (async () => {
+        const hydrateAndDecrypt = async () => {
+            // 1. Initial Hydration (if needed)
+            if (room.initialMessages) {
                 try {
-                    const localMsgs = await db.messages.where('room_id').equals(String(room.id)).toArray();
-                    const encrypted = localMsgs.filter(m => !m.isDecrypted);
+                    const decrypted = await Promise.all(room.initialMessages.map(m => decryptPayload(m)));
                     
-                    if (encrypted.length > 0) {
-                        console.log(`[Restore] Re-decrypting ${encrypted.length} messages for room ${room.id}`);
-                        const decrypted = await Promise.all(encrypted.map(async (m) => {
-                            const d = await decryptPayload(m);
-                            // [FIX] Don't force isDecrypted: true. Trust d.isDecrypted from decryptPayload.
-                            return { ...m, ...d }; // Ensure we keep original fields like id
-                        }));
-                        await db.messages.bulkPut(decrypted);
-                    }
-                } catch (err) {
-                    console.error('[Restore] Re-decryption failed:', err);
-                } finally {
-                    if (!isStale) setIsChatReady(true);
+                    if (isStale) return; 
+    
+                    const hydrated = normalizeReplies(decrypted, []);
+                    const toSave = hydrated.map(m => ({ 
+                        ...m, 
+                        room_id: String(room.id)
+                        // [FIX] Don't force isDecrypted: true. decryptPayload sets it if successful.
+                    }));
+                    
+                    await saveFetchedMessages(toSave);
+                } catch (e) {
+                    console.error("Hydration failed", e);
                 }
-            })();
+            }
+
+            // 2. [FIX] Re-decryption Check (Runs even if we just Hydrated)
+            // If justRestored is true, we force a check on local DB to decrypt anything that's still encrypted
+            if (justRestored) {
+               try {
+                   // Give a small delay for saveFetchedMessages to commit if we just hydrated
+                   if (room.initialMessages) await new Promise(r => setTimeout(r, 100));
+
+                   const localMsgs = await db.messages.where('room_id').equals(String(room.id)).toArray();
+                   const encrypted = localMsgs.filter(m => !m.isDecrypted || (m.ciphertext && !m.content));
+                   
+                   if (encrypted.length > 0) {
+                       console.log(`[Restore] Re-decrypting ${encrypted.length} messages for room ${room.id}`);
+                       const decrypted = await Promise.all(encrypted.map(async (m) => {
+                           // [FIX] Force re-decrypt
+                           const d = await decryptPayload(m);
+                           return { ...m, ...d }; 
+                       }));
+                       await db.messages.bulkPut(decrypted);
+                   }
+               } catch (err) {
+                   console.error('[Restore] Re-decryption failed:', err);
+               }
+            }
+            
+            // Mark as ready ONLY after all work is done
+            if (!isStale) setIsChatReady(true);
+        };
+
+        if (room.initialMessages || justRestored) {
+            hydrateAndDecrypt();
         } else {
             // No hydration needed, ready immediately (but useLiveQuery may still be loading)
             setIsChatReady(true);
@@ -583,14 +601,13 @@ export default function ChatWindow({
                 // Get all messages for this room from IndexedDB
                 const localMsgs = await db.messages.where('room_id').equals(String(room.id)).toArray();
                 
-                // Find messages that need decryption:
-                // - Has ciphertext (encrypted)
-                // - Not already decrypted OR has no content
+                // [FIX] Find ALL messages with ciphertext (force re-decrypt regardless of isDecrypted)
+                // This catches messages that failed to decrypt before keys were available
                 const needsDecryption = localMsgs.filter(m => 
-                    m.ciphertext && m.iv && (!m.isDecrypted || !m.content || m.content === '')
+                    m.ciphertext && m.iv
                 );
                 
-                console.log(`[ChatWindow] Found ${localMsgs.length} total msgs, ${needsDecryption.length} need decryption`);
+                console.log(`[ChatWindow] Found ${localMsgs.length} total msgs, ${needsDecryption.length} have ciphertext`);
                 
                 if (needsDecryption.length === 0) {
                     console.log('[ChatWindow] No messages need decryption');
@@ -603,7 +620,11 @@ export default function ChatWindow({
                 const decrypted = await Promise.all(needsDecryption.map(async (m) => {
                     try {
                         const d = await decryptPayload(m);
-                        console.log(`[ChatWindow] Message ${m.id}: decrypted=${d.isDecrypted}, hasContent=${!!d.content}`);
+                        if (d.isDecrypted && d.content) {
+                            console.log(`[ChatWindow] Message ${m.id}: SUCCESS - "${d.content.substring(0, 20)}..."`);
+                        } else {
+                            console.log(`[ChatWindow] Message ${m.id}: FAILED - isDecrypted=${d.isDecrypted}`);
+                        }
                         return { ...m, ...d }; // Merge keeping original fields like id
                     } catch (err) {
                         console.error(`[ChatWindow] Failed to decrypt message ${m.id}:`, err);
@@ -620,6 +641,10 @@ export default function ChatWindow({
                     // Update IndexedDB with decrypted messages
                     await db.messages.bulkPut(successfullyDecrypted);
                     console.log('[ChatWindow] Updated IndexedDB with decrypted messages');
+                    
+                    // [FIX] Force useLiveQuery to re-query by incrementing refreshKey
+                    setRefreshKey(prev => prev + 1);
+                    console.log('[ChatWindow] Triggered UI refresh');
                 }
             } catch (err) {
                 console.error('[ChatWindow] Re-decryption after key update failed:', err);
@@ -2442,28 +2467,28 @@ export default function ChatWindow({
                                 <button 
                                     onClick={() => {
                                         const isUnknown = room.type === 'direct' && !room.username && !room.display_name;
-                                        if (!isUnknown) {
+                                        if (!isUnknown && !isCallActive) {
                                             initiateCall(room.other_user_id || otherUserId, room.id, 'audio', room.name, room.avatar_url || room.avatar_thumb_url);
                                         }
                                     }}
-                                    className={`p-2 transition-all rounded-full ${(!room.username && !room.display_name) ? 'text-slate-300 dark:text-slate-700 cursor-not-allowed' : 'text-slate-400 hover:text-emerald-500 dark:hover:text-emerald-400'}`}
-                                    title={(!room.username && !room.display_name) ? "Cannot call deleted account" : (isBlockedByMe || isBlockedByThem) ? "Call unavailable" : "Voice Call"}
-                                    disabled={(!room.username && !room.display_name) || isBlockedByMe || isBlockedByThem}
+                                    className={`p-2 transition-all rounded-full ${(!room.username && !room.display_name) || isCallActive ? 'text-slate-300 dark:text-slate-700 cursor-not-allowed' : 'text-slate-400 hover:text-emerald-500 dark:hover:text-emerald-400'}`}
+                                    title={(!room.username && !room.display_name) ? "Cannot call deleted account" : isCallActive ? "Call in progress" : (isBlockedByMe || isBlockedByThem) ? "Call unavailable" : "Voice Call"}
+                                    disabled={(!room.username && !room.display_name) || isBlockedByMe || isBlockedByThem || isCallActive}
                                 >
-                                    <span className={`material-symbols-outlined ${isBlockedByMe || isBlockedByThem ? 'opacity-50' : ''}`}>call</span>
+                                    <span className={`material-symbols-outlined ${isBlockedByMe || isBlockedByThem || isCallActive ? 'opacity-50' : ''}`}>call</span>
                                 </button>
                                 <button 
                                     onClick={() => {
                                         const isUnknown = room.type === 'direct' && !room.username && !room.display_name;
-                                        if (!isUnknown && !isBlockedByMe && !isBlockedByThem) {
+                                        if (!isUnknown && !isBlockedByMe && !isBlockedByThem && !isCallActive) {
                                             initiateCall(room.other_user_id || otherUserId, room.id, 'video', room.name, room.avatar_url || room.avatar_thumb_url);
                                         }
                                     }}
-                                    className={`p-2 transition-all rounded-full ${(!room.username && !room.display_name) || isBlockedByMe || isBlockedByThem ? 'text-slate-300 dark:text-slate-700 cursor-not-allowed' : 'text-slate-400 hover:text-emerald-500 dark:hover:text-emerald-400'}`}
-                                    title={(!room.username && !room.display_name) ? "Cannot call deleted account" : (isBlockedByMe || isBlockedByThem) ? "Call unavailable" : "Video Call"}
-                                    disabled={(!room.username && !room.display_name) || isBlockedByMe || isBlockedByThem}
+                                    className={`p-2 transition-all rounded-full ${(!room.username && !room.display_name) || isBlockedByMe || isBlockedByThem || isCallActive ? 'text-slate-300 dark:text-slate-700 cursor-not-allowed' : 'text-slate-400 hover:text-emerald-500 dark:hover:text-emerald-400'}`}
+                                    title={(!room.username && !room.display_name) ? "Cannot call deleted account" : isCallActive ? "Call in progress" : (isBlockedByMe || isBlockedByThem) ? "Call unavailable" : "Video Call"}
+                                    disabled={(!room.username && !room.display_name) || isBlockedByMe || isBlockedByThem || isCallActive}
                                 >
-                                    <span className={`material-symbols-outlined ${isBlockedByMe || isBlockedByThem ? 'opacity-50' : ''}`}>videocam</span>
+                                    <span className={`material-symbols-outlined ${isBlockedByMe || isBlockedByThem || isCallActive ? 'opacity-50' : ''}`}>videocam</span>
                                 </button>
                             </>
                         )}
@@ -2629,7 +2654,9 @@ export default function ChatWindow({
                     onUnstar={handleUnstar}
                     // [NEW] Animation Prop
                     isRestoreAnimation={isRestoreAnimation}
-                    hasSkippedSync={hasSkippedSync} // [NEW]
+                    // [NEW] Only show filtered history banner if this room existed BEFORE the history was skipped
+                    // We subtract 60s buffer to account for potential server/client clock skew
+                    hasSkippedSync={hasSkippedSync && (!historyHiddenAt || new Date(room.created_at).getTime() < (historyHiddenAt - 60000))} // [NEW] 
                     onOpenProfile={(uid, rid, sync) => {
                         // If internal nav
                         if (uid) {
