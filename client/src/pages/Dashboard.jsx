@@ -1028,6 +1028,12 @@ export default function Dashboard() {
         // [NEW] Avatar Updates
         newSocket.on('user:avatar:updated', ({ userId, avatar_url, avatar_thumb_url }) => {
              console.log('[DEBUG] Avatar updated for user', userId, avatar_thumb_url);
+             
+             // Update global user state if it's us (multi-device sync)
+             if (user && String(userId) === String(user.id)) {
+                 updateUser({ avatar_url, avatar_thumb_url });
+             }
+
              setRooms(prev => prev.map(r => {
                  if (r.type === 'direct' && String(r.other_user_id) === String(userId)) {
                      return { ...r, avatar_thumb_url };
@@ -1044,6 +1050,11 @@ export default function Dashboard() {
         });
 
         newSocket.on('user:avatar:deleted', ({ userId }) => {
+             // Update global user state if it's us (multi-device sync)
+             if (user && String(userId) === String(user.id)) {
+                 updateUser({ avatar_url: null, avatar_thumb_url: null });
+             }
+
              setRooms(prev => prev.map(r => {
                  if (r.type === 'direct' && String(r.other_user_id) === String(userId)) {
                      return { ...r, avatar_thumb_url: null };
@@ -1536,38 +1547,48 @@ export default function Dashboard() {
             }
         });
 
-        // [NEW] User Profile Updates (Display Name)
-        newSocket.on('user:profile:updated', ({ userId, display_name }) => {
-            console.log('[DEBUG] User profile updated:', userId, display_name);
+        // [NEW] User Profile Updates (Display Name, Bio, Username)
+        newSocket.on('user:profile:updated', ({ userId, display_name, bio, username }) => {
+            console.log('[DEBUG] User profile updated:', userId, { display_name, bio, username });
             
-            if (String(userId) === String(user.id)) {
-                updateUser({ display_name });
+            if (user && String(userId) === String(user.id)) {
+                // [FIX] Only update fields that are actually present in the payload
+                const updates = {};
+                if (display_name !== undefined) updates.display_name = display_name;
+                if (bio !== undefined) updates.bio = bio;
+                if (username !== undefined) updates.username = username;
+                
+                if (Object.keys(updates).length > 0) {
+                    updateUser(updates);
+                }
             }
 
             // 1. Update Sidebar Rooms (for DMs)
-            setRooms(prev => prev.map(r => {
-                if (r.type === 'direct' && String(r.other_user_id) === String(userId)) {
-                    // Update the derived name for DMs
-                    return { 
-                        ...r, 
-                        name: display_name,
-                        other_user_name: display_name 
-                    };
-                }
-                return r;
-            }));
+            if (display_name !== undefined) {
+                setRooms(prev => prev.map(r => {
+                    if (r.type === 'direct' && String(r.other_user_id) === String(userId)) {
+                        // Update the derived name for DMs
+                        return { 
+                            ...r, 
+                            name: display_name,
+                            other_user_name: display_name 
+                        };
+                    }
+                    return r;
+                }));
 
-            // 2. Update Active Room if it is a DM with this user
-            setActiveRoom(prev => {
-                if (prev && prev.type === 'direct' && String(prev.other_user_id) === String(userId)) {
-                    return { 
-                        ...prev, 
-                        name: display_name,
-                        other_user_name: display_name 
-                    };
-                }
-                return prev;
-            });
+                // 2. Update Active Room if it is a DM with this user
+                setActiveRoom(prev => {
+                    if (prev && prev.type === 'direct' && String(prev.other_user_id) === String(userId)) {
+                        return { 
+                            ...prev, 
+                            name: display_name,
+                            other_user_name: display_name 
+                        };
+                    }
+                    return prev;
+                });
+            }
         });
         // --- [PHASE 1] KEY SYNC HANDLERS (GLOBAL) ---
         // --- [PHASE 1] KEY SYNC HANDLERS (GLOBAL) ---

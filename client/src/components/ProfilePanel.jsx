@@ -300,6 +300,12 @@ export default function ProfilePanel({ isOpen = true, userId, roomId, onClose, o
             if (res.ok) {
                 const data = await res.json();
                 setProfile(prev => ({ ...prev, bio: data.bio }));
+                
+                // [FIX] Update global user state so Sidebar and other components update immediately
+                if (isMe) {
+                    updateUser({ bio: data.bio });
+                }
+
                 setIsEditingBio(false);
                 setShowEmoji(false);
                 if (onActionSuccess) onActionSuccess('bio_update');
@@ -331,6 +337,12 @@ export default function ProfilePanel({ isOpen = true, userId, roomId, onClose, o
             if (res.ok) {
                 const data = await res.json();
                 setProfile(prev => ({ ...prev, display_name: data.display_name }));
+
+                // [FIX] Update global user state so Sidebar updates immediately
+                if (isMe) {
+                    updateUser({ display_name: data.display_name });
+                }
+
                 setIsEditingName(false);
                 setShowEmoji(false);
                 if (onActionSuccess) onActionSuccess('name_update');
