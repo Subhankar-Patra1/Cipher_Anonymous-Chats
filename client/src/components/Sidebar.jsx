@@ -705,7 +705,7 @@ export default function Sidebar({ rooms, activeRoom, onSelectRoom, loadingRoomId
                             {user.avatar_thumb_url ? (
                                 <img src={user.avatar_thumb_url} alt="Me" className="w-full h-full object-cover" />
                             ) : (
-                                user.display_name[0].toUpperCase()
+                                (user.display_name || user.username || '?')[0].toUpperCase()
                             )}
                         </div>
                         <div className="min-w-0 flex-1">
