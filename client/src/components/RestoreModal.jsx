@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { cryptoManager } from '../lib/crypto/CryptoManager';
+import db from '../utils/db';
 
 const PROGRESS_STEPS = [
     { id: 'fetching', label: 'Retrieving secure backup...', detail: 'Connecting to encrypted vault...' },
@@ -79,18 +80,41 @@ export default function RestoreModal({ isOpen, onClose, onSkip, onRestoreSuccess
             await new Promise(r => setTimeout(r, 1200));
 
             // 2. Decrypt bundle using password
-            const bundle = await cryptoManager.decryptBackup(
+            const rawBundle = await cryptoManager.decryptBackup(
                 data.encrypted_blob,
                 data.salt,
                 data.iv,
                 password
             );
 
+            // 3. Parse and Import Bundle
+            const bundle = JSON.parse(rawBundle);
+            
+            // Check if it's the new multi-table format or legacy keys-only format
+            const hasHistory = bundle.version >= 2.0 && bundle.messages;
+
             setCurrentStep('importing');
             await new Promise(r => setTimeout(r, 1000));
 
-            // 3. Import keys
-            await cryptoManager.importKeysSync(bundle);
+            // Legacy support: if bundle is just the keys json string, bundle.keys will be undefined
+            const keyData = hasHistory ? JSON.stringify(bundle.keys) : rawBundle;
+            await cryptoManager.importKeysSync(keyData);
+
+            if (hasHistory) {
+                console.log(`[Restore] Importing history: ${bundle.messages.length} messages, ${bundle.rooms.length} rooms, ${bundle.users.length} users`);
+                
+                // Use bulkPut to safely merge data and overwrite existing if necessary
+                if (bundle.rooms?.length > 0) {
+                    await db.rooms.bulkPut(bundle.rooms);
+                }
+                if (bundle.users?.length > 0) {
+                    await db.users.bulkPut(bundle.users);
+                }
+                if (bundle.messages?.length > 0) {
+                    // Ensure messages have correct types/indexes if needed, but bulkPut is generally safe
+                    await db.messages.bulkPut(bundle.messages);
+                }
+            }
 
             // [NEW] Enable auto-backup so future room keys are automatically backed up
             await cryptoManager.enableAutoBackup(password, data.salt, token);

@@ -229,6 +229,9 @@ const createTables = async () => {
                 password_hint TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
+            
+            -- [NEW] Global Auto-Backup State
+            ALTER TABLE key_backups ADD COLUMN IF NOT EXISTS is_auto_sync_enabled BOOLEAN DEFAULT TRUE;
 
             -- [OAuth] Add email column to users table
             ALTER TABLE users ADD COLUMN IF NOT EXISTS email VARCHAR(255) UNIQUE;

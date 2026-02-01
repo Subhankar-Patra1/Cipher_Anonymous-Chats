@@ -55,6 +55,7 @@ export const CallProvider = ({ children, socket }) => {
     const localStreamRef = useRef(null);
     const incomingSignalRef = useRef(null); 
     const isBusyRef = useRef(false);
+    const callDetailsRef = useRef(null); // [NEW] Ref for callbacks to avoid stale closures
 
     // Audio Refs
     const ringtoneRef = useRef(new Audio('/sounds/ringtone.mp3'));
@@ -94,7 +95,9 @@ export const CallProvider = ({ children, socket }) => {
                 return;
             }
 
-            setCallDetails({ callerId: from, callerName, callerAvatar, type, roomId });
+            const details = { callerId: from, callerName, callerAvatar, type, roomId };
+            setCallDetails(details);
+            callDetailsRef.current = details;
             setCallStatus('incoming');
             incomingSignalRef.current = signal;
         });
@@ -259,6 +262,16 @@ export const CallProvider = ({ children, socket }) => {
             
             // Refresh camera list once we have permission
             checkCameras();
+
+            // [NEW] Sync initial media status immediately on connect so remote side shows avatar if our camera is off
+            const target = callDetailsRef.current?.isOutgoing ? callDetailsRef.current.targetId : callDetailsRef.current?.callerId;
+            if (target && socket && localStreamRef.current) {
+                socket.emit('call:media-toggle', { 
+                    to: target, 
+                    audio: localStreamRef.current.getAudioTracks()[0]?.enabled ?? true, 
+                    video: localStreamRef.current.getVideoTracks()[0]?.enabled ?? false
+                });
+            }
         });
     };
 
@@ -284,15 +297,17 @@ export const CallProvider = ({ children, socket }) => {
             
             // [FIX] For outgoing calls, we store the TARGET'S details for display 
             // but send OUR details in the signal so they see us.
-            setCallDetails({ 
+            const details = { 
                 callerId: user.id, 
                 type, 
                 roomId, 
                 isOutgoing: true, 
                 targetId: userId, 
-                callerName: targetName || "User", // Display target name to us
-                callerAvatar: targetAvatar // Display target avatar to us
-            });
+                callerName: targetName || "User", 
+                callerAvatar: targetAvatar || null 
+            };
+            setCallDetails(details);
+            callDetailsRef.current = details;
 
             const peer = new SimplePeer({
                 initiator: true,
@@ -443,6 +458,7 @@ export const CallProvider = ({ children, socket }) => {
         setLocalStream(null);
         setRemoteStream(null);
         setCallDetails(null);
+        callDetailsRef.current = null;
         setRemoteMediaStatus({ audio: true, video: true });
         setCurrentFacingMode('user');
         connectionRef.current = null;

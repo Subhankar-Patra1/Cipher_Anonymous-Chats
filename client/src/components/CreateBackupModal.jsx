@@ -1,7 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { cryptoManager } from '../lib/crypto/CryptoManager';
+import db from '../utils/db';
 
-export default function CreateBackupModal({ isOpen, onClose, token, onBackupSuccess, hasActiveBackup }) {
+export default function CreateBackupModal({ isOpen, onClose, token, onBackupSuccess, hasActiveBackup, mode = 'create' }) {
+    // mode: 'create' | 'update' | 'verify'
     const [password, setPassword] = useState('');
     const [confirmPassword, setConfirmPassword] = useState('');
     const [currentPassword, setCurrentPassword] = useState('');
@@ -67,26 +69,66 @@ export default function CreateBackupModal({ isOpen, onClose, token, onBackupSucc
 
     const handleCreateBackup = async (e) => {
         e.preventDefault();
-        
-        if (hasActiveBackup && !currentPassword) {
-            setError('Please enter your current password');
-            return;
-        }
-
-        if (password !== confirmPassword) {
-            setError('Passwords do not match');
-            return;
-        }
-
-        if (hasActiveBackup && password === currentPassword) {
-            setError('New password must be different from current password');
-            return;
-        }
-
-        setLoading(true);
         setError('');
+        setLoading(true);
 
         try {
+            if (mode === 'verify') {
+                // Verify only
+                const checkRes = await fetch(`${import.meta.env.VITE_API_URL}/api/auth/backup`, {
+                    headers: { Authorization: `Bearer ${token}` }
+                });
+                const backupData = await checkRes.json();
+                if (!backupData) throw new Error('No backup found to verify');
+
+                await cryptoManager.decryptBackup(
+                    backupData.encrypted_blob,
+                    backupData.salt,
+                    backupData.iv,
+                    currentPassword
+                );
+
+                await cryptoManager.enableAutoBackup(currentPassword, backupData.salt, token);
+                
+                // [NEW] Update global sync state to TRUE
+                try {
+                    await fetch(`${import.meta.env.VITE_API_URL}/api/auth/backup/toggle-sync`, {
+                        method: 'POST',
+                        headers: { 
+                            'Content-Type': 'application/json',
+                            Authorization: `Bearer ${token}` 
+                        },
+                        body: JSON.stringify({ enabled: true })
+                    });
+                } catch (e) {
+                    console.warn('Failed to sync global auto-backup status (ON)', e);
+                }
+                
+                if (onBackupSuccess) onBackupSuccess();
+                setShowSuccess(true);
+                setTimeout(() => handleClose(), 1500);
+                return;
+            }
+
+            // Normal Create/Update logic
+            if (hasActiveBackup && !currentPassword) {
+                setError('Please enter your current password');
+                setLoading(false);
+                return;
+            }
+
+            if (password !== confirmPassword) {
+                setError('Passwords do not match');
+                setLoading(false);
+                return;
+            }
+
+            if (hasActiveBackup && password === currentPassword) {
+                setError('New password must be different from current password');
+                setLoading(false);
+                return;
+            }
+
             // If updating, verify the current password first
             if (hasActiveBackup) {
                 const checkRes = await fetch(`${import.meta.env.VITE_API_URL}/api/auth/backup`, {
@@ -106,13 +148,39 @@ export default function CreateBackupModal({ isOpen, onClose, token, onBackupSucc
                     }
                 }
             }
+
             // 1. Export all keys as JWK
-            const bundle = await cryptoManager.exportAllKeysSync();
+            const keyBundle = await cryptoManager.exportAllKeysSync();
 
-            // 2. Encrypt bundle with password
-            const backup = await cryptoManager.encryptBackup(bundle, password);
+            // 2. [NEW] Gather Chat History & Metadata
+            const [messages, rooms, users] = await Promise.all([
+                db.messages.toArray(),
+                db.rooms.toArray(),
+                db.users.toArray()
+            ]);
 
-            // 3. Upload to server
+            // 3. [NEW] Apply Smart Filter to Messages
+            const filteredMessages = messages.map(msg => {
+                const filtered = { ...msg };
+                delete filtered.fileBlob;
+                delete filtered.localFilePath;
+                return filtered;
+            });
+
+            // 4. Create the final "World Bundle"
+            const fullBundle = JSON.stringify({
+                keys: JSON.parse(keyBundle),
+                messages: filteredMessages,
+                rooms: rooms,
+                users: users,
+                exportedAt: new Date().toISOString(),
+                version: 2.0
+            });
+
+            // 5. Encrypt full bundle
+            const backup = await cryptoManager.encryptBackup(fullBundle, password);
+
+            // 6. Upload to server
             const res = await fetch(`${import.meta.env.VITE_API_URL}/api/auth/backup`, {
                 method: 'POST',
                 headers: {
@@ -124,17 +192,14 @@ export default function CreateBackupModal({ isOpen, onClose, token, onBackupSucc
 
             if (!res.ok) throw new Error('Failed to upload backup');
 
-            // [NEW] Enable auto-backup so future room keys are automatically backed up
             await cryptoManager.enableAutoBackup(password, backup.salt, token);
 
             if (onBackupSuccess) onBackupSuccess();
             setShowSuccess(true);
-            setTimeout(() => {
-                handleClose();
-            }, 1500);
+            setTimeout(() => handleClose(), 1500);
         } catch (err) {
             console.error('[Backup] Error:', err);
-            setError(err.message || 'Failed to create backup. Please try again.');
+            setError(err.message || 'Failed to complete process. Please try again.');
         } finally {
             setLoading(false);
         }
@@ -170,26 +235,42 @@ export default function CreateBackupModal({ isOpen, onClose, token, onBackupSucc
                             <div className="w-16 h-16 bg-emerald-100 dark:bg-emerald-600/20 rounded-full flex items-center justify-center mx-auto mb-4">
                                 <span className="material-symbols-outlined text-emerald-600 dark:text-emerald-400 text-3xl">{hasActiveBackup ? 'refresh' : 'cloud_upload'}</span>
                             </div>
-                            <h2 className="text-2xl font-bold text-slate-900 dark:text-white mb-2">{hasActiveBackup ? 'Update Backup' : 'Cloud Backup'}</h2>
+                            <h2 className="text-2xl font-bold text-slate-900 dark:text-white mb-2">
+                                {mode === 'verify' ? 'Unlock Auto Backup' : (hasActiveBackup ? 'Update Backup' : 'Cloud Backup')}
+                            </h2>
+                            
+                            {cryptoManager.isAutoBackupEnabled() && mode !== 'verify' && (
+                                <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-100 dark:bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 text-[11px] font-bold uppercase tracking-wider mb-3 animate-in fade-in slide-in-from-top-2 duration-500">
+                                    <span className="relative flex h-2 w-2">
+                                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                                        <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+                                    </span>
+                                    Auto Backup: Cloud Sync Active
+                                </div>
+                            )}
+
                             <p className="text-slate-600 dark:text-slate-400 text-sm">
-                                {hasActiveBackup 
-                                    ? 'Update your backup password and re-secure your encryption keys.' 
-                                    : 'Create a password-protected backup of your encryption keys to restore your history on new devices.'}
+                                {mode === 'verify' 
+                                    ? 'Enter your password to resume background synchronization.' 
+                                    : (hasActiveBackup 
+                                        ? 'Update your backup password and re-secure your encryption keys.' 
+                                        : 'Create a password-protected backup of your encryption keys to restore your history on new devices.')}
                             </p>
                         </div>
 
                         <form onSubmit={handleCreateBackup} className="space-y-4">
-                            {hasActiveBackup && (
-                                <div>
-                                    <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Current Password</label>
+                            {(hasActiveBackup || mode === 'verify') && (
+                                <div className="animate-in fade-in slide-in-from-top-2 duration-300">
+                                    <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Password</label>
                                     <div className="relative">
                                         <input
                                             type={showCurrentPassword ? "text" : "password"}
                                             value={currentPassword}
                                             onChange={(e) => setCurrentPassword(e.target.value)}
                                             className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-4 py-3 pr-12 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-violet-500 transition-all text-sm placeholder:text-slate-400 dark:placeholder:text-slate-500"
-                                            placeholder="Enter current password"
+                                            placeholder={mode === 'verify' ? "Enter your backup password" : "Enter current password"}
                                             required
+                                            autoFocus
                                         />
                                         <button 
                                             type="button"
@@ -214,82 +295,85 @@ export default function CreateBackupModal({ isOpen, onClose, token, onBackupSucc
                                 </div>
                             )}
 
-                            <div>
-                                <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">
-                                    {hasActiveBackup ? 'New Password' : 'Create Password'}
-                                </label>
-                                <div className="relative">
-                                    <input
-                                        type={showPassword ? "text" : "password"}
-                                        value={password}
-                                        onChange={(e) => setPassword(e.target.value)}
-                                        className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-4 py-3 pr-12 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-500 transition-all shadow-sm dark:shadow-inner placeholder:text-slate-400 dark:placeholder:text-slate-500"
-                                        placeholder="Strong password"
-                                        required
-                                        minLength={8}
-                                    />
-                                    <button 
-                                        type="button"
-                                        onClick={() => setShowPassword(!showPassword)}
-                                        className="absolute right-2 top-1/2 -translate-y-1/2 w-10 h-10 flex items-center justify-center text-slate-400 dark:text-slate-500 hover:text-emerald-500 dark:hover:text-emerald-400 transition-colors"
-                                    >
-                                        <span className="material-symbols-outlined text-[22px] leading-none">
-                                            {showPassword ? 'visibility' : 'visibility_off'}
-                                        </span>
-                                    </button>
-                                </div>
-                                {/* Password Criteria */}
-                                <div className="mt-2 space-y-1">
-                                    <p className={`text-[10px] flex items-center gap-1.5 font-medium transition-colors ${password.length >= 8 ? 'text-emerald-600 dark:text-emerald-500' : 'text-slate-500'}`}>
-                                        <span className="material-symbols-outlined text-[14px]">
-                                            {password.length >= 8 ? 'check_circle' : 'radio_button_unchecked'}
-                                        </span>
-                                        Minimum 8 characters
-                                    </p>
-                                    <p className={`text-[10px] flex items-center gap-1.5 font-medium transition-colors ${/[0-9]/.test(password) ? 'text-emerald-600 dark:text-emerald-500' : 'text-slate-500'}`}>
-                                        <span className="material-symbols-outlined text-[14px]">
-                                            {/[0-9]/.test(password) ? 'check_circle' : 'radio_button_unchecked'}
-                                        </span>
-                                        At least one number
-                                    </p>
-                                </div>
-                            </div>
+                            {mode !== 'verify' && (
+                                <div className="space-y-4 animate-in fade-in slide-in-from-bottom-2 duration-300">
+                                    <div>
+                                        <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">
+                                            {hasActiveBackup ? 'New Password' : 'Create Password'}
+                                        </label>
+                                        <div className="relative">
+                                            <input
+                                                type={showPassword ? "text" : "password"}
+                                                value={password}
+                                                onChange={(e) => setPassword(e.target.value)}
+                                                className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-4 py-3 pr-12 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-500 transition-all shadow-sm dark:shadow-inner placeholder:text-slate-400 dark:placeholder:text-slate-500"
+                                                placeholder="Strong password"
+                                                required
+                                                minLength={8}
+                                            />
+                                            <button 
+                                                type="button"
+                                                onClick={() => setShowPassword(!showPassword)}
+                                                className="absolute right-2 top-1/2 -translate-y-1/2 w-10 h-10 flex items-center justify-center text-slate-400 dark:text-slate-500 hover:text-emerald-500 dark:hover:text-emerald-400 transition-colors"
+                                            >
+                                                <span className="material-symbols-outlined text-[22px] leading-none">
+                                                    {showPassword ? 'visibility' : 'visibility_off'}
+                                                </span>
+                                            </button>
+                                        </div>
+                                        {/* Password Criteria */}
+                                        <div className="mt-2 space-y-1">
+                                            <p className={`text-[10px] flex items-center gap-1.5 font-medium transition-colors ${password.length >= 8 ? 'text-emerald-600 dark:text-emerald-500' : 'text-slate-500'}`}>
+                                                <span className="material-symbols-outlined text-[14px]">
+                                                    {password.length >= 8 ? 'check_circle' : 'radio_button_unchecked'}
+                                                </span>
+                                                Minimum 8 characters
+                                            </p>
+                                            <p className={`text-[10px] flex items-center gap-1.5 font-medium transition-colors ${/[0-9]/.test(password) ? 'text-emerald-600 dark:text-emerald-500' : 'text-slate-500'}`}>
+                                                <span className="material-symbols-outlined text-[14px]">
+                                                    {/[0-9]/.test(password) ? 'check_circle' : 'radio_button_unchecked'}
+                                                </span>
+                                                At least one number
+                                            </p>
+                                        </div>
+                                    </div>
 
-                            <div>
-                                <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Confirm Password</label>
-                                <div className="relative">
-                                    <input
-                                        type={showConfirmPassword ? "text" : "password"}
-                                        value={confirmPassword}
-                                        onChange={(e) => setConfirmPassword(e.target.value)}
-                                        className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-4 py-3 pr-12 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-500 transition-all placeholder:text-slate-400 dark:placeholder:text-slate-500"
-                                        placeholder="Repeat password"
-                                        required
-                                    />
-                                    <button 
-                                        type="button"
-                                        onClick={() => setShowConfirmPassword(!showConfirmPassword)}
-                                        className="absolute right-2 top-1/2 -translate-y-1/2 w-10 h-10 flex items-center justify-center text-slate-400 dark:text-slate-500 hover:text-emerald-500 dark:hover:text-emerald-400 transition-colors"
-                                    >
-                                        <span className="material-symbols-outlined text-[22px] leading-none">
-                                            {showConfirmPassword ? 'visibility' : 'visibility_off'}
-                                        </span>
-                                    </button>
-                                </div>
-                            </div>
+                                    <div>
+                                        <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Confirm Password</label>
+                                        <div className="relative">
+                                            <input
+                                                type={showConfirmPassword ? "text" : "password"}
+                                                value={confirmPassword}
+                                                onChange={(e) => setConfirmPassword(e.target.value)}
+                                                className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-4 py-3 pr-12 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-500 transition-all placeholder:text-slate-400 dark:placeholder:text-slate-500"
+                                                placeholder="Repeat password"
+                                                required
+                                            />
+                                            <button 
+                                                type="button"
+                                                onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+                                                className="absolute right-2 top-1/2 -translate-y-1/2 w-10 h-10 flex items-center justify-center text-slate-400 dark:text-slate-500 hover:text-emerald-500 dark:hover:text-emerald-400 transition-colors"
+                                            >
+                                                <span className="material-symbols-outlined text-[22px] leading-none">
+                                                    {showConfirmPassword ? 'visibility' : 'visibility_off'}
+                                                </span>
+                                            </button>
+                                        </div>
+                                    </div>
 
-                            
-                            <div>
-                                <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Password Hint (Optional)</label>
-                                <input
-                                    type="text"
-                                    value={passwordHint}
-                                    onChange={(e) => setPasswordHint(e.target.value)}
-                                    className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-4 py-3 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-500 transition-all placeholder:text-slate-400 dark:placeholder:text-slate-500"
-                                    placeholder="Something to help you remember"
-                                    maxLength={100}
-                                />
-                            </div>
+                                    <div>
+                                        <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Password Hint (Optional)</label>
+                                        <input
+                                            type="text"
+                                            value={passwordHint}
+                                            onChange={(e) => setPasswordHint(e.target.value)}
+                                            className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-4 py-3 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-500 transition-all placeholder:text-slate-400 dark:placeholder:text-slate-500"
+                                            placeholder="Something to help you remember"
+                                            maxLength={100}
+                                        />
+                                    </div>
+                                </div>
+                            )}
 
                             {error && (
                                 <div className="p-3 bg-red-100 dark:bg-red-500/10 border border-red-200 dark:border-red-500/20 rounded-lg text-red-600 dark:text-red-400 text-sm flex items-center gap-2 animate-shake">
@@ -309,12 +393,12 @@ export default function CreateBackupModal({ isOpen, onClose, token, onBackupSucc
                                 </button>
                                 <button
                                     type="submit"
-                                    disabled={loading || password.length < 8 || !/[0-9]/.test(password) || password !== confirmPassword || (hasActiveBackup && !currentPassword)}
+                                    disabled={loading || (mode !== 'verify' && (password.length < 8 || !/[0-9]/.test(password) || password !== confirmPassword)) || (hasActiveBackup && !currentPassword) || (mode === 'verify' && !currentPassword)}
                                     className="flex-1 px-4 py-2.5 rounded-xl bg-emerald-600 text-white font-bold hover:bg-emerald-500 disabled:opacity-50 disabled:cursor-not-allowed transition-all flex items-center justify-center gap-2 text-sm shadow-lg shadow-emerald-500/20"
                                 >
                                     {loading ? (
                                         <span className="material-symbols-outlined animate-spin text-sm">progress_activity</span>
-                                    ) : (hasActiveBackup ? 'Update Backup' : 'Set Backup')}
+                                    ) : (mode === 'verify' ? 'Unlock & Sync' : (hasActiveBackup ? 'Update Backup' : 'Set Backup'))}
                                 </button>
                             </div>
                         </form>

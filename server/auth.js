@@ -443,15 +443,25 @@ router.post('/backup', async (req, res) => {
         }
 
         await db.query(`
-            INSERT INTO key_backups (user_id, encrypted_blob, salt, iv, password_hint)
-            VALUES ($1, $2, $3, $4, $5)
+            INSERT INTO key_backups (user_id, encrypted_blob, salt, iv, password_hint, is_auto_sync_enabled)
+            VALUES ($1, $2, $3, $4, $5, TRUE)
             ON CONFLICT (user_id) DO UPDATE 
-            SET encrypted_blob = $2, salt = $3, iv = $4, password_hint = $5, created_at = NOW()
+            SET encrypted_blob = $2, salt = $3, iv = $4, password_hint = $5, is_auto_sync_enabled = TRUE, created_at = NOW()
         `, [userId, encryptedBlob, salt, iv, req.body.passwordHint || null]);
 
         res.json({ success: true });
+
+        // Broadcast global auto-sync status (it's always enabled when creating/updating backup)
+        const io = req.app.get('io');
+        if (io) {
+            io.to(`user:${userId}`).emit('sync:auto-backup-status', { enabled: true });
+        }
     } catch (err) {
-        res.status(401).json({ error: 'Invalid token' });
+        if (err.name === 'JsonWebTokenError' || err.name === 'TokenExpiredError') {
+            return res.status(401).json({ error: 'Invalid or expired token' });
+        }
+        console.error('[Backup] Upload Error:', err);
+        res.status(500).json({ error: 'Server error during backup upload' });
     }
 });
 
@@ -463,13 +473,44 @@ router.get('/backup', async (req, res) => {
         const decoded = jwt.verify(token, JWT_SECRET);
         const userId = decoded.id;
 
-        const { rows } = await db.query('SELECT encrypted_blob, salt, iv, password_hint FROM key_backups WHERE user_id = $1', [userId]);
+        const { rows } = await db.query('SELECT encrypted_blob, salt, iv, password_hint, is_auto_sync_enabled FROM key_backups WHERE user_id = $1', [userId]);
         
         if (rows.length === 0) {
             return res.json(null);
         }
         
         res.json(rows[0]);
+    } catch (err) {
+        res.status(401).json({ error: 'Invalid token' });
+    }
+});
+
+router.post('/backup/toggle-sync', async (req, res) => {
+    const token = req.headers.authorization?.split(' ')[1];
+    if (!token) return res.status(401).json({ error: 'No token' });
+    
+    try {
+        const decoded = jwt.verify(token, JWT_SECRET);
+        const userId = decoded.id;
+        const { enabled } = req.body;
+
+        if (typeof enabled !== 'boolean') {
+            return res.status(400).json({ error: 'Invalid enabled state' });
+        }
+
+        await db.query(`
+            UPDATE key_backups 
+            SET is_auto_sync_enabled = $1 
+            WHERE user_id = $2
+        `, [enabled, userId]);
+
+        // Broadcast to user's other devices
+        const io = req.app.get('io');
+        if (io) {
+            io.to(`user:${userId}`).emit('sync:auto-backup-status', { enabled });
+        }
+
+        res.json({ success: true });
     } catch (err) {
         res.status(401).json({ error: 'Invalid token' });
     }

@@ -539,6 +539,17 @@ const LastMessagePreview = ({ room, user, hasSkippedSync }) => {
 };
 
 export default function Sidebar({ rooms, activeRoom, onSelectRoom, loadingRoomId, isLoading, onCreateRoom, onJoinRoom, user, onLogout, onRefresh, onRoomLocked, onGoToMessage, hasSkippedSync, typingByRoom, onShowProfile, activeFilter = 'group', onFilterChange }) {
+    const [autoBackupEnabled, setAutoBackupEnabled] = useState(cryptoManager.isAutoBackupEnabled());
+
+    // [NEW] Listen for backup status changes
+    useEffect(() => {
+        const handleStatusChange = (e) => {
+            console.log('[Sidebar] Backup status changed:', e.detail.enabled);
+            setAutoBackupEnabled(e.detail.enabled);
+        };
+        window.addEventListener('cipher:backup-status-changed', handleStatusChange);
+        return () => window.removeEventListener('cipher:backup-status-changed', handleStatusChange);
+    }, []);
 
     const { presenceMap, fetchStatuses } = usePresence();
     const { hasPasscode, lockApp } = useAppLock();
@@ -734,16 +745,16 @@ export default function Sidebar({ rooms, activeRoom, onSelectRoom, loadingRoomId
                     {/* [NEW] Auto-Backup Status Indicator */}
                     <div 
                         className="group/backup relative flex items-center justify-center w-8 h-8 rounded-full hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-help"
-                        title={cryptoManager.isAutoBackupEnabled() ? "Auto-backup Active (Session)" : "Auto-backup Inactive"}
+                        title={autoBackupEnabled ? "Auto-backup Active (Session)" : "Auto-backup Inactive"}
                     >
-                        <span className={`material-symbols-outlined text-lg ${cryptoManager.isAutoBackupEnabled() ? 'text-green-500' : 'text-slate-300 dark:text-slate-600'}`}>
-                            {cryptoManager.isAutoBackupEnabled() ? 'cloud_done' : 'cloud_off'}
+                        <span className={`material-symbols-outlined text-lg ${autoBackupEnabled ? 'text-green-500' : 'text-slate-300 dark:text-slate-600'}`}>
+                            {autoBackupEnabled ? 'cloud_done' : 'cloud_off'}
                         </span>
                         
                         {/* Tooltip */}
                         <div className="absolute top-10 right-0 w-max pointer-events-none opacity-0 group-hover/backup:opacity-100 transition-opacity duration-200 z-50">
                              <div className="bg-[#2a2a2a] text-white text-xs py-2 px-3 rounded-lg shadow-xl border border-white/5 relative">
-                                {cryptoManager.isAutoBackupEnabled() 
+                                {autoBackupEnabled 
                                     ? "Auto-backup is ON for this session." 
                                     : "Auto-backup is OFF. Restore to enable."}
                             </div>

@@ -20,6 +20,7 @@ import { useAppLock } from '../context/AppLockContext'; // [NEW]
 import StarredMessagesModal from './StarredMessagesModal';
 import CreateBackupModal from './CreateBackupModal';
 import PhotoGalleryModal from './PhotoGalleryModal';
+import { cryptoManager } from '../lib/crypto/CryptoManager';
 
 
 
@@ -97,6 +98,8 @@ export default function ProfilePanel({ isOpen = true, userId, roomId, onClose, o
     const [profile, setProfile] = useState(null);
     const [loading, setLoading] = useState(true);
     const [showFullBio, setShowFullBio] = useState(false);
+    const [autoBackupEnabled, setAutoBackupEnabled] = useState(cryptoManager.isAutoBackupEnabled());
+    const [backupModalMode, setBackupModalMode] = useState('create');
     
     const [confirmModal, setConfirmModal] = useState(null); // { type: 'clear' | 'delete', title: string, destructive: boolean }
     const [actionLoading, setActionLoading] = useState(false);
@@ -517,6 +520,43 @@ export default function ProfilePanel({ isOpen = true, userId, roomId, onClose, o
         };
     }, [socket, userId]);
 
+    // [NEW] Real-time auto-backup sync listener (WebSocket)
+    useEffect(() => {
+        if (!socket || !isMe) return;
+
+        const onSyncStatusUpdate = ({ enabled }) => {
+            if (enabled === false) {
+                console.log('[Profile] Auto-backup disabled globally via other device');
+                cryptoManager.disableAutoBackup();
+                // setAutoBackupEnabled(false); // Handled by local event listener below
+            } else if (enabled === true) {
+                // If enabled globally, we might want to show a hint, 
+                // but we can't enable locally without passcode.
+                // For now, reload status to be sure.
+                setHasActiveBackup(true);
+            }
+        };
+
+        socket.on('sync:auto-backup-status', onSyncStatusUpdate);
+        return () => {
+            socket.off('sync:auto-backup-status', onSyncStatusUpdate);
+        };
+    }, [socket, isMe]);
+
+    // [NEW] Local backup status listener (for UI reactivity across panels)
+    useEffect(() => {
+        if (!isMe) return;
+
+        const handleStatusChange = (e) => {
+            console.log('[Profile] Local backup status changed:', e.detail.enabled);
+            setAutoBackupEnabled(e.detail.enabled);
+            if (e.detail.enabled) setHasActiveBackup(true);
+        };
+
+        window.addEventListener('cipher:backup-status-changed', handleStatusChange);
+        return () => window.removeEventListener('cipher:backup-status-changed', handleStatusChange);
+    }, [isMe]);
+
     // [NEW] Chat Preferences for DM
     const [preferences, setPreferences] = useState(null);
     useEffect(() => {
@@ -532,7 +572,6 @@ export default function ProfilePanel({ isOpen = true, userId, roomId, onClose, o
         }
     }, [roomId, token]);
     
-    // Check if backup exists
     useEffect(() => {
         if (isMe && token) {
             fetch(`${import.meta.env.VITE_API_URL}/api/auth/backup`, {
@@ -540,7 +579,16 @@ export default function ProfilePanel({ isOpen = true, userId, roomId, onClose, o
             })
             .then(res => res.ok ? res.json() : null)
             .then(data => {
-                if (data && (data.encrypted_blob || data.hasBackup)) setHasActiveBackup(true);
+                if (data && (data.encrypted_blob || data.hasBackup)) {
+                    setHasActiveBackup(true);
+                    
+                    // [NEW] If server says sync is disabled GLOBALLY, turn it off LOCALLY too
+                    // Note: If enabled globally, we still don't turn on locally without passcode
+                    if (data.is_auto_sync_enabled === false && autoBackupEnabled) {
+                        cryptoManager.disableAutoBackup();
+                        setAutoBackupEnabled(false);
+                    }
+                }
             })
             .catch(err => console.error("Failed to check backup status", err));
         }
@@ -1078,7 +1126,7 @@ export default function ProfilePanel({ isOpen = true, userId, roomId, onClose, o
                                 </button>
 
                                 <button 
-                                    onClick={() => !isCallActive && initiateCall(userId, roomId, 'audio', profile.display_name, profile.avatar_url)}
+                                    onClick={() => !isCallActive && initiateCall(userId, roomId, 'audio', profile.display_name, profile.avatar_url || profile.avatar_thumb_url)}
                                     className={`flex flex-col items-center gap-1.5 group ${isCallActive ? 'cursor-not-allowed' : ''}`}
                                     disabled={isCallActive}
                                     title={isCallActive ? "Call in progress" : "Audio Call"}
@@ -1090,7 +1138,7 @@ export default function ProfilePanel({ isOpen = true, userId, roomId, onClose, o
                                 </button>
 
                                 <button 
-                                    onClick={() => !isCallActive && initiateCall(userId, roomId, 'video', profile.display_name, profile.avatar_url)}
+                                    onClick={() => !isCallActive && initiateCall(userId, roomId, 'video', profile.display_name, profile.avatar_url || profile.avatar_thumb_url)}
                                     className={`flex flex-col items-center gap-1.5 group ${isCallActive ? 'cursor-not-allowed' : ''}`}
                                     disabled={isCallActive}
                                     title={isCallActive ? "Call in progress" : "Video Call"}
@@ -1352,7 +1400,10 @@ export default function ProfilePanel({ isOpen = true, userId, roomId, onClose, o
                                 </button>
 
                                 <button 
-                                    onClick={() => setShowCreateBackup(true)}
+                                    onClick={() => {
+                                        setBackupModalMode(hasActiveBackup ? 'update' : 'create');
+                                        setShowCreateBackup(true);
+                                    }}
                                     className="w-full flex items-center justify-between group"
                                 >
                                     <div className="flex items-center gap-3">
@@ -1368,6 +1419,49 @@ export default function ProfilePanel({ isOpen = true, userId, roomId, onClose, o
                                     </div>
                                     <span className="material-symbols-outlined text-slate-400 group-hover:text-blue-500 transition-colors text-[20px]">chevron_right</span>
                                 </button>
+
+                                {hasActiveBackup && (
+                                    <div className="flex items-center justify-between animate-in fade-in slide-in-from-top-2 duration-300">
+                                        <div className="flex items-center gap-3">
+                                            <div className={`w-8 h-8 rounded-full flex items-center justify-center transition-colors ${autoBackupEnabled ? 'bg-emerald-100 dark:bg-emerald-900/30 text-emerald-600 dark:text-emerald-400' : 'bg-slate-100 dark:bg-slate-800 text-slate-400'}`}>
+                                                <span className="material-symbols-outlined text-[18px]">sync</span>
+                                            </div>
+                                            <div className="text-left">
+                                                <p className="text-sm font-semibold text-slate-700 dark:text-slate-200">Auto Backup</p>
+                                                <p className="text-xs text-slate-400">Keep history synced in background</p>
+                                            </div>
+                                        </div>
+                                        <button 
+                                            onClick={async () => {
+                                                if (autoBackupEnabled) {
+                                                    // [NEW] Disable GLOBALLY
+                                                    try {
+                                                        await fetch(`${import.meta.env.VITE_API_URL}/api/auth/backup/toggle-sync`, {
+                                                            method: 'POST',
+                                                            headers: { 
+                                                                'Content-Type': 'application/json',
+                                                                Authorization: `Bearer ${token}` 
+                                                            },
+                                                            body: JSON.stringify({ enabled: false })
+                                                        });
+                                                    } catch (e) {
+                                                        console.error('Failed to notify server of sync disable', e);
+                                                    }
+
+                                                    await cryptoManager.disableAutoBackup();
+                                                    setAutoBackupEnabled(false);
+                                                } else {
+                                                    // Trigger verify mode
+                                                    setBackupModalMode('verify');
+                                                    setShowCreateBackup(true);
+                                                }
+                                            }}
+                                            className={`w-11 h-6 rounded-full transition-colors relative ${autoBackupEnabled ? 'bg-emerald-500' : 'bg-slate-300 dark:bg-slate-700'}`}
+                                        >
+                                            <div className={`absolute top-1 left-1 w-4 h-4 rounded-full bg-white shadow-sm transition-transform ${autoBackupEnabled ? 'translate-x-5' : 'translate-x-0'}`} />
+                                        </button>
+                                    </div>
+                                )}
                                 
                                  {(showRestoreOption || hasSkippedSync) && (
                                     <button 
@@ -1626,10 +1720,12 @@ export default function ProfilePanel({ isOpen = true, userId, roomId, onClose, o
                         isOpen={showCreateBackup}
                         onClose={() => setShowCreateBackup(false)}
                         token={token}
+                        mode={backupModalMode}
                         hasActiveBackup={hasActiveBackup}
                         onBackupSuccess={() => {
                             setHasActiveBackup(true);
-                            showNotification(hasActiveBackup ? 'Cloud backup updated successfully!' : 'Cloud backup created successfully!', 'success');
+                            setAutoBackupEnabled(true);
+                            showNotification(hasActiveBackup ? 'Cloud backup updated successfully and auto-sync enabled!' : 'Cloud backup created successfully and auto-sync enabled!', 'success');
                             if (onActionSuccess) onActionSuccess('backup_created');
                         }}
                     />

@@ -626,14 +626,22 @@ export default function Auth() {
                         </div>
                     ) : view === 'setup_backup' ? (
                         <form onSubmit={handleSetupBackup} className="space-y-4">
-                             <div className="bg-slate-900/50 p-4 rounded-xl border border-slate-800 mb-6">
-                                <div className="flex gap-3">
-                                    <span className="material-symbols-outlined text-violet-400">cloud_upload</span>
-                                    <p className="text-sm text-slate-400">
-                                        Your chats are end-to-end encrypted. We need this password to securely backup your keys so you can restore your history on other devices.
-                                    </p>
-                                </div>
-                            </div>
+                             <div className="bg-slate-900/50 p-4 rounded-xl border border-slate-800 mb-4 flex gap-3">
+                                 <span className="material-symbols-outlined text-violet-400">lock</span>
+                                 <p className="text-[11px] text-slate-400 leading-relaxed">
+                                     Your chats are end-to-end encrypted. This passcode secures your history and keys so you can log in on other devices.
+                                 </p>
+                             </div>
+                             
+                             <div className="bg-emerald-500/10 p-4 rounded-xl border border-emerald-500/20 mb-6 flex gap-3 animate-in fade-in slide-in-from-top-4 duration-500">
+                                 <span className="material-symbols-outlined text-emerald-500">sync</span>
+                                 <div>
+                                     <p className="text-xs font-bold text-emerald-500 uppercase tracking-wider mb-1">Smart Auto-Sync Enabled</p>
+                                     <p className="text-[11px] text-slate-400 leading-relaxed">
+                                         Setting a passcode activates <strong>Auto-Backup</strong>. Your encryption keys and chat history will sync silently to the cloud. You can turn this off anytime in Profile settings.
+                                     </p>
+                                 </div>
+                             </div>
 
                             <div>
                                 <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Create Password</label>

@@ -3,6 +3,7 @@ import {
     saveTrustedKey, getTrustedKey, getAllRoomKeys, getAllTrustedKeys, saveBulkRoomKeys, saveBulkTrustedKeys,
     saveBackupConfig, getBackupConfig
 } from './db';
+import db from '../../utils/db'; // [NEW] Import main DB for full history backup
 
 /**
  * CryptoManager - Handles all Client-Side E2EE Operations
@@ -898,14 +899,26 @@ class CryptoManager {
             this.autoBackupToken = token;
             
             // Store salt in DB (not the derived key for security)
-            await saveBackupConfig({ salt });
+            await saveBackupConfig({ salt, enabled: true });
             
             console.log('[Crypto] Auto-backup enabled');
+            window.dispatchEvent(new CustomEvent('cipher:backup-status-changed', { detail: { enabled: true } }));
             return true;
         } catch (err) {
             console.error('[Crypto] Failed to enable auto-backup:', err);
             return false;
         }
+    }
+
+    /**
+     * Disable auto-backup and clear derived key from memory.
+     */
+    async disableAutoBackup() {
+        this.autoBackupDerivedKey = null;
+        this.autoBackupSalt = null;
+        await saveBackupConfig({ enabled: false });
+        console.log('[Crypto] Auto-backup disabled');
+        window.dispatchEvent(new CustomEvent('cipher:backup-status-changed', { detail: { enabled: false } }));
     }
 
     /**
@@ -950,23 +963,48 @@ class CryptoManager {
         }
 
         try {
-            console.log('[Crypto] Performing auto-backup...');
+            console.log('[Crypto] Performing auto-backup (Full History + Metadata)...');
             
-            // 1. Export all keys
-            const bundle = await this.exportAllKeysSync();
+            // 1. Export all keys as JWK
+            const keyBundle = await this.exportAllKeysSync();
             
-            // 2. Encrypt with stored derived key
+            // 2. [NEW] Gather Chat History & Metadata (Parallel fetch)
+            const [messages, rooms, users] = await Promise.all([
+                db.messages.toArray(),
+                db.rooms.toArray(),
+                db.users.toArray()
+            ]);
+
+            // 3. [NEW] Apply Smart Filter to Messages
+            const filteredMessages = messages.map(msg => {
+                const filtered = { ...msg };
+                delete filtered.fileBlob;
+                delete filtered.localFilePath;
+                return filtered;
+            });
+
+            // 4. Create the final "World Bundle" format (v2.0)
+            const fullBundle = JSON.stringify({
+                keys: JSON.parse(keyBundle),
+                messages: filteredMessages,
+                rooms: rooms,
+                users: users,
+                exportedAt: new Date().toISOString(),
+                version: 2.0
+            });
+            
+            // 5. Encrypt with stored derived key
             const iv = window.crypto.getRandomValues(new Uint8Array(12));
             const encrypted = await window.crypto.subtle.encrypt(
                 { name: "AES-GCM", iv },
                 this.autoBackupDerivedKey,
-                new TextEncoder().encode(bundle)
+                new TextEncoder().encode(fullBundle)
             );
             
             const encryptedBlob = this.arrayBufferToBase64(encrypted);
             const ivBase64 = this.arrayBufferToBase64(iv);
             
-            // 3. Upload to server (using existing salt)
+            // 6. Upload to server (using existing salt)
             const res = await fetch(`${import.meta.env.VITE_API_URL}/api/auth/backup`, {
                 method: 'POST',
                 headers: {
@@ -981,7 +1019,7 @@ class CryptoManager {
             });
             
             if (res.ok) {
-                console.log('[Crypto] Auto-backup completed successfully');
+                console.log('[Crypto] Auto-backup completed successfully (Full History Sync)');
             } else {
                 console.error('[Crypto] Auto-backup upload failed:', res.status);
             }
