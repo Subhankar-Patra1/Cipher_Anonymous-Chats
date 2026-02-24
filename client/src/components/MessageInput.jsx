@@ -873,6 +873,8 @@ export default function MessageInput({
                 const drafts = JSON.parse(localStorage.getItem('cipher_drafts') || '{}');
                 delete drafts[roomId];
                 localStorage.setItem('cipher_drafts', JSON.stringify(drafts));
+                // [FIX] Dispatch event immediately so Sidebar updates
+                window.dispatchEvent(new Event('draftsUpdated'));
             }
             
             // Cleanup
@@ -1237,7 +1239,7 @@ export default function MessageInput({
                                     </div>
                                 ) : replyTo.type === 'audio' ? (
                                     <>
-                                         <span className="material-symbols-outlined text-violet-500 dark:text-violet-300 text-sm">mic</span>
+                                         <span className="material-symbols-outlined text-[20px] text-slate-600 dark:text-slate-400">mic</span>
                                          <div className="flex flex-col">
                                             <span className="text-sm font-semibold text-violet-600 dark:text-violet-300">{renderTextWithEmojis(replyTo.sender)}</span>
                                             <span className="text-xs text-slate-600 dark:text-slate-300">Voice message</span>
@@ -1382,18 +1384,18 @@ export default function MessageInput({
                                 </div>
                             </div>
                          )}
-                            <ContentEditable
-                                innerRef={editorRef}
-                                html={html}
-                                disabled={disabled}
-                                onChange={handleChange}
-                                onPaste={handlePaste}
-                                onKeyUp={saveSelection}
-                                onMouseUp={saveSelection}
-                                onKeyDown={handleKeyDown}
-                                className="editor-content w-full text-slate-800 dark:text-slate-100 pl-4 pr-2 py-3 focus:outline-none min-h-[48px] max-h-[150px] overflow-y-auto whitespace-pre-wrap break-words custom-scrollbar placeholder:text-slate-400 dark:placeholder:text-slate-500 transition-colors"
-                                tagName="div"
-                            />
+                                <ContentEditable
+                                    innerRef={editorRef}
+                                    html={html}
+                                    disabled={disabled}
+                                    onChange={handleChange}
+                                    onPaste={handlePaste}
+                                    onKeyUp={saveSelection}
+                                    onMouseUp={saveSelection}
+                                    onKeyDown={handleKeyDown}
+                                    className="editor-content w-full text-slate-800 dark:text-slate-100 pl-4 pr-2 py-3 focus:outline-none min-h-[48px] max-h-[150px] overflow-y-auto whitespace-pre-wrap break-words custom-scrollbar placeholder:text-slate-500 dark:placeholder:text-slate-400 transition-colors cursor-text"
+                                    tagName="div"
+                                />
                             
                             {/* [NEW] Floating Format Toolbar */}
                             {showFormatToolbar && (
@@ -1455,7 +1457,7 @@ export default function MessageInput({
                                         animate={{ opacity: 1, x: 0 }}
                                         exit={{ opacity: 0, x: 20 }}
                                         transition={{ duration: 0.2 }}
-                                        className="absolute left-4 top-3 text-slate-400 dark:text-slate-500 pointer-events-none select-none transition-colors"
+                                        className="absolute left-4 top-3 text-slate-500 dark:text-slate-500 pointer-events-none select-none transition-colors"
                                     >
                                         {pendingGif 
                                             ? "Enter caption (optional)..." 
@@ -1494,7 +1496,7 @@ export default function MessageInput({
                                         className={`w-10 h-10 flex items-center justify-center rounded-full transition-colors ${
                                             (showEmoji && !isClosingEmoji)
                                             ? 'text-violet-500 bg-violet-50 dark:bg-slate-800 dark:text-white' 
-                                            : 'text-slate-400 hover:text-slate-600 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800'
+                                            : 'text-slate-500 hover:text-slate-600 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800'
                                         }`}
                                         title="Insert Emoji"
                                     >
@@ -1511,7 +1513,7 @@ export default function MessageInput({
                                             className={`w-10 h-10 transition-all duration-200 ease-out flex items-center justify-center rounded-full ${
                                                 (showAttachMenu && !isClosingAttach) 
                                                 ? 'text-violet-500 bg-violet-50 dark:bg-slate-800 dark:text-white rotate-45' 
-                                                : 'text-slate-400 hover:text-slate-600 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 rotate-0'
+                                                : 'text-slate-500 hover:text-slate-600 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 rotate-0'
                                             }`}
                                             title="Attach"
                                             disabled={disabled}

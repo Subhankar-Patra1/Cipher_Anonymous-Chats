@@ -44,7 +44,7 @@ export default function EmptyState({
             {/* Animated icon container */}
             <div className={`relative mb-6`}>
                 {/* Background glow */}
-                <div className={`absolute inset-0 bg-gradient-to-br ${style.iconBg} rounded-full blur-xl opacity-50 scale-150`} />
+
                 
                 {/* Icon circle */}
                 <div className={`relative w-20 h-20 rounded-full bg-gradient-to-br ${style.iconBg} flex items-center justify-center shadow-lg`}>
@@ -54,8 +54,7 @@ export default function EmptyState({
                 </div>
                 
                 {/* Decorative dots */}
-                <div className="absolute -top-1 -right-1 w-3 h-3 rounded-full bg-violet-400/30 dark:bg-violet-500/20 animate-pulse" />
-                <div className="absolute -bottom-2 -left-2 w-2 h-2 rounded-full bg-indigo-400/30 dark:bg-indigo-500/20 animate-pulse animation-delay-500" />
+
             </div>
             
             {/* Title */}
@@ -116,12 +115,7 @@ export function NoMessages() {
                 Start the conversation by sending a message
             </p>
             
-            {/* Decorative elements */}
-            <div className="flex items-center gap-2 mt-3 sm:mt-4 opacity-50">
-                <div className="w-1 h-1 sm:w-1.5 sm:h-1.5 rounded-full bg-violet-400 animate-pulse" />
-                <div className="w-1 h-1 sm:w-1.5 sm:h-1.5 rounded-full bg-indigo-400 animate-pulse animation-delay-200" />
-                <div className="w-1 h-1 sm:w-1.5 sm:h-1.5 rounded-full bg-cyan-400 animate-pulse animation-delay-400" />
-            </div>
+
         </div>
     );
 }

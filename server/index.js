@@ -5,6 +5,7 @@ const http = require('http');
 const { Server } = require('socket.io');
 const cors = require('cors');
 const db = require('./db');
+const { checkMessageLimit } = require('./utils/messageLimits');
 const redisClient = require('./redis');
 const socketMap = require('./utils/socketMap');
 
@@ -90,6 +91,17 @@ app.use('/api/', apiLimiter);
 app.use('/api/auth/login', authLimiter);
 app.use('/api/auth/signup', authLimiter);
 
+// Strict limit for backup endpoints: 10 attempts per 15 minutes
+const backupLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 10,
+    message: { error: 'Too many backup requests, please try again later.' },
+    standardHeaders: true,
+    legacyHeaders: false,
+    skip: process.env.NODE_ENV !== 'production' ? skipForLocalhost : undefined,
+});
+app.use('/api/auth/backup', backupLimiter);
+
 // [OAuth] Session middleware for Passport.js
 const session = require('express-session');
 const pgSession = require('connect-pg-simple')(session);
@@ -144,6 +156,9 @@ app.use('/api/polls', pollsRoutes);
 
 const todosRoutes = require('./todos');
 app.use('/api/todos', todosRoutes);
+
+const callsRoutes = require('./routes/calls');
+app.use('/api/calls', callsRoutes);
 
 // AI Integration
 const { setupAI } = require('./ai');
@@ -243,14 +258,81 @@ app.patch('/api/users/me/privacy', async (req, res) => {
         if (!process.env.JWT_SECRET) return res.status(500).json({ error: 'Server configuration error' });
         const decoded = jwtLib.verify(token, process.env.JWT_SECRET);
         const userId = decoded.id;
-        const { share_presence } = req.body;
+        const { share_presence, profile_pic_privacy, new_chat_privacy, search_privacy, calls_privacy, group_add_privacy } = req.body;
 
-        if (!['everyone', 'contacts', 'nobody'].includes(share_presence)) {
-            return res.status(400).json({ error: 'Invalid value' });
+        const updates = [];
+        const params = [];
+        let paramIdx = 1;
+
+        if (share_presence) {
+            if (!['everyone', 'contacts', 'nobody'].includes(share_presence)) {
+                return res.status(400).json({ error: 'Invalid share_presence value' });
+            }
+            updates.push(`share_presence = $${paramIdx++}`);
+            params.push(share_presence);
         }
 
-        await db.query('UPDATE users SET share_presence = $1 WHERE id = $2', [share_presence, userId]);
-        res.json({ success: true, share_presence });
+        if (profile_pic_privacy) {
+            if (!['everyone', 'contacts', 'nobody'].includes(profile_pic_privacy)) {
+                return res.status(400).json({ error: 'Invalid profile_pic_privacy value' });
+            }
+            updates.push(`profile_pic_privacy = $${paramIdx++}`);
+            params.push(profile_pic_privacy);
+        }
+
+        if (new_chat_privacy) {
+            if (!['everyone', 'contacts', 'nobody'].includes(new_chat_privacy)) {
+                return res.status(400).json({ error: 'Invalid new_chat_privacy value' });
+            }
+            updates.push(`new_chat_privacy = $${paramIdx++}`);
+            params.push(new_chat_privacy);
+        }
+
+        if (search_privacy) {
+            // Only everyone or nobody for search (simple visibility)
+            if (!['everyone', 'nobody'].includes(search_privacy)) {
+                return res.status(400).json({ error: 'Invalid search_privacy value' });
+            }
+            updates.push(`search_privacy = $${paramIdx++}`);
+            params.push(search_privacy);
+        }
+
+        if (calls_privacy) {
+            if (!['everyone', 'contacts', 'nobody'].includes(calls_privacy)) {
+                return res.status(400).json({ error: 'Invalid calls_privacy value' });
+            }
+            updates.push(`calls_privacy = $${paramIdx++}`);
+            params.push(calls_privacy);
+        }
+
+        if (group_add_privacy) {
+            if (!['everyone', 'contacts', 'nobody'].includes(group_add_privacy)) {
+                return res.status(400).json({ error: 'Invalid group_add_privacy value' });
+            }
+            updates.push(`group_add_privacy = $${paramIdx++}`);
+            params.push(group_add_privacy);
+        }
+
+        // [NEW] Read Receipts Toggle
+        if (typeof req.body.read_receipts === 'boolean') {
+             updates.push(`read_receipts = $${paramIdx++}`);
+             params.push(req.body.read_receipts);
+        }
+
+        if (updates.length === 0) {
+            return res.status(400).json({ error: 'No fields to update' });
+        }
+
+        params.push(userId);
+        await db.query(`UPDATE users SET ${updates.join(', ')} WHERE id = $${paramIdx}`, params);
+        
+        // Pass back updated read_receipts status
+        // Since we only know what was sent, we blindly echo it, or refetch. 
+        // For efficiency, we just echo if it was present.
+        const responseData = { success: true, share_presence, profile_pic_privacy, new_chat_privacy, search_privacy, calls_privacy, group_add_privacy };
+        if (typeof req.body.read_receipts === 'boolean') responseData.read_receipts = req.body.read_receipts;
+
+        res.json(responseData);
 
     } catch (err) {
         res.status(401).json({ error: 'Unauthorized' });
@@ -341,6 +423,28 @@ io.use(async (socket, next) => {
 
 io.engine.on("connection_error", (err) => {
     console.log("[DEBUG] Connection error:", err.req.url, err.code, err.message, err.context);
+});
+
+// [NEW] QR Login Namespace (unauthenticated - for new devices waiting for QR scan)
+const qrNamespace = io.of('/qr');
+qrNamespace.on('connection', (socket) => {
+    // console.log('[QR] New device connected to /qr namespace:', socket.id);
+    
+    socket.on('qr:subscribe', ({ token }) => {
+        if (!token || typeof token !== 'string' || token.length !== 64) {
+            return;
+        }
+        socket.join(`qr:${token}`);
+        // console.log(`[QR] Socket ${socket.id} joined room qr:${token}`);
+    });
+
+    socket.on('qr:unsubscribe', ({ token }) => {
+        if (token) socket.leave(`qr:${token}`);
+    });
+
+    socket.on('disconnect', () => {
+        // console.log('[QR] Device disconnected from /qr namespace:', socket.id);
+    });
 });
 
 app.set('io', io);
@@ -647,6 +751,17 @@ io.on('connection', async (socket) => {
         const safeCallback = typeof callback === 'function' ? callback : () => {};
 
         try {
+            // [NEW] Enforce Instagram-style limit
+            try {
+                await checkMessageLimit(roomId, socket.user.id);
+            } catch (e) {
+                if (e.message === 'LIMIT_REACHED') {
+                    safeCallback({ status: 'error', error: 'Invite sent. Wait for acceptance to send more messages.' });
+                    return;
+                }
+                throw e;
+            }
+
             // Verify membership and expiry
             const roomRes = await db.query('SELECT * FROM rooms WHERE id = $1', [roomId]);
             const room = roomRes.rows[0];
@@ -863,7 +978,7 @@ io.on('connection', async (socket) => {
                               io.to(`user:${recipientId}`).emit('rooms:refresh');
  
                               const recipientRoomRes = await db.query(`
-                                 SELECT r.*, rm.role, rm.last_read_at,
+                                 SELECT r.*, rm.role, rm.last_read_at, rm.is_accepted,
                                  (SELECT u.display_name FROM room_members rm2 JOIN users u ON rm2.user_id = u.id WHERE rm2.room_id = r.id AND rm2.user_id != $1 LIMIT 1) as other_user_name,
                                  (SELECT u.username FROM room_members rm2 JOIN users u ON rm2.user_id = u.id WHERE rm2.room_id = r.id AND rm2.user_id != $1 LIMIT 1) as other_user_username,
                                  (SELECT u.avatar_thumb_url FROM room_members rm2 JOIN users u ON rm2.user_id = u.id WHERE rm2.room_id = r.id AND rm2.user_id != $1 LIMIT 1) as other_user_avatar_thumb,
@@ -871,12 +986,44 @@ io.on('connection', async (socket) => {
                                  (SELECT u.id FROM room_members rm2 JOIN users u ON rm2.user_id = u.id WHERE rm2.room_id = r.id AND rm2.user_id != $1 LIMIT 1) as other_user_id,
                                  (SELECT u.display_name FROM users u WHERE u.id = r.created_by) as creator_name,
                                  (SELECT u.username FROM users u WHERE u.id = r.created_by) as creator_username,
-                                 (SELECT COUNT(*) FROM messages m WHERE m.room_id = r.id AND m.created_at > COALESCE(rm.last_read_at, '1970-01-01')) as unread_count,
+                                 (SELECT COUNT(*) FROM messages m WHERE m.room_id = r.id AND m.created_at > COALESCE(rm.last_read_at, '1970-01-01') AND m.user_id != $1::integer) as unread_count,
                                  (SELECT COUNT(*) FROM messages m WHERE m.room_id = r.id AND m.created_at > COALESCE(rm.last_read_at, '1970-01-01') AND $1::integer = ANY(m.mention_user_ids)) as mention_count,
+                                 -- [FIX] Include last message fields so message request previews work
+                                 COALESCE(last_msg.content, CASE WHEN last_msg.ciphertext IS NOT NULL THEN '🔒 Encrypted Message' ELSE NULL END) as last_message_content,
+                                 last_msg.type as last_message_type,
+                                 last_msg.user_id as last_message_sender_id,
+                                 last_msg.sender_name as last_message_sender_name,
+                                 last_msg.id as last_message_id,
+                                 last_msg.status as last_message_status,
+                                 last_msg.caption as last_message_caption,
+                                 last_msg.file_name as last_message_file_name,
+                                 last_msg.is_view_once as last_message_is_view_once,
+                                 last_msg.viewed_by as last_message_viewed_by,
+                                 last_msg.poll_question as last_message_poll_question,
+                                 last_msg.is_deleted_for_everyone as last_message_is_deleted,
+                                 last_msg.ciphertext as last_message_ciphertext,
+                                 last_msg.iv as last_message_iv,
+                                 last_msg.key_version as last_message_key_version,
+                                 last_msg.temp_id as last_message_temp_id,
                                  gp.send_mode, gp.allow_name_change, gp.allow_description_change, gp.allow_add_members, gp.allow_remove_members
                                  FROM rooms r 
                                  JOIN room_members rm ON r.id = rm.room_id 
                                  LEFT JOIN group_permissions gp ON r.id = gp.group_id
+                                 LEFT JOIN LATERAL (
+                                     SELECT m.content, m.type, m.user_id, m.id, m.status, m.caption, m.file_name,
+                                            m.is_view_once, m.viewed_by, m.is_deleted_for_everyone,
+                                            m.ciphertext, m.iv, m.key_version, m.temp_id,
+                                            u.display_name as sender_name,
+                                            p.question as poll_question
+                                     FROM messages m
+                                     LEFT JOIN users u ON m.user_id = u.id
+                                     LEFT JOIN polls p ON m.poll_id = p.id
+                                     WHERE m.room_id = r.id
+                                     AND (m.deleted_for_user_ids IS NULL OR NOT ($1::text = ANY(m.deleted_for_user_ids)))
+                                     AND (m.blocked_for_user_id IS NULL OR m.blocked_for_user_id != $1::integer)
+                                     ORDER BY m.created_at DESC
+                                     LIMIT 1
+                                 ) last_msg ON true
                                  WHERE r.id = $2 AND rm.user_id = $1
                               `, [recipientId, roomId]);
                               
@@ -892,7 +1039,24 @@ io.on('connection', async (socket) => {
                                      creator_name: rawRoom.creator_name,
                                      creator_username: rawRoom.creator_username,
                                      unread_count: parseInt(rawRoom.unread_count || 0),
-                                     mention_count: parseInt(rawRoom.mention_count || 0) // [NEW] Real-time sync
+                                     mention_count: parseInt(rawRoom.mention_count || 0),
+                                     // [FIX] Pass through last message fields
+                                     last_message_content: rawRoom.last_message_content,
+                                     last_message_type: rawRoom.last_message_type,
+                                     last_message_sender_id: rawRoom.last_message_sender_id,
+                                     last_message_sender_name: rawRoom.last_message_sender_name,
+                                     last_message_id: rawRoom.last_message_id,
+                                     last_message_status: rawRoom.last_message_status,
+                                     last_message_caption: rawRoom.last_message_caption,
+                                     last_message_file_name: rawRoom.last_message_file_name,
+                                     last_message_is_view_once: rawRoom.last_message_is_view_once,
+                                     last_message_viewed_by: rawRoom.last_message_viewed_by,
+                                     last_message_poll_question: rawRoom.last_message_poll_question,
+                                     last_message_is_deleted: rawRoom.last_message_is_deleted,
+                                     last_message_ciphertext: rawRoom.last_message_ciphertext,
+                                     last_message_iv: rawRoom.last_message_iv,
+                                     last_message_key_version: rawRoom.last_message_key_version,
+                                     last_message_temp_id: rawRoom.last_message_temp_id,
                                    };
                                   
                                   io.to(`user:${recipientId}`).emit('room_added', formattedRoom);
@@ -981,24 +1145,43 @@ io.on('connection', async (socket) => {
                  const validIds = messageIds.filter(id => Number.isInteger(id) || (typeof id === 'string' && /^\d+$/.test(id)));
                  if (validIds.length === 0) return;
 
+                 // [NEW] Check Reader's Privacy Setting (If disabled, don't mark as seen for others)
+                 const readerSettingsRes = await db.query('SELECT read_receipts FROM users WHERE id = $1', [socket.user.id]);
+                 const readerReceiptsEnabled = readerSettingsRes.rows[0]?.read_receipts !== false; // Default true
+
                  // 1. Get room member count
                  const countRes = await db.query('SELECT count(*) FROM room_members WHERE room_id = $1', [roomId]);
                  const totalMembers = parseInt(countRes.rows[0].count);
 
-                 // 2. Update read_by for these messages (append user_id if not present)
-                 // [MODIFIED] Soft Block: Do not send read receipt IF sender is blocked by reader (One-Way)
-                 const updateRes = await db.query(`
-                    UPDATE messages 
-                    SET read_by = array_append(read_by, $3)
-                    WHERE id = ANY($1::int[]) 
-                      AND room_id = $2 
-                      AND user_id != $3
-                      AND NOT ($3 = ANY(read_by))
-                      AND user_id NOT IN (SELECT blocked_id FROM blocked_users WHERE blocker_id = $3)
-                    RETURNING id, cardinality(read_by) as read_count
-                 `, [validIds, roomId, socket.user.id]);
+                 // 2. Update read_by for these messages 
+                 // [MODIFIED] Only update read_by if reader has receipts enabled
+                 // If disabled, we still might want to track "unread count" for them locally?
+                 // No, unread count is tracked via `room_members.last_read_message_id`.
+                 // This `mark_seen` is specifically for "Blue Ticks".
+                 // So if privacy is OFF, we do NOTHING here regarding `read_by`.
+                 
+                 let updatedMessages = [];
+                 
+                 if (readerReceiptsEnabled) {
+                     const updateRes = await db.query(`
+                        UPDATE messages 
+                        SET read_by = array_append(read_by, $3)
+                        WHERE id = ANY($1::int[]) 
+                          AND room_id = $2 
+                          AND user_id != $3
+                          AND NOT ($3 = ANY(read_by))
+                          AND user_id NOT IN (SELECT blocked_id FROM blocked_users WHERE blocker_id = $3)
+                        RETURNING id, cardinality(read_by) as read_count, user_id
+                     `, [validIds, roomId, socket.user.id]);
+                     updatedMessages = updateRes.rows;
+                 } else {
+                     // We still need to acknowledge we "processed" them for the client?
+                     // Client optimistically updates.
+                     // But we DO want to ensure `message_deliveries` is accurate even if read receipts are off?
+                     // Yes, "Delivered" is distinct from "Read".
+                 }
 
-                 // [NEW] Also ensure these messages are marked as DELIVERED in the database
+                 // [NEW] Ensure messages are marked as DELIVERED (Always, regardless of read privacy)
                  if (validIds.length > 0) {
                      await db.query(`
                         INSERT INTO message_deliveries (message_id, user_id)
@@ -1007,10 +1190,10 @@ io.on('connection', async (socket) => {
                      `, [validIds, socket.user.id]);
                  }
                  
-                 const updatedMessages = updateRes.rows;
+                 const readerIsAccepted = memberRes.rows[0].is_accepted;
                  const fullyReadIds = [];
 
-                 // 3. Check if any message is now seen by everyone (except sender)
+                 // 3. Check if any message is now seen by everyone
                  const threshold = totalMembers - 1;
                  
                  for (const msg of updatedMessages) {
@@ -1026,18 +1209,127 @@ io.on('connection', async (socket) => {
                         ['seen', fullyReadIds]
                     );
                     
-                    // Broadcast update only for fully read messages
-                    io.to(`room:${roomId}`).emit('messages_status_update', { messageIds: fullyReadIds, status: 'seen', roomId });
+                    // [MODIFIED] Suppress seen status broadcast if reader hasn't accepted
+                    if (readerIsAccepted) {
+                        io.to(`room:${roomId}`).emit('messages_status_update', { messageIds: fullyReadIds, status: 'seen', roomId });
+                    }
                  }
                  
-                 // [NEW] Broadcast Read Receipt (Real-time update for Message Info)
-                 // We emit to the room so everyone's "Message Info" updates
-                 io.to(`room:${roomId}`).emit('message:read_receipt', { 
-                     roomId, 
-                     messageIds: updatedMessages.map(m => m.id), 
-                     userId: socket.user.id,
-                     readAt: new Date().toISOString()
-                 });
+                 // [NEW] Broadcast Read Receipt (Bidirectional Check)
+                 if (readerIsAccepted && readerReceiptsEnabled && updatedMessages.length > 0) {
+                     // Group by Sender to check THEIR privacy setting
+                     const messagesBySender = {};
+                     updatedMessages.forEach(msg => {
+                         if (!messagesBySender[msg.user_id]) messagesBySender[msg.user_id] = [];
+                         messagesBySender[msg.user_id].push(msg.id);
+                     });
+                     
+                     // Get all senders' privacy settings
+                     const senderIds = Object.keys(messagesBySender);
+                     if (senderIds.length > 0) {
+                         const sendersSettingsRes = await db.query('SELECT id, read_receipts FROM users WHERE id = ANY($1::int[])', [senderIds]);
+                         const sendersPrivacyMap = {};
+                         sendersSettingsRes.rows.forEach(r => sendersPrivacyMap[r.id] = r.read_receipts !== false); // Default True
+                         
+                         // Emit to Room (but ideally we'd filter who receives it?)
+                         // Socket.io room emits go to everyone.
+                         // Changes:
+                         // 1. If Sender has Read Receipts OFF, they shouldn't see MY blue tick.
+                         //    So we cannot just emit to `room:${roomId}` generically if it contains the sender.
+                         //    But wait, `message:read_receipt` is mostly for the SENDER to see "X read my message".
+                         //    Other people in the group also see "X read Y's message" (in info).
+                         //    If Sender has it OFF, they shouldn't see it.
+                         //    If *I* have it OFF, I didn't generate it (handled above).
+                         //    So if *I* have it ON, but Sender has it OFF -> Sender shouldn't see it.
+                         //    But others in group? Usually Read Receipts are bilateral.
+                         //    Whatsapp: If you turn off, you don't see others'.
+                         //    So if Sender has it OFF, they don't see who read their msg.
+                         
+                         // Strategy:
+                         // We iterate senders. For each sender:
+                         // If SenderPrivacy is TRUE: Emit to them (and others?).
+                         // If SenderPrivacy is FALSE: Do NOT emit to them.
+                         
+                         // Since we can't selective-emit to efficient room members easily without iterating:
+                         // We will emit to `room:${roomId}` BUT we include a "exclude_user_ids" or similar?
+                         // Or client-side filtering? Client-side is insecure but easiest for "feature" level privacy (not hard security).
+                         // Hard security: Emit to individual sockets.
+                         
+                         // Let's do Server-Side iteration for safety and correctness.
+                         // Get all room members.
+                         const allMembers = await io.in(`room:${roomId}`).fetchSockets(); 
+                         // This only gets LOCAL sockets. If scaling, need functional adapter.
+                         // Assuming single instance or sticky sessions for now (as per simple implementation).
+                         
+                         // Actually, standard approach:
+                         // Emit to room. Client hides if their setting is off?
+                         // "he also not able to see if other user seen their mesage"
+                         // This implies: User A (Receipts OFF) sends message. User B (Receipts ON) reads it.
+                         // User B generates receipt.
+                         // User A receives receipt. User A Client checks "My Receipts are OFF", so I ignore it?
+                         // API-wise: User A's `read_by` array in DB *is* updated? 
+                         // If we update DB, then A can check message info and see it.
+                         // So "Reciprocity" usually means: If I turn off, I can't see others'.
+                         // OPTION A: Don't update DB? -> Then nobody sees it. Correct.
+                         // OPTION B: Update DB but dont show? -> Inconsistent.
+                         
+                         // WAIT.
+                         // Scenario: A (OFF) sends to B (ON).
+                         // B reads. B *should* generate a receipt because B is ON.
+                         // But A shouldn't see it because A is OFF.
+                         // This is tricky.
+                         // If A turns ON later, do they retroactively see it? 
+                         // WhatsApp: "If you turn off read receipts, you won't be able to see read receipts from other people."
+                         // Usually this is a blanket UI hiding. The data might exist.
+                         // BUT strict privacy: A shouldn't get the data.
+                         
+                         // Let's implement:
+                         // 1. I (Reader) am ON -> Update DB.
+                         // 2. Broadcast event.
+                         // 3. Receivers (Senders of msgs) check THEIR setting.
+                         //    If THEY are OFF, they ignore data?
+                         //    Or server filters?
+                         
+                         // Given the prompt "he also not able to see", let's assume strict logic:
+                         // If I am OFF, I don't send updates. (Already handled)
+                         // If I am ON, I send updates.
+                         // If Sender is OFF, they shouldn't receive the update.
+                         
+                         // We will emit to the room, but we can't easily filter per-user in a "broadcast".
+                         // We will let the CLIENT of the Sender filter it out?
+                         // "My setting is off, so I won't render blue ticks even if I get events".
+                         // That's the standard way for these toggles unless we want deep packet inspection.
+                         // Server-side enforcement of "Not seeing" usually means not sending the bit.
+                         
+                         // Let's TRY to send to specific users who SHOULD see it.
+                         // "Those who have read receipts ON".
+                         // We can find all members who have privacy ON.
+                         // Then emit to them.
+                         
+                         const membersWithReceiptsOnRes = await db.query(`
+                            SELECT rm.user_id 
+                            FROM room_members rm
+                            JOIN users u ON rm.user_id = u.id
+                            WHERE rm.room_id = $1 AND u.read_receipts = TRUE
+                         `, [roomId]);
+                         
+                         const targetUserIds = membersWithReceiptsOnRes.rows.map(r => r.user_id);
+                         
+                         // Optimize: If almost everyone is ON (default), iterating might be heavy if group is huge.
+                         // But for now, correctness > optimization.
+                         
+                         targetUserIds.forEach(uid => {
+                             io.to(`user:${uid}`).emit('message:read_receipt', { 
+                                 roomId, 
+                                 messageIds: updatedMessages.map(m => m.id), 
+                                 userId: socket.user.id,
+                                 readAt: new Date().toISOString()
+                             });
+                         });
+                         
+                         // We DO NOT emit to the whole room.
+                     }
+                 }
             }
         } catch (err) {
             console.error('Error marking seen:', err);
@@ -1275,16 +1567,71 @@ io.on('connection', async (socket) => {
     });
 
     // --- VOICE/VIDEO CALL SIGNALING ---
-    socket.on('call:invite', ({ to, signal, type, roomId, callerName, callerAvatar }) => {
+    socket.on('call:invite', async ({ to, signal, type, roomId, callerName, callerAvatar }) => {
         console.log(`[Call] Invite from ${socket.user.id} to ${to}`);
-        io.to(`user:${to}`).emit('call:invite', {
-            from: socket.user.id,
-            signal,
-            type,
-            roomId,
-            callerName,
-            callerAvatar
-        });
+
+        try {
+            // [NEW] Privacy Check
+            const userRes = await db.query('SELECT calls_privacy FROM users WHERE id = $1', [to]);
+            if (userRes.rows.length === 0) return; // User not found
+            const callsPrivacy = userRes.rows[0].calls_privacy || 'everyone';
+
+            // Check exceptions
+            const exceptionsRes = await db.query(
+                `SELECT excluded_user_id, exception_type FROM user_privacy_exceptions 
+                 WHERE user_id = $1 AND privacy_type = 'calls' AND excluded_user_id = $2`,
+                [to, socket.user.id]
+            );
+            
+            let isException = false;
+            let exceptionType = null;
+            if (exceptionsRes.rows.length > 0) {
+                isException = true;
+                exceptionType = exceptionsRes.rows[0].exception_type; // 'never_allow' or 'always_allow'
+            }
+
+            let allowed = false;
+
+            if (callsPrivacy === 'everyone') {
+                allowed = true;
+                if (isException && exceptionType === 'never_allow') allowed = false;
+            } else if (callsPrivacy === 'contacts') {
+                // Check if contact (share a room)
+                const commonRoomRes = await db.query(`
+                    SELECT 1 FROM room_members rm1
+                    JOIN room_members rm2 ON rm1.room_id = rm2.room_id
+                    WHERE rm1.user_id = $1 AND rm2.user_id = $2
+                    LIMIT 1
+                `, [to, socket.user.id]);
+                
+                const isContact = commonRoomRes.rows.length > 0;
+                
+                if (isContact) allowed = true;
+                if (isException && exceptionType === 'never_allow') allowed = false; // Block specific contact
+                if (isException && exceptionType === 'always_allow') allowed = true; // Allow non-contact (if added to exception)
+            } else if (callsPrivacy === 'nobody') {
+                allowed = false;
+                if (isException && exceptionType === 'always_allow') allowed = true;
+            }
+
+            if (!allowed) {
+                console.log(`[Call] Blocked by privacy settings: ${socket.user.id} -> ${to}`);
+                // Notify caller that user is busy/unavailable
+                socket.emit('call:busy', { from: to }); 
+                return;
+            }
+
+            io.to(`user:${to}`).emit('call:invite', {
+                from: socket.user.id,
+                signal,
+                type,
+                roomId,
+                callerName,
+                callerAvatar
+            });
+        } catch (err) {
+            console.error('[Call] Error in invite handler:', err);
+        }
     });
 
     socket.on('call:accept', ({ to, signal }) => {
@@ -1302,12 +1649,7 @@ io.on('connection', async (socket) => {
         });
     });
 
-    socket.on('call:end', ({ to }) => {
-        console.log(`[Call] Ended by ${socket.user.id}, notifying ${to}`);
-        io.to(`user:${to}`).emit('call:ended', {
-            from: socket.user.id
-        });
-    });
+    // [REMOVED] Duplicate call:end handler - already handled at line 694 with activeCalls tracking
 
     socket.on('call:media-toggle', ({ to, audio, video }) => {
         console.log(`[Call] Media toggle from ${socket.user.id} to ${to}: audio=${audio}, video=${video}`);

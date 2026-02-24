@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { cryptoManager } from '../lib/crypto/CryptoManager';
 import db from '../utils/db';
 
-export default function CreateBackupModal({ isOpen, onClose, token, onBackupSuccess, hasActiveBackup, mode = 'create' }) {
+export default function CreateBackupModal({ isOpen, onClose, token, onBackupSuccess, hasActiveBackup, autoBackupEnabled, mode = 'create' }) {
     // mode: 'create' | 'update' | 'verify'
     const [password, setPassword] = useState('');
     const [confirmPassword, setConfirmPassword] = useState('');
@@ -16,6 +16,8 @@ export default function CreateBackupModal({ isOpen, onClose, token, onBackupSucc
     const [passwordHint, setPasswordHint] = useState('');
     const [existingHint, setExistingHint] = useState('');
     const [error, setError] = useState('');
+    const [progress, setProgress] = useState(0);
+    const [progressText, setProgressText] = useState('');
 
     useEffect(() => {
         if (!isOpen) {
@@ -27,15 +29,11 @@ export default function CreateBackupModal({ isOpen, onClose, token, onBackupSucc
             setIsExiting(false);
             setShowPassword(false);
             setShowConfirmPassword(false);
-            setCurrentPassword('');
-            setError('');
-            setShowSuccess(false);
-            setIsExiting(false);
-            setShowPassword(false);
-            setShowConfirmPassword(false);
             setShowCurrentPassword(false);
             setPasswordHint('');
             setExistingHint('');
+            setProgress(0);
+            setProgressText('');
         }
     }, [isOpen]);
 
@@ -71,6 +69,8 @@ export default function CreateBackupModal({ isOpen, onClose, token, onBackupSucc
         e.preventDefault();
         setError('');
         setLoading(true);
+        setProgress(5);
+        setProgressText('Initializing...');
 
         try {
             if (mode === 'verify') {
@@ -81,12 +81,18 @@ export default function CreateBackupModal({ isOpen, onClose, token, onBackupSucc
                 const backupData = await checkRes.json();
                 if (!backupData) throw new Error('No backup found to verify');
 
+                setProgress(40);
+                setProgressText('Verifying password...');
+                
                 await cryptoManager.decryptBackup(
                     backupData.encrypted_blob,
                     backupData.salt,
                     backupData.iv,
                     currentPassword
                 );
+
+                setProgress(80);
+                setProgressText('Enabling auto-sync...');
 
                 await cryptoManager.enableAutoBackup(currentPassword, backupData.salt, token);
                 
@@ -110,27 +116,33 @@ export default function CreateBackupModal({ isOpen, onClose, token, onBackupSucc
                 return;
             }
 
-            // Normal Create/Update logic
+            // Normal Create/Update/Sync logic
             if (hasActiveBackup && !currentPassword) {
                 setError('Please enter your current password');
                 setLoading(false);
                 return;
             }
 
-            if (password !== confirmPassword) {
-                setError('Passwords do not match');
-                setLoading(false);
-                return;
+            if (mode !== 'sync') {
+                if (password !== confirmPassword) {
+                    setError('Passwords do not match');
+                    setLoading(false);
+                    return;
+                }
+
+                if (hasActiveBackup && password === currentPassword) {
+                    setError('New password must be different from current password');
+                    setLoading(false);
+                    return;
+                }
             }
 
-            if (hasActiveBackup && password === currentPassword) {
-                setError('New password must be different from current password');
-                setLoading(false);
-                return;
-            }
+            const targetPassword = mode === 'sync' ? currentPassword : password;
 
-            // If updating, verify the current password first
+            // If updating or syncing, verify the current password first
             if (hasActiveBackup) {
+                setProgress(15);
+                setProgressText('Verifying current password...');
                 const checkRes = await fetch(`${import.meta.env.VITE_API_URL}/api/auth/backup`, {
                     headers: { Authorization: `Bearer ${token}` }
                 });
@@ -150,9 +162,13 @@ export default function CreateBackupModal({ isOpen, onClose, token, onBackupSucc
             }
 
             // 1. Export all keys as JWK
+            setProgress(30);
+            setProgressText('Exporting encryption keys...');
             const keyBundle = await cryptoManager.exportAllKeysSync();
 
-            // 2. [NEW] Gather Chat History & Metadata
+            // 2. Gather Chat History & Metadata
+            setProgress(45);
+            setProgressText('Gathering chat history...');
             const [messages, rooms, users] = await Promise.all([
                 db.messages.toArray(),
                 db.rooms.toArray(),
@@ -178,22 +194,33 @@ export default function CreateBackupModal({ isOpen, onClose, token, onBackupSucc
             });
 
             // 5. Encrypt full bundle
-            const backup = await cryptoManager.encryptBackup(fullBundle, password);
+            setProgress(70);
+            setProgressText('Encrypting backup bundle...');
+            // Wait a tick for UI to update
+            await new Promise(r => setTimeout(r, 50)); 
+            
+            const backup = await cryptoManager.encryptBackup(fullBundle, targetPassword);
 
             // 6. Upload to server
+            setProgress(85);
+            setProgressText('Uploading securely to cloud...');
             const res = await fetch(`${import.meta.env.VITE_API_URL}/api/auth/backup`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
                     Authorization: `Bearer ${token}`
                 },
-                body: JSON.stringify({ ...backup, passwordHint: passwordHint.trim() || null })
+                body: JSON.stringify({ ...backup, passwordHint: passwordHint.trim() || existingHint || null })
             });
 
             if (!res.ok) throw new Error('Failed to upload backup');
 
-            await cryptoManager.enableAutoBackup(password, backup.salt, token);
+            setProgress(95);
+            setProgressText('Finalizing...');
+            await cryptoManager.enableAutoBackup(targetPassword, backup.salt, token);
 
+            setProgress(100);
+            setProgressText('Complete!');
             if (onBackupSuccess) onBackupSuccess();
             setShowSuccess(true);
             setTimeout(() => handleClose(), 1500);
@@ -233,13 +260,15 @@ export default function CreateBackupModal({ isOpen, onClose, token, onBackupSucc
                     <>
                         <div className="text-center mb-6 pt-4">
                             <div className="w-16 h-16 bg-emerald-100 dark:bg-emerald-600/20 rounded-full flex items-center justify-center mx-auto mb-4">
-                                <span className="material-symbols-outlined text-emerald-600 dark:text-emerald-400 text-3xl">{hasActiveBackup ? 'refresh' : 'cloud_upload'}</span>
+                                <span className="material-symbols-outlined text-emerald-600 dark:text-emerald-400 text-3xl">
+                                    {mode === 'verify' ? 'lock_open_right' : (mode === 'sync' ? 'sync' : (hasActiveBackup ? 'password' : 'cloud_upload'))}
+                                </span>
                             </div>
                             <h2 className="text-2xl font-bold text-slate-900 dark:text-white mb-2">
-                                {mode === 'verify' ? 'Unlock Auto Backup' : (hasActiveBackup ? 'Update Backup' : 'Cloud Backup')}
+                                {mode === 'verify' ? 'Unlock Auto Backup' : (mode === 'sync' ? 'Sync Now' : (hasActiveBackup ? 'Change Password' : 'Cloud Backup'))}
                             </h2>
                             
-                            {cryptoManager.isAutoBackupEnabled() && mode !== 'verify' && (
+                            {autoBackupEnabled && mode !== 'verify' && mode !== 'sync' && (
                                 <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-100 dark:bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 text-[11px] font-bold uppercase tracking-wider mb-3 animate-in fade-in slide-in-from-top-2 duration-500">
                                     <span className="relative flex h-2 w-2">
                                         <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
@@ -252,9 +281,12 @@ export default function CreateBackupModal({ isOpen, onClose, token, onBackupSucc
                             <p className="text-slate-600 dark:text-slate-400 text-sm">
                                 {mode === 'verify' 
                                     ? 'Enter your password to resume background synchronization.' 
-                                    : (hasActiveBackup 
-                                        ? 'Update your backup password and re-secure your encryption keys.' 
-                                        : 'Create a password-protected backup of your encryption keys to restore your history on new devices.')}
+                                    : (mode === 'sync'
+                                        ? 'Manually sync your latest messages and keys to the cloud.'
+                                        : (hasActiveBackup 
+                                            ? 'Update your backup password and re-secure your encryption keys.' 
+                                            : 'Create a password-protected backup of your encryption keys to restore your history on new devices.')
+                                      )}
                             </p>
                         </div>
 
@@ -285,17 +317,17 @@ export default function CreateBackupModal({ isOpen, onClose, token, onBackupSucc
                                 </div>
                             )}
 
-                            {existingHint && isOpen && (
+                            {existingHint && isOpen && mode !== 'sync' && (
                                 <div className="p-3 bg-blue-50 dark:bg-blue-500/10 border border-blue-200 dark:border-blue-500/20 rounded-lg text-sm flex items-start gap-2">
                                     <span className="material-symbols-outlined text-blue-500 dark:text-blue-400 text-lg mt-0.5">lightbulb</span>
                                     <div>
-                                        <p className="text-blue-600 dark:text-blue-300 font-bold text-xs uppercase mb-1">Passowrd Hint</p>
+                                        <p className="text-blue-600 dark:text-blue-300 font-bold text-xs uppercase mb-1">Password Hint</p>
                                         <p className="text-blue-800 dark:text-blue-100 italic">{existingHint}</p>
                                     </div>
                                 </div>
                             )}
 
-                            {mode !== 'verify' && (
+                            {mode !== 'verify' && mode !== 'sync' && (
                                 <div className="space-y-4 animate-in fade-in slide-in-from-bottom-2 duration-300">
                                     <div>
                                         <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">
@@ -375,7 +407,24 @@ export default function CreateBackupModal({ isOpen, onClose, token, onBackupSucc
                                 </div>
                             )}
 
-                            {error && (
+                            {loading && (
+                                <div className="py-2 animate-in fade-in zoom-in duration-300">
+                                    <div className="flex justify-between text-xs font-bold text-slate-500 mb-2 uppercase tracking-wider">
+                                        <span>{progressText}</span>
+                                        <span>{progress}%</span>
+                                    </div>
+                                    <div className="w-full bg-slate-100 dark:bg-slate-800 rounded-full h-2 overflow-hidden">
+                                        <div 
+                                            className="bg-emerald-500 h-2 rounded-full transition-all duration-300 ease-out relative"
+                                            style={{ width: `${progress}%` }}
+                                        >
+                                            <div className="absolute inset-0 bg-white/20 animate-shimmer" />
+                                        </div>
+                                    </div>
+                                </div>
+                            )}
+
+                            {error && !loading && (
                                 <div className="p-3 bg-red-100 dark:bg-red-500/10 border border-red-200 dark:border-red-500/20 rounded-lg text-red-600 dark:text-red-400 text-sm flex items-center gap-2 animate-shake">
                                     <span className="material-symbols-outlined text-sm">error</span>
                                     {error}
@@ -393,12 +442,12 @@ export default function CreateBackupModal({ isOpen, onClose, token, onBackupSucc
                                 </button>
                                 <button
                                     type="submit"
-                                    disabled={loading || (mode !== 'verify' && (password.length < 8 || !/[0-9]/.test(password) || password !== confirmPassword)) || (hasActiveBackup && !currentPassword) || (mode === 'verify' && !currentPassword)}
-                                    className="flex-1 px-4 py-2.5 rounded-xl bg-emerald-600 text-white font-bold hover:bg-emerald-500 disabled:opacity-50 disabled:cursor-not-allowed transition-all flex items-center justify-center gap-2 text-sm shadow-lg shadow-emerald-500/20"
+                                    disabled={loading || (mode !== 'verify' && mode !== 'sync' && (password.length < 8 || !/[0-9]/.test(password) || password !== confirmPassword)) || (hasActiveBackup && !currentPassword) || (mode === 'verify' && !currentPassword)}
+                                    className="flex-1 px-4 py-2.5 rounded-xl bg-emerald-600 text-white font-bold hover:bg-emerald-500 disabled:opacity-50 disabled:cursor-not-allowed transition-all flex items-center justify-center gap-2 text-sm shadow-lg shadow-emerald-500/20 relative overflow-hidden"
                                 >
                                     {loading ? (
-                                        <span className="material-symbols-outlined animate-spin text-sm">progress_activity</span>
-                                    ) : (mode === 'verify' ? 'Unlock & Sync' : (hasActiveBackup ? 'Update Backup' : 'Set Backup'))}
+                                        <span className="material-symbols-outlined animate-spin text-sm relative z-10">progress_activity</span>
+                                    ) : (mode === 'verify' ? 'Unlock & Sync' : (mode === 'sync' ? 'Sync Now' : (hasActiveBackup ? 'Update Password' : 'Set Backup')))}
                                 </button>
                             </div>
                         </form>

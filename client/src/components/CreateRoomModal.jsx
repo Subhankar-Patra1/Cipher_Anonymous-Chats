@@ -14,6 +14,7 @@ export default function CreateRoomModal({ onClose, onCreate }) {
     const [selectedUser, setSelectedUser] = useState(null);
     const [isSearching, setIsSearching] = useState(false);
     const [loading, setLoading] = useState(false);
+    const [error, setError] = useState(null); // [NEW] Error state
 
     useEffect(() => {
         if (type !== 'direct' || !searchQuery) {
@@ -42,16 +43,23 @@ export default function CreateRoomModal({ onClose, onCreate }) {
     const handleSubmit = async (e) => {
         e.preventDefault();
         setLoading(true);
-        if (type === 'direct') {
-            if (!selectedUser) {
-                setLoading(false);
-                return;
+        setError(null); // Clear previous errors
+        try {
+            if (type === 'direct') {
+                if (!selectedUser) {
+                    setLoading(false);
+                    return;
+                }
+                await onCreate({ type, targetUserId: selectedUser.id });
+            } else {
+                await onCreate({ name, type });
             }
-            await onCreate({ type, targetUserId: selectedUser.id });
-        } else {
-            await onCreate({ name, type });
+        } catch (err) {
+            console.error(err);
+            setError(err.message);
+        } finally {
+            setLoading(false);
         }
-        setLoading(false);
     };
 
     return (
@@ -66,6 +74,19 @@ export default function CreateRoomModal({ onClose, onCreate }) {
                     </button>
                 </div>
                 
+
+
+                {/* [NEW] Error Message */}
+                {error && (
+                    <div className="mb-6 p-4 bg-red-50 dark:bg-red-900/20 border border-red-100 dark:border-red-900/30 rounded-xl flex items-start gap-3 animate-in fade-in slide-in-from-top-2">
+                        <span className="material-symbols-outlined text-red-600 dark:text-red-400 mt-0.5">error</span>
+                        <div className="flex-1">
+                            <p className="text-sm font-bold text-red-800 dark:text-red-300">Could not create chat</p>
+                            <p className="text-xs text-red-600 dark:text-red-400 mt-0.5">{error}</p>
+                        </div>
+                    </div>
+                )}
+                
                 <form onSubmit={handleSubmit} className="space-y-6">
                     
                     {/* Pill Tabs (Toggle) */}
@@ -79,7 +100,7 @@ export default function CreateRoomModal({ onClose, onCreate }) {
                         
                         <button
                             type="button"
-                            onClick={() => { setType('group'); setSelectedUser(null); }}
+                            onClick={() => { setType('group'); setSelectedUser(null); setError(null); }}
                             className={`relative z-10 py-2.5 rounded-full text-sm font-bold transition-colors duration-300 flex items-center justify-center gap-2 ${
                                 type === 'group' 
                                 ? 'text-slate-900 dark:text-white' 
@@ -91,7 +112,7 @@ export default function CreateRoomModal({ onClose, onCreate }) {
                         </button>
                         <button
                             type="button"
-                            onClick={() => setType('direct')}
+                            onClick={() => { setType('direct'); setError(null); }}
                             className={`relative z-10 py-2.5 rounded-full text-sm font-bold transition-colors duration-300 flex items-center justify-center gap-2 ${
                                 type === 'direct' 
                                 ? 'text-slate-900 dark:text-white' 
@@ -242,7 +263,7 @@ export default function CreateRoomModal({ onClose, onCreate }) {
                         <button 
                             type="button" 
                             onClick={onClose}
-                            className="px-5 py-2.5 text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800/50 rounded-xl font-bold transition-colors text-sm"
+                            className="px-5 py-2.5 text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-white/10 rounded-xl font-bold transition-colors text-sm"
                         >
                             Cancel
                         </button>
@@ -251,8 +272,8 @@ export default function CreateRoomModal({ onClose, onCreate }) {
                             disabled={(type === 'direct' && !selectedUser) || (type === 'group' && !name.trim()) || loading}
                             className={`px-6 py-2.5 rounded-xl font-bold text-sm transition-all flex items-center gap-2 shadow-lg shadow-indigo-500/20 active:scale-[0.98] ${
                                 (type === 'direct' && !selectedUser) || (type === 'group' && !name.trim())
-                                ? 'bg-slate-100 dark:bg-slate-800 text-slate-400 dark:text-slate-500 cursor-not-allowed shadow-none'
-                                : 'bg-slate-900 hover:bg-slate-800 dark:bg-white dark:hover:bg-slate-200 text-white dark:text-slate-900'
+                                ? 'bg-slate-100 dark:bg-slate-700 text-slate-400 dark:text-slate-400 cursor-not-allowed shadow-none'
+                                : 'bg-violet-600 hover:bg-violet-700 text-white shadow-violet-500/20'
                             }`}
                         >
                             {loading ? (

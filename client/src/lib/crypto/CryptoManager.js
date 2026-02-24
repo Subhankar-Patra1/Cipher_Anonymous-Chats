@@ -1,7 +1,7 @@
 import { 
     saveDeviceIdentity, getDeviceIdentity, saveRoomKey, getRoomKey, getLatestRoomKey, 
     saveTrustedKey, getTrustedKey, getAllRoomKeys, getAllTrustedKeys, saveBulkRoomKeys, saveBulkTrustedKeys,
-    saveBackupConfig, getBackupConfig
+    saveBackupConfig, getBackupConfig, clearE2EEDatabase
 } from './db';
 import db from '../../utils/db'; // [NEW] Import main DB for full history backup
 
@@ -132,6 +132,34 @@ class CryptoManager {
         if (!this.signingKeyPair) await this.init();
         const exported = await window.crypto.subtle.exportKey("spki", this.signingKeyPair.publicKey);
         return this.arrayBufferToBase64(exported);
+    }
+
+    /**
+     * [FIX] Fully clear all E2EE data on logout to ensure fresh start on new login.
+     * This prevents skipping history restore on re-login.
+     */
+    async clearAllData() {
+        console.log('[Crypto] Wiping E2EE database for logout...');
+        
+        // 1. Clear IndexedDB
+        await clearE2EEDatabase();
+        
+        // 2. Clear in-memory state
+        this.deviceId = null;
+        this.keyPair = null;
+        this.signingKeyPair = null;
+        this.roomKeyCache.clear();
+        this.keyDistributionLog.clear();
+        this.autoBackupDerivedKey = null;
+        this.autoBackupSalt = null;
+        this.autoBackupToken = null;
+        
+        if (this.autoBackupTimeout) {
+            clearTimeout(this.autoBackupTimeout);
+            this.autoBackupTimeout = null;
+        }
+
+        console.log('[Crypto] All E2EE data wiped.');
     }
 
     // --- 2. Room Key Management ---
@@ -693,7 +721,28 @@ class CryptoManager {
      * Import JWK-serialized keys back into IndexedDB.
      */
     async importKeysSync(jsonBlob) {
-        const { roomKeys, trustedKeys } = JSON.parse(jsonBlob);
+        let parsed;
+        try {
+            parsed = typeof jsonBlob === 'string' ? JSON.parse(jsonBlob) : jsonBlob;
+        } catch (e) {
+            console.error('[Crypto] Import failed: Invalid JSON', e);
+            throw new Error('Invalid Backup Format');
+        }
+
+        // [FIX] Robust Parsing: Handle specific V2 structure (World Bundle) vs Legacy
+        let roomKeys = parsed.roomKeys;
+        let trustedKeys = parsed.trustedKeys;
+
+        // If it's a V2 Full Bundle, keys are nested in 'keys' property
+        if (!roomKeys && parsed.keys && parsed.keys.roomKeys) {
+            console.log('[Crypto] Detected V2 nested key bundle');
+            roomKeys = parsed.keys.roomKeys;
+            trustedKeys = parsed.keys.trustedKeys;
+        }
+
+        // Default to empty array if still undefined (Prevents crash)
+        roomKeys = roomKeys || [];
+        trustedKeys = trustedKeys || [];
 
         // Deserialize RoomKeys (JWK -> CryptoKey)
         const deserializedRoomKeys = await Promise.all(roomKeys.map(async (k) => ({
@@ -813,7 +862,7 @@ class CryptoManager {
             {
                 name: "PBKDF2",
                 salt: saltBuffer,
-                iterations: 100000,
+                iterations: 310000,
                 hash: "SHA-256"
             },
             keyMaterial,
@@ -896,7 +945,6 @@ class CryptoManager {
             const saltBuffer = this.base64ToArrayBuffer(salt);
             this.autoBackupDerivedKey = await this.deriveKeyFromPassword(password, saltBuffer);
             this.autoBackupSalt = salt;
-            this.autoBackupToken = token;
             
             // Store salt in DB (not the derived key for security)
             await saveBackupConfig({ salt, enabled: true });

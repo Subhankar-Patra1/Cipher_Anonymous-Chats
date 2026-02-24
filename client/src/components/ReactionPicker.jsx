@@ -2,21 +2,22 @@ import React, { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { useTheme } from '../context/ThemeContext'; 
 import EmojiPicker, { Emoji, EmojiStyle } from 'emoji-picker-react';
+import ReactionSettingsModal, { DEFAULT_REACTIONS } from './ReactionSettingsModal';
 
-export const REACTION_MAP = {
-    '👍': '1f44d',
-    '❤️': '2764-fe0f',
-    '😂': '1f602',
-    '😮': '1f62e',
-    '😢': '1f622',
-    '🙏': '1f64f'
-};
-
-const REACTION_EMOJIS = Object.keys(REACTION_MAP);
+// Re-export REACTION_MAP for compatibility with MessageList.jsx
+export const REACTION_MAP = DEFAULT_REACTIONS.reduce((acc, item) => {
+    acc[item.emoji] = item.unified;
+    return acc;
+}, {});
 
 export default function ReactionPicker({ onSelect, onRemove, onClose, currentReaction, className = '', origin = 'bottom-left', triggerRef }) {
     const { theme } = useTheme(); 
     const [showFullPicker, setShowFullPicker] = useState(false);
+    const [showSettings, setShowSettings] = useState(false);
+    const [reactions, setReactions] = useState(() => {
+        const saved = localStorage.getItem('custom_reactions');
+        return saved ? JSON.parse(saved) : DEFAULT_REACTIONS;
+    });
     const [isMenuClosing, setIsMenuClosing] = useState(false); 
     const [isClosing, setIsClosing] = useState(false); 
     const menuRef = useRef(null); 
@@ -33,7 +34,7 @@ export default function ReactionPicker({ onSelect, onRemove, onClose, currentRea
             const menuWidth = 260; // Estimated width
             const screenHeight = window.innerHeight;
             const screenWidth = window.innerWidth;
-            const gap = 8;
+            const gap = 2; // [MODIFIED] Moved menu closer to trigger (effectively "down" when above)
 
             let top = rect.top - menuHeight - gap;
             let isTop = true;
@@ -146,7 +147,7 @@ export default function ReactionPicker({ onSelect, onRemove, onClose, currentRea
     // Handle interaction for the main menu bar (close on click outside)
     useEffect(() => {
         const handleClickOutside = (event) => {
-            if (showFullPicker) return;
+            if (showFullPicker || showSettings) return;
             if (menuRef.current && !menuRef.current.contains(event.target)) {
                 // Also check if we clicked the trigger button to avoid immediate re-opening
                 if (triggerRef?.current && triggerRef.current.contains(event.target)) return;
@@ -161,7 +162,7 @@ export default function ReactionPicker({ onSelect, onRemove, onClose, currentRea
             document.removeEventListener('mousedown', handleClickOutside);
             document.removeEventListener('touchstart', handleClickOutside);
         };
-    }, [showFullPicker, triggerRef]); 
+    }, [showFullPicker, showSettings, triggerRef]); 
 
     const handleMenuClose = () => {
         setIsMenuClosing(true);
@@ -198,21 +199,21 @@ export default function ReactionPicker({ onSelect, onRemove, onClose, currentRea
                     }
                 }}
             >
-                {REACTION_EMOJIS.map(emojiChar => (
+                {reactions.map(item => (
                     <button
-                        key={emojiChar}
-                        onClick={() => currentReaction === emojiChar ? handleRemoveWithAnim() : handleSelectWithAnim(emojiChar)}
+                        key={item.emoji}
+                        onClick={() => currentReaction === item.emoji ? handleRemoveWithAnim() : handleSelectWithAnim(item.emoji)}
                         className={`
                             w-8 h-8 flex items-center justify-center rounded-full transition-all text-xl
-                            ${currentReaction === emojiChar 
+                            ${currentReaction === item.emoji 
                                 ? 'bg-violet-100 dark:bg-violet-500/20 ring-1 ring-violet-500/30 dark:ring-violet-400/30' 
                                 : 'hover:bg-slate-100 dark:hover:bg-slate-700 hover:scale-110'
                             }
                         `}
                     >
-                        <div className={currentReaction === emojiChar ? "scale-110 transition-transform duration-200" : ""}>
+                        <div className={currentReaction === item.emoji ? "scale-110 transition-transform duration-200" : ""}>
                             <Emoji 
-                                unified={REACTION_MAP[emojiChar]} 
+                                unified={item.unified} 
                                 emojiStyle={EmojiStyle.APPLE} 
                                 size={20} 
                             />
@@ -265,7 +266,7 @@ export default function ReactionPicker({ onSelect, onRemove, onClose, currentRea
                                     }
                                 }}
                             >
-                                <div className="bg-white dark:bg-slate-900 rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-800 overflow-hidden">
+                                <div className="bg-white dark:bg-slate-900 rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-800 overflow-hidden relative reaction-emoji-picker">
                                     <EmojiPicker 
                                         onEmojiClick={(emojiData) => {
                                             handleSelectWithAnim(emojiData.emoji);
@@ -275,10 +276,26 @@ export default function ReactionPicker({ onSelect, onRemove, onClose, currentRea
                                         theme={theme} 
                                         lazyLoadEmojis={true}
                                         searchDisabled={false}
-                                        skinTonesDisabled
+                                        skinTonesDisabled={true}
                                         width={320}
-                                        height={400}
+                                        height={350}
+                                        previewConfig={{ showPreview: false }}
+                                        searchPlaceholder="Search emoji"
                                     />
+                                    {/* Settings Icon for Reaction Picker */}
+                                    <button 
+                                        className="absolute top-[22px] right-3 z-10 w-[30px] h-[30px] flex items-center justify-center text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-200 transition-all"
+                                        onClick={(e) => {
+                                            e.stopPropagation();
+                                            setShowSettings(true);
+                                            setShowFullPicker(false);
+                                        }}
+                                        title="Reaction Settings"
+                                    >
+                                        <div className="hover:bg-slate-100 dark:hover:bg-slate-800/80 rounded-full p-1.5 flex items-center justify-center transition-all">
+                                            <span className="material-symbols-outlined text-[20px]">settings</span>
+                                        </div>
+                                    </button>
                                 </div>
                             </div>
                         </div>,
@@ -286,6 +303,14 @@ export default function ReactionPicker({ onSelect, onRemove, onClose, currentRea
                     )}
                 </div>
             </div>
+
+            <ReactionSettingsModal 
+                isOpen={showSettings} 
+                onClose={() => setShowSettings(false)}
+                onSave={(newReactions) => {
+                    setReactions(newReactions);
+                }}
+            />
         </div>,
         document.body
     );

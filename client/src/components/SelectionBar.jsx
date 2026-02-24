@@ -2,7 +2,7 @@ import React from 'react';
 
 const SelectionBar = ({ count, onCancel, onDelete, onCopy, canCopy }) => {
     return (
-        <div className="flex items-center justify-between px-4 py-3 bg-white dark:bg-slate-800 border-t border-slate-200 dark:border-slate-700 h-[72px] animate-in slide-in-from-bottom duration-200 z-20">
+        <div className="fixed bottom-0 left-0 right-0 z-50 flex items-center justify-between px-4 py-3 bg-white dark:bg-slate-900 border-t border-slate-200 dark:border-slate-800 h-[72px] animate-in slide-in-from-bottom duration-200 shadow-2xl">
             <div className="flex items-center gap-4">
                 <button 
                     onClick={onCancel}

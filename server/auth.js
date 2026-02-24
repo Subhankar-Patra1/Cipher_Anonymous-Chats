@@ -10,6 +10,18 @@ const router = express.Router();
 const JWT_SECRET = process.env.JWT_SECRET;
 if (!JWT_SECRET) throw new Error('JWT_SECRET environment variable is required');
 
+// Shared auth middleware for protected routes
+const authenticateToken = (req, res, next) => {
+    const token = req.headers.authorization?.split(' ')[1];
+    if (!token) return res.status(401).json({ error: 'No token' });
+    try {
+        req.user = jwt.verify(token, JWT_SECRET);
+        next();
+    } catch (err) {
+        return res.status(401).json({ error: 'Invalid or expired token' });
+    }
+};
+
 router.post('/signup', async (req, res) => {
     const { username, displayName, password } = req.body;
     console.log('[DEBUG-SIGNUP] Body:', JSON.stringify(req.body));
@@ -64,7 +76,15 @@ router.post('/signup', async (req, res) => {
         const token = jwt.sign({ id: newUserId, username, display_name: displayName, sessionId }, JWT_SECRET);
         res.json({ 
             token, 
-            user: { id: newUserId, username, display_name: displayName, share_presence: 'everyone' },
+            user: { 
+                id: newUserId, 
+                username, 
+                display_name: displayName, 
+                share_presence: 'everyone',
+                read_receipts: true,
+                profile_pic_privacy: 'everyone',
+                search_privacy: 'everyone'
+            },
             recoveryCode // Return only once
         });
     } catch (error) {
@@ -145,7 +165,17 @@ router.post('/login', async (req, res) => {
         }
 
         // Send response after session is created
-        res.json({ token, user: { id: user.id, username: user.username, display_name: user.display_name, share_presence: user.share_presence, avatar_url: user.avatar_url, avatar_thumb_url: user.avatar_thumb_url } });
+        res.json({ token, user: { 
+            id: user.id, 
+            username: user.username, 
+            display_name: user.display_name, 
+            share_presence: user.share_presence, 
+            read_receipts: user.read_receipts,
+            profile_pic_privacy: user.profile_pic_privacy,
+            search_privacy: user.search_privacy,
+            avatar_url: user.avatar_url, 
+            avatar_thumb_url: user.avatar_thumb_url 
+        } });
 
         // [OPTIMIZED] Device Registration in background (non-blocking)
         if (deviceId && publicKey) {
@@ -255,7 +285,7 @@ router.get('/me', async (req, res) => {
         // [FIX] Removed the strict sessionId requirement - allow legacy tokens to work
         // This prevents logout-on-refresh for users with older tokens
 
-        const { rows } = await db.query('SELECT id, username, display_name, share_presence, avatar_url, avatar_thumb_url, auth_method FROM users WHERE id = $1', [decoded.id]);
+        const { rows } = await db.query('SELECT id, username, display_name, share_presence, read_receipts, profile_pic_privacy, search_privacy, avatar_url, avatar_thumb_url, auth_method FROM users WHERE id = $1', [decoded.id]);
         const user = rows[0];
         
         if (!user) return res.status(404).json({ error: 'User not found' });
@@ -284,7 +314,7 @@ router.get('/search', async (req, res) => {
         // Note: Postgres uses $1, $2. 
         // We use ILIKE for case-insensitive search if desired, but LIKE is standard.
         const { rows } = await db.query(
-            'SELECT id, username, display_name, avatar_thumb_url FROM users WHERE username LIKE $1 AND id != $2 LIMIT 10', 
+            "SELECT id, username, display_name, avatar_thumb_url FROM users WHERE username LIKE $1 AND id != $2 AND search_privacy != 'nobody' LIMIT 10", 
             [`%${q}%`, currentUserId || -1]
         );
         res.json(rows);
@@ -428,14 +458,9 @@ router.delete('/devices/:deviceId', async (req, res) => {
     }
 });
 
-// [NEW] Cloud Backup Routes
-router.post('/backup', async (req, res) => {
-    const token = req.headers.authorization?.split(' ')[1];
-    if (!token) return res.status(401).json({ error: 'No token' });
-    
+router.post('/backup', authenticateToken, async (req, res) => {
     try {
-        const decoded = jwt.verify(token, JWT_SECRET);
-        const userId = decoded.id;
+        const userId = req.user.id;
         const { encryptedBlob, salt, iv } = req.body;
 
         if (!encryptedBlob || !salt || !iv) {
@@ -451,29 +476,22 @@ router.post('/backup', async (req, res) => {
 
         res.json({ success: true });
 
-        // Broadcast global auto-sync status (it's always enabled when creating/updating backup)
+        // Broadcast global auto-sync status
         const io = req.app.get('io');
         if (io) {
             io.to(`user:${userId}`).emit('sync:auto-backup-status', { enabled: true });
         }
     } catch (err) {
-        if (err.name === 'JsonWebTokenError' || err.name === 'TokenExpiredError') {
-            return res.status(401).json({ error: 'Invalid or expired token' });
-        }
         console.error('[Backup] Upload Error:', err);
         res.status(500).json({ error: 'Server error during backup upload' });
     }
 });
 
-router.get('/backup', async (req, res) => {
-    const token = req.headers.authorization?.split(' ')[1];
-    if (!token) return res.status(401).json({ error: 'No token' });
-    
+router.get('/backup', authenticateToken, async (req, res) => {
     try {
-        const decoded = jwt.verify(token, JWT_SECRET);
-        const userId = decoded.id;
+        const userId = req.user.id;
 
-        const { rows } = await db.query('SELECT encrypted_blob, salt, iv, password_hint, is_auto_sync_enabled FROM key_backups WHERE user_id = $1', [userId]);
+        const { rows } = await db.query('SELECT encrypted_blob, salt, iv, password_hint, is_auto_sync_enabled, created_at FROM key_backups WHERE user_id = $1', [userId]);
         
         if (rows.length === 0) {
             return res.json(null);
@@ -481,17 +499,14 @@ router.get('/backup', async (req, res) => {
         
         res.json(rows[0]);
     } catch (err) {
-        res.status(401).json({ error: 'Invalid token' });
+        console.error('[Backup] Fetch Error:', err);
+        res.status(500).json({ error: 'Server error fetching backup' });
     }
 });
 
-router.post('/backup/toggle-sync', async (req, res) => {
-    const token = req.headers.authorization?.split(' ')[1];
-    if (!token) return res.status(401).json({ error: 'No token' });
-    
+router.post('/backup/toggle-sync', authenticateToken, async (req, res) => {
     try {
-        const decoded = jwt.verify(token, JWT_SECRET);
-        const userId = decoded.id;
+        const userId = req.user.id;
         const { enabled } = req.body;
 
         if (typeof enabled !== 'boolean') {
@@ -512,7 +527,189 @@ router.post('/backup/toggle-sync', async (req, res) => {
 
         res.json({ success: true });
     } catch (err) {
-        res.status(401).json({ error: 'Invalid token' });
+        console.error('[Backup] Toggle Error:', err);
+        res.status(500).json({ error: 'Server error toggling sync' });
+    }
+});
+
+// ===== QR CODE LOGIN SYSTEM =====
+
+// [NEW] Generate a QR login session (unauthenticated endpoint)
+router.post('/qr-session', async (req, res) => {
+    try {
+        const token = crypto.randomBytes(32).toString('hex'); // 64 char hex
+        const expiresAt = new Date(Date.now() + 2 * 60 * 1000); // 2 minutes
+
+        // Capture new device info from request
+        const ua = new UAParser(req.headers['user-agent']);
+        const browser = ua.getBrowser();
+        const os = ua.getOS();
+        const device = ua.getDevice();
+        const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
+
+        const deviceInfo = {
+            browser: browser.name || 'Unknown',
+            os: os.name || 'Unknown',
+            device: (device.model && device.model.length > 2 && device.vendor) 
+                ? `${device.vendor} ${device.model}` 
+                : null,
+            ip
+        };
+
+        await db.query(`
+            INSERT INTO qr_login_sessions (token, expires_at, new_device_info)
+            VALUES ($1, $2, $3)
+        `, [token, expiresAt, JSON.stringify(deviceInfo)]);
+
+        // Clean up expired sessions (fire and forget)
+        db.query(`DELETE FROM qr_login_sessions WHERE expires_at < NOW()`).catch(() => {});
+
+        res.json({ token, expiresAt: expiresAt.toISOString() });
+    } catch (err) {
+        console.error('[QR] Session creation error:', err);
+        res.status(500).json({ error: 'Failed to create QR session' });
+    }
+});
+
+// [NEW] Confirm QR login (authenticated - called by the logged-in device)
+router.post('/qr-session/confirm', authenticateToken, async (req, res) => {
+    try {
+        const { qrToken } = req.body;
+        const userId = req.user.id;
+
+        if (!qrToken) {
+            return res.status(400).json({ error: 'Missing QR token' });
+        }
+
+        // 1. Find the QR session
+        const { rows } = await db.query(
+            'SELECT * FROM qr_login_sessions WHERE token = $1',
+            [qrToken]
+        );
+        const session = rows[0];
+
+        if (!session) {
+            return res.status(404).json({ error: 'QR session not found' });
+        }
+        if (session.status !== 'pending') {
+            return res.status(400).json({ error: 'QR session already used' });
+        }
+        if (new Date(session.expires_at) < new Date()) {
+            return res.status(410).json({ error: 'QR session expired' });
+        }
+
+        // 2. Get user data
+        const userRes = await db.query(
+            'SELECT id, username, display_name, share_presence, read_receipts, profile_pic_privacy, search_privacy, avatar_url, avatar_thumb_url FROM users WHERE id = $1',
+            [userId]
+        );
+        const user = userRes.rows[0];
+        if (!user) {
+            return res.status(404).json({ error: 'User not found' });
+        }
+
+        // 3. Create a new session for the new device
+        const newSessionId = uuidv4();
+        const deviceInfo = session.new_device_info || {};
+        const deviceName = deviceInfo.device || `${deviceInfo.browser || 'Unknown'} on ${deviceInfo.os || 'Unknown'}`;
+        const deviceType = deviceInfo.device ? 'mobile' : 'desktop';
+
+        await db.query(`
+            INSERT INTO user_sessions (id, user_id, device_name, device_type, os, browser, ip_address)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
+        `, [
+            newSessionId,
+            userId,
+            deviceName,
+            deviceType,
+            deviceInfo.os || 'Unknown',
+            deviceInfo.browser || 'Unknown',
+            deviceInfo.ip || null
+        ]);
+
+        // 4. Generate JWT for the new device
+        const newToken = jwt.sign({
+            id: user.id,
+            username: user.username,
+            display_name: user.display_name,
+            sessionId: newSessionId
+        }, JWT_SECRET);
+
+        // 5. Update QR session
+        await db.query(`
+            UPDATE qr_login_sessions 
+            SET status = 'authenticated', confirmed_by_user_id = $1, auth_token = $2
+            WHERE token = $3
+        `, [userId, newToken, qrToken]);
+
+        // 6. Emit Socket.IO event to the waiting new device
+        const io = req.app.get('io');
+        if (io) {
+            const qrNamespace = io.of('/qr');
+            qrNamespace.to(`qr:${qrToken}`).emit('qr:authenticated', {
+                authToken: newToken,
+                user: {
+                    id: user.id,
+                    username: user.username,
+                    display_name: user.display_name,
+                    share_presence: user.share_presence,
+                    read_receipts: user.read_receipts,
+                    profile_pic_privacy: user.profile_pic_privacy,
+                    search_privacy: user.search_privacy,
+                    avatar_url: user.avatar_url,
+                    avatar_thumb_url: user.avatar_thumb_url
+                }
+            });
+        }
+
+        res.json({ success: true });
+    } catch (err) {
+        console.error('[QR] Confirm error:', err);
+        res.status(500).json({ error: 'Failed to confirm QR session' });
+    }
+});
+
+// [NEW] Poll QR session status (fallback for when WebSocket isn't ready)
+router.get('/qr-session/:token/status', async (req, res) => {
+    try {
+        const { token } = req.params;
+        
+        const { rows } = await db.query(
+            'SELECT status, expires_at, auth_token, confirmed_by_user_id FROM qr_login_sessions WHERE token = $1',
+            [token]
+        );
+        const session = rows[0];
+
+        if (!session) {
+            return res.status(404).json({ error: 'Session not found' });
+        }
+
+        // Check expiry
+        if (new Date(session.expires_at) < new Date() && session.status === 'pending') {
+            return res.json({ status: 'expired' });
+        }
+
+        const response = { 
+            status: session.status,
+            newDeviceInfo: session.new_device_info ? JSON.parse(session.new_device_info) : null
+        };
+
+        // If authenticated, include the auth data
+        if (session.status === 'authenticated' && session.auth_token) {
+            response.authToken = session.auth_token;
+            
+            // Fetch user data
+            const userRes = await db.query(
+                'SELECT id, username, display_name, share_presence, read_receipts, profile_pic_privacy, search_privacy, avatar_url, avatar_thumb_url FROM users WHERE id = $1',
+                [session.confirmed_by_user_id]
+            );
+            response.user = userRes.rows[0];
+        }
+
+        res.json(response);
+    } catch (err) {
+        console.error('[QR] Status check error:', err);
+        res.status(500).json({ error: 'Failed to check status' });
     }
 });
 

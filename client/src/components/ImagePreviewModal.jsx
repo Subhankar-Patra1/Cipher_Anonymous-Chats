@@ -464,6 +464,7 @@ export default function ImagePreviewModal({ files, onClose, onSend, recipientNam
                                         saveCurrentCaption(currentIndex, newHtml); // [NEW] Auto-save
                                     }}
                                     lazyLoadEmojis={true}
+                                    previewConfig={{ showPreview: false }}
                                 />
                             </div>
                         )}

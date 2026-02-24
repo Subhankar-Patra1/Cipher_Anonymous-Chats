@@ -10,6 +10,11 @@ export const CallProvider = ({ children, socket }) => {
     const { user } = useAuth();
 
     const [callStatus, setCallStatus] = useState('idle'); // idle, calling, incoming, connected, ended
+    // Helper: sync ref immediately so stale closures always see the latest status
+    const updateCallStatus = (newStatus) => {
+        callStatusRef.current = newStatus;
+        setCallStatus(newStatus);
+    };
     const [connectionStatus, setConnectionStatus] = useState('good'); // good, reconnecting, failed
     const [localStream, setLocalStream] = useState(null);
     const [remoteStream, setRemoteStream] = useState(null);
@@ -56,6 +61,11 @@ export const CallProvider = ({ children, socket }) => {
     const incomingSignalRef = useRef(null); 
     const isBusyRef = useRef(false);
     const callDetailsRef = useRef(null); // [NEW] Ref for callbacks to avoid stale closures
+    const startTimeRef = useRef(null); // [NEW] Track call duration
+    const callStatusRef = useRef('idle'); // Track callStatus in ref to avoid stale closures
+    const initiatedCallMessageIdRef = useRef(null); // [NEW] Track the message ID of the 'initiated' call log
+    const saveCallLogPromiseRef = useRef(null); // [NEW] Track in-flight saveCallLog to prevent race conditions
+    const isEndingCallRef = useRef(false); // [NEW] Re-entrancy guard for endCall
 
     // Audio Refs
     const ringtoneRef = useRef(new Audio('/sounds/ringtone.mp3'));
@@ -98,12 +108,17 @@ export const CallProvider = ({ children, socket }) => {
             const details = { callerId: from, callerName, callerAvatar, type, roomId };
             setCallDetails(details);
             callDetailsRef.current = details;
-            setCallStatus('incoming');
+            updateCallStatus('incoming');
             incomingSignalRef.current = signal;
         });
 
         socket.on('call:accepted', ({ signal }) => {
-            setCallStatus('connected');
+            updateCallStatus('connected');
+            startTimeRef.current = Date.now(); // [NEW] Start timer
+            // [NEW] Update call log to 'connected' so sidebar shows "In call"
+            if (callDetailsRef.current) {
+                saveCallLog(callDetailsRef.current, 'connected');
+            }
             if (connectionRef.current) {
                 connectionRef.current.signal(signal);
             }
@@ -127,8 +142,107 @@ export const CallProvider = ({ children, socket }) => {
             socket.off('call:accepted');
             socket.off('call:busy');
             socket.off('call:ended');
+            socket.off('call:media-toggle');
         };
     }, [socket]);
+
+    // [NEW] Listen for external call initiation (e.g. from MessageList)
+    const initiateCallRef = useRef(null);
+    
+    useEffect(() => {
+        const handleInitiateCall = (e) => {
+            const { userId, roomId, type, targetName, targetAvatar } = e.detail;
+            initiateCallRef.current(userId, roomId, type, targetName, targetAvatar);
+        };
+        window.addEventListener('cipher:initiate-call', handleInitiateCall);
+        return () => window.removeEventListener('cipher:initiate-call', handleInitiateCall);
+    }, []);
+
+    const saveCallLog = async (details, status, duration = 0) => {
+        if (!details || !user || !socket) return;
+        
+        // ONLY the caller logs the call to DB and sends the chat message to avoid duplicates
+        if (!details.isOutgoing) return;
+
+        try {
+            const token = localStorage.getItem('token');
+            const targetId = details.targetId;
+            
+            // 1. Create Call Log in DB — only on FINAL statuses (not initiated/connected)
+            const isFinalStatus = ['completed', 'missed', 'cancelled', 'declined', 'busy'].includes(status);
+            if (isFinalStatus) {
+                await fetch(`${import.meta.env.VITE_API_URL}/api/calls`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        Authorization: `Bearer ${token}`
+                    },
+                    body: JSON.stringify({
+                        receiver_id: targetId,
+                        room_id: details.roomId,
+                        type: details.type,
+                        status: status,
+                        duration: duration,
+                        ended_at: new Date().toISOString()
+                    })
+                });
+                // [NEW] Notify CallHistory to refresh
+                window.dispatchEvent(new CustomEvent('cipher:call-log-saved'));
+            }
+
+            // 2. Build a human-readable content label for the sidebar preview
+            const callLabel = status === 'completed' ? 'Call ended'
+                : status === 'missed' ? 'Missed call'
+                : status === 'cancelled' ? 'Cancelled call'
+                : status === 'declined' ? 'Declined call'
+                : status === 'busy' ? 'Busy'
+                : status === 'connected' ? (details.type === 'video' ? 'Video call' : 'Voice call')
+                : status === 'initiated' ? (details.type === 'video' ? 'Video call' : 'Voice call')
+                : 'Call ended';
+
+            // 3. Send "Call Log" message to the chat room
+            if (details.roomId) {
+                const meta = {
+                    call_type: details.type,
+                    call_status: status,
+                    duration: duration,
+                    caller_id: user.id,
+                    target_id: details.targetId,
+                    target_name: details.callerName || null,
+                    target_avatar: details.callerAvatar || null
+                };
+                
+                const isUpdate = status !== 'initiated' && initiatedCallMessageIdRef.current;
+                const url = isUpdate 
+                    ? `${import.meta.env.VITE_API_URL}/api/messages/${initiatedCallMessageIdRef.current}`
+                    : `${import.meta.env.VITE_API_URL}/api/messages`;
+                
+                const response = await fetch(url, {
+                    method: isUpdate ? 'PATCH' : 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        Authorization: `Bearer ${token}`
+                    },
+                    body: JSON.stringify({
+                        room_id: details.roomId,
+                        type: 'call_log',
+                        content: callLabel,
+                        caption: JSON.stringify(meta)
+                    })
+                });
+
+                if (response.ok) {
+                    const savedMsg = await response.json();
+                    if (status === 'initiated' && savedMsg.id) {
+                        initiatedCallMessageIdRef.current = savedMsg.id;
+                    }
+                }
+            }
+
+        } catch (err) {
+            console.error("Failed to save call log:", err);
+        }
+    };
 
     const getMediaConstraints = (type) => {
         const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
@@ -292,7 +406,7 @@ export const CallProvider = ({ children, socket }) => {
         try {
             setLocalStream(stream);
             localStreamRef.current = stream;
-            setCallStatus('calling');
+            updateCallStatus('calling');
             setConnectionStatus('good');
             
             // [FIX] For outgoing calls, we store the TARGET'S details for display 
@@ -308,6 +422,10 @@ export const CallProvider = ({ children, socket }) => {
             };
             setCallDetails(details);
             callDetailsRef.current = details;
+
+            // [NEW] Save log immediately as "initiated" so it shows up in chat window
+            // [FIX] Track the promise so endCall can await it before PATCHing
+            saveCallLogPromiseRef.current = saveCallLog(details, 'initiated');
 
             const peer = new SimplePeer({
                 initiator: true,
@@ -358,13 +476,16 @@ export const CallProvider = ({ children, socket }) => {
         } catch (err) {
             console.error("Call initialization failed:", err);
             alert("Failed to start call: " + (err.message || "Unknown error"));
-            setCallStatus('idle');
+            updateCallStatus('idle');
             setConnectionStatus('good');
             if (stream) {
                  stream.getTracks().forEach(t => t.stop());
             }
         }
     };
+
+    // Update the ref after initiateCall is defined to avoid ReferenceError
+    initiateCallRef.current = initiateCall;
 
     const answerCall = async () => {
         let stream = null;
@@ -384,7 +505,8 @@ export const CallProvider = ({ children, socket }) => {
         try {
             setLocalStream(stream);
             localStreamRef.current = stream;
-            setCallStatus('connected');
+            updateCallStatus('connected');
+            startTimeRef.current = Date.now(); // [NEW] Start timer
             setConnectionStatus('good');
 
             // Refresh camera list once we have permission
@@ -435,7 +557,51 @@ export const CallProvider = ({ children, socket }) => {
         }
     };
 
-    const endCall = () => {
+    const endCall = async () => {
+        // [FIX] Re-entrancy guard: endCall can be triggered multiple times
+        // (user action, peer.on('close'), socket 'call:ended') — only save log once
+        if (isEndingCallRef.current) return;
+        isEndingCallRef.current = true;
+
+        // Use ref to get the LATEST callStatus (avoids stale closure from socket/peer handlers)
+        const currentStatus = callStatusRef.current;
+        
+        let duration = 0;
+        let pStatus = 'missed';
+        
+        if (currentStatus === 'connected' && startTimeRef.current) {
+            duration = Math.floor((Date.now() - startTimeRef.current) / 1000);
+            pStatus = 'completed';
+        } else if (currentStatus === 'calling') {
+            // Caller hung up / no answer
+            pStatus = 'cancelled';
+        } else if (currentStatus === 'incoming') {
+            // Receiver declined or didn't pick up
+            pStatus = 'declined';
+        } else if (currentStatus === 'missed' || currentStatus === 'rejected') {
+            pStatus = 'missed';
+        }
+        
+        // [FIX] Wait for the initial 'initiated' saveCallLog to finish before creating the final log.
+        // This ensures initiatedCallMessageIdRef.current is set, so we PATCH instead of creating a duplicate POST.
+        if (saveCallLogPromiseRef.current) {
+            try {
+                await saveCallLogPromiseRef.current;
+            } catch (e) {
+                console.warn('[CallContext] Initial saveCallLog failed:', e);
+            }
+            saveCallLogPromiseRef.current = null;
+        }
+        
+        // [FIX] Capture and clear details BEFORE destroy() to prevent re-entrant calls from saving again
+        const detailsSnapshot = callDetailsRef.current;
+        callDetailsRef.current = null;
+
+        // Save log if we have details
+        if (detailsSnapshot) {
+            saveCallLog(detailsSnapshot, pStatus, duration);
+        }
+
         if (connectionRef.current) {
             connectionRef.current.destroy();
         }
@@ -445,20 +611,20 @@ export const CallProvider = ({ children, socket }) => {
         }
 
         // Notify other user if we were the ones initiating or active
-        if (callStatus === 'calling' || callStatus === 'connected' || callStatus === 'incoming') {
+        if (currentStatus === 'calling' || currentStatus === 'connected' || currentStatus === 'incoming') {
              // We need to know who to notify. 
              // If we are caller, notify target. If we are receiver, notify caller.
-             const target = callDetails?.isOutgoing ? callDetails.targetId : callDetails?.callerId;
+             const target = detailsSnapshot?.isOutgoing ? detailsSnapshot.targetId : detailsSnapshot?.callerId;
              if (target && socket) {
                  socket.emit('call:end', { to: target });
              }
         }
 
-        setCallStatus('ended');
+        updateCallStatus('ended');
         setLocalStream(null);
         setRemoteStream(null);
         setCallDetails(null);
-        callDetailsRef.current = null;
+        startTimeRef.current = null; // Reset
         setRemoteMediaStatus({ audio: true, video: true });
         setCurrentFacingMode('user');
         connectionRef.current = null;
@@ -466,7 +632,12 @@ export const CallProvider = ({ children, socket }) => {
         incomingSignalRef.current = null;
 
         // Reset to idle after a moment to show "Ended" screen or immediately
-        setTimeout(() => setCallStatus('idle'), 2000);
+        setTimeout(() => {
+            updateCallStatus('idle');
+            initiatedCallMessageIdRef.current = null; // [NEW] Clear message ID tracking
+            saveCallLogPromiseRef.current = null; // [NEW] Clear promise tracking
+            isEndingCallRef.current = false; // [NEW] Allow future calls
+        }, 2000);
     };
 
     const toggleAudio = (active) => {

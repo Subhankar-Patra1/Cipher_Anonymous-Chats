@@ -385,6 +385,20 @@ export default function ChatWindow({
         }
     }, [room.id, user.id, room.is_blocked_by_me, room.other_user_id]);
 
+    // [NEW] Listen for local block/unblock events (from ProfilePanel)
+    useEffect(() => {
+        const handleBlockedStatusChanged = (event) => {
+            const { userId, isBlocked } = event.detail;
+            // Check if this update relates to the current chat's other user
+            if (otherUserIdRef.current && String(userId) === String(otherUserIdRef.current)) {
+                setIsBlockedByMe(isBlocked);
+            }
+        };
+
+        window.addEventListener('user:blocked-status-changed', handleBlockedStatusChanged);
+        return () => window.removeEventListener('user:blocked-status-changed', handleBlockedStatusChanged);
+    }, []);
+
     const handleUnblock = async () => {
         if (!otherUserId) return;
         try {
@@ -399,6 +413,37 @@ export default function ChatWindow({
             }
         } catch (e) {
             console.error(e);
+        }
+    };
+
+    const handleAcceptRequest = async () => {
+        try {
+            const res = await fetch(`${import.meta.env.VITE_API_URL}/api/rooms/${room.id}/accept`, {
+                method: 'PUT',
+                headers: { Authorization: `Bearer ${token}` }
+            });
+            if (res.ok) {
+                if (onRefresh) onRefresh();
+                showNotification('Request accepted', 'success');
+            }
+        } catch (err) {
+            console.error(err);
+        }
+    };
+
+    const handleRejectRequest = async () => {
+        try {
+            const res = await fetch(`${import.meta.env.VITE_API_URL}/api/rooms/${room.id}/reject`, {
+                method: 'DELETE',
+                headers: { Authorization: `Bearer ${token}` }
+            });
+            if (res.ok) {
+                onBack(); // Go back to sidebar since room is deleted
+                if (onRefresh) onRefresh();
+                showNotification('Request deleted', 'info');
+            }
+        } catch (err) {
+            console.error(err);
         }
     };
 
@@ -2366,7 +2411,7 @@ export default function ChatWindow({
     };
 
     return (
-        <div className={`flex flex-col h-[100dvh] bg-gray-50 dark:bg-slate-950 relative overflow-hidden chat-container ${isChatReady ? 'transition-colors' : ''}`}> {/* Added class for reference */}
+        <div className={`flex flex-col h-[100dvh] bg-gray-50 dark:bg-[#1D1D21] relative overflow-hidden chat-container ${isChatReady ? 'transition-colors' : ''}`}> {/* Added class for reference */}
             {/* ... (Modal and Background remain same, but easier to just wrap MessageList) */}
             <PrivilegedUsersModal 
                 isOpen={showPrivilegedModal} 
@@ -2377,7 +2422,7 @@ export default function ChatWindow({
                 token={token}
             />
             {/* Background Pattern */}
-            <div className={`absolute inset-0 bg-[radial-gradient(ellipse_at_top_right,_var(--tw-gradient-stops))] from-violet-200/40 via-gray-50 to-gray-50 dark:from-violet-900/20 dark:via-slate-950 dark:to-slate-950 pointer-events-none ${isChatReady ? 'transition-colors' : ''}`} />
+            <div className={`absolute inset-0 bg-[radial-gradient(ellipse_at_top_right,_var(--tw-gradient-stops))] from-gray-100/40 via-gray-50 to-gray-50 dark:from-[#232326] dark:via-[#1D1D21] dark:to-[#1D1D21] pointer-events-none ${isChatReady ? 'transition-colors' : ''}`} />
             
             {/* Doodle Background Pattern */}
             <div 
@@ -2391,12 +2436,12 @@ export default function ChatWindow({
             />
 
             {/* Header */}
-            <div className="sticky top-0 z-50 border-b border-slate-200/50 dark:border-slate-800/50 bg-white/50 dark:bg-slate-900/50 backdrop-blur-md flex flex-col shadow-sm transition-colors">
+            <div className="sticky top-0 z-50 border-b border-slate-200/50 dark:border-[#232326]/50 bg-white/50 dark:bg-[#1D1D21]/90 backdrop-blur-md flex flex-col shadow-sm transition-colors">
                 {/* Main Header Row */}
                 <div className="py-2.5 px-4 flex items-center gap-4">
                     <button 
                         onClick={onBack}
-                        className="p-2 -ml-2 text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white transition-colors"
+                        className="w-10 h-10 -ml-2 rounded-full flex items-center justify-center text-slate-600 hover:text-slate-900 hover:bg-slate-100 dark:text-slate-400 dark:hover:text-white dark:hover:bg-[#2A2A2D] transition-all"
                     >
                         <span className="material-symbols-outlined">arrow_back</span>
                     </button>
@@ -2433,7 +2478,7 @@ export default function ChatWindow({
                                 )}
                             </h2>
                             {room.type === 'direct' && room.username && (
-                                <p className="text-xs text-slate-500 dark:text-slate-400 font-medium truncate transition-colors duration-300">
+                                <p className="text-xs text-slate-600 dark:text-slate-400 font-medium truncate transition-colors duration-300">
                                     {room.username.startsWith('@') ? room.username : `@${room.username}`}
                                 </p>
                             )}
@@ -2443,9 +2488,9 @@ export default function ChatWindow({
                                     {otherUserStatus.online ? (
                                         <span className="text-green-500 dark:text-green-400">Online now</span>
                                     ) : otherUserStatus.last_seen ? (
-                                        <span className="text-slate-400 dark:text-slate-500">Last seen {timeAgo(otherUserStatus.last_seen)}</span>
+                                        <span className="text-slate-600 dark:text-slate-500">Last seen {timeAgo(otherUserStatus.last_seen)}</span>
                                     ) : (
-                                        <span className="text-slate-400 dark:text-slate-600">Offline</span>
+                                        <span className="text-slate-600 dark:text-slate-600">Offline</span>
                                     )}
                                 </div>
                             )}
@@ -2467,34 +2512,36 @@ export default function ChatWindow({
                                 <button 
                                     onClick={() => {
                                         const isUnknown = room.type === 'direct' && !room.username && !room.display_name;
-                                        if (!isUnknown && !isCallActive) {
+                                        const isPending = room.is_accepted === false || room.other_member_is_accepted === false;
+                                        if (!isUnknown && !isCallActive && !isPending) {
                                             initiateCall(room.other_user_id || otherUserId, room.id, 'audio', room.name, room.avatar_url || room.avatar_thumb_url);
                                         }
                                     }}
-                                    className={`p-2 transition-all rounded-full ${(!room.username && !room.display_name) || isCallActive ? 'text-slate-300 dark:text-slate-700 cursor-not-allowed' : 'text-slate-400 hover:text-emerald-500 dark:hover:text-emerald-400'}`}
-                                    title={(!room.username && !room.display_name) ? "Cannot call deleted account" : isCallActive ? "Call in progress" : (isBlockedByMe || isBlockedByThem) ? "Call unavailable" : "Voice Call"}
-                                    disabled={(!room.username && !room.display_name) || isBlockedByMe || isBlockedByThem || isCallActive}
+                                    className={`w-10 h-10 flex items-center justify-center transition-all rounded-full ${(!room.username && !room.display_name) || isCallActive || (room.is_accepted === false || room.other_member_is_accepted === false) ? 'text-slate-300 dark:text-slate-700 cursor-not-allowed' : 'text-slate-600 hover:text-emerald-600 hover:bg-emerald-50 dark:hover:text-emerald-400 dark:hover:bg-emerald-900/20'}`}
+                                    title={(!room.username && !room.display_name) ? "Cannot call deleted account" : isCallActive ? "Call in progress" : (room.is_accepted === false || room.other_member_is_accepted === false) ? "Request not accepted yet" : (isBlockedByMe || isBlockedByThem) ? "Call unavailable" : "Voice Call"}
+                                    disabled={(!room.username && !room.display_name) || isBlockedByMe || isBlockedByThem || isCallActive || (room.is_accepted === false || room.other_member_is_accepted === false)}
                                 >
-                                    <span className={`material-symbols-outlined ${isBlockedByMe || isBlockedByThem || isCallActive ? 'opacity-50' : ''}`}>call</span>
+                                    <span className={`material-symbols-outlined ${isBlockedByMe || isBlockedByThem || isCallActive || (room.is_accepted === false || room.other_member_is_accepted === false) ? 'opacity-50' : ''}`}>call</span>
                                 </button>
                                 <button 
                                     onClick={() => {
                                         const isUnknown = room.type === 'direct' && !room.username && !room.display_name;
-                                        if (!isUnknown && !isBlockedByMe && !isBlockedByThem && !isCallActive) {
+                                        const isPending = room.is_accepted === false || room.other_member_is_accepted === false;
+                                        if (!isUnknown && !isBlockedByMe && !isBlockedByThem && !isCallActive && !isPending) {
                                             initiateCall(room.other_user_id || otherUserId, room.id, 'video', room.name, room.avatar_url || room.avatar_thumb_url);
                                         }
                                     }}
-                                    className={`p-2 transition-all rounded-full ${(!room.username && !room.display_name) || isBlockedByMe || isBlockedByThem || isCallActive ? 'text-slate-300 dark:text-slate-700 cursor-not-allowed' : 'text-slate-400 hover:text-emerald-500 dark:hover:text-emerald-400'}`}
-                                    title={(!room.username && !room.display_name) ? "Cannot call deleted account" : isCallActive ? "Call in progress" : (isBlockedByMe || isBlockedByThem) ? "Call unavailable" : "Video Call"}
-                                    disabled={(!room.username && !room.display_name) || isBlockedByMe || isBlockedByThem || isCallActive}
+                                    className={`w-10 h-10 flex items-center justify-center transition-all rounded-full ${(!room.username && !room.display_name) || isBlockedByMe || isBlockedByThem || isCallActive || (room.is_accepted === false || room.other_member_is_accepted === false) ? 'text-slate-300 dark:text-slate-700 cursor-not-allowed' : 'text-slate-600 hover:text-emerald-600 hover:bg-emerald-50 dark:hover:text-emerald-400 dark:hover:bg-emerald-900/20'}`}
+                                    title={(!room.username && !room.display_name) ? "Cannot call deleted account" : isCallActive ? "Call in progress" : (room.is_accepted === false || room.other_member_is_accepted === false) ? "Request not accepted yet" : (isBlockedByMe || isBlockedByThem) ? "Call unavailable" : "Video Call"}
+                                    disabled={(!room.username && !room.display_name) || isBlockedByMe || isBlockedByThem || isCallActive || (room.is_accepted === false || room.other_member_is_accepted === false)}
                                 >
-                                    <span className={`material-symbols-outlined ${isBlockedByMe || isBlockedByThem || isCallActive ? 'opacity-50' : ''}`}>videocam</span>
+                                    <span className={`material-symbols-outlined ${isBlockedByMe || isBlockedByThem || isCallActive || (room.is_accepted === false || room.other_member_is_accepted === false) ? 'opacity-50' : ''}`}>videocam</span>
                                 </button>
                             </>
                         )}
                         <button 
                             onClick={() => setShowSearch(!showSearch)}
-                            className={`p-2 transition-all rounded-full ${showSearch ? 'text-violet-600 dark:text-violet-400' : 'text-slate-400 hover:text-slate-700 dark:hover:text-slate-200'}`}
+                            className={`w-10 h-10 flex items-center justify-center transition-all rounded-full ${showSearch ? 'text-violet-600 dark:text-violet-400 bg-violet-50 dark:bg-violet-900/20' : 'text-slate-600 hover:text-slate-800 hover:bg-slate-100 dark:hover:text-slate-200 dark:hover:bg-[#2A2A2D]'}`}
                             title="Search in chat"
                         >
                             <span className="material-symbols-outlined">search</span>
@@ -2502,7 +2549,7 @@ export default function ChatWindow({
                         {room.type === 'group' && (
                             <button 
                                 onClick={() => setShowGroupInfo(true)}
-                                className="p-2 text-slate-400 hover:text-slate-700 dark:text-slate-400 dark:hover:text-white transition-all rounded-full"
+                                className="w-10 h-10 flex items-center justify-center text-slate-600 hover:text-slate-700 hover:bg-slate-100 dark:text-slate-400 dark:hover:text-white dark:hover:bg-[#2A2A2D] transition-all rounded-full"
                             >
                                 <span className="material-symbols-outlined">info</span>
                             </button>
@@ -2514,8 +2561,8 @@ export default function ChatWindow({
                 {showSearch && (
                     <div className="px-4 pb-4 animate-in fade-in slide-in-from-top-2 duration-200">
                          {/* Design match: Dark bg (in dark mode), Blue border, Rounded */}
-                         <div className="flex items-center bg-white dark:bg-[#0f1117] border border-sky-500 dark:border-sky-500 rounded-lg px-3 py-1.5 shadow-sm transition-all">
-                             <span className="material-symbols-outlined text-slate-400 text-[20px] select-none">search</span>
+                         <div className="flex items-center bg-white dark:bg-[#17171A] border border-sky-500 dark:border-sky-500 rounded-lg px-3 py-1.5 shadow-sm transition-all">
+                             <span className="material-symbols-outlined text-slate-500 text-[20px] select-none">search</span>
                              <div className="flex-1 relative mx-2">
                                  <input
                                     ref={searchInputRef}
@@ -2523,7 +2570,7 @@ export default function ChatWindow({
                                     value={searchTerm}
                                     onChange={(e) => handleSearch(e.target.value)}
                                     placeholder="Search"
-                                    className="w-full bg-transparent border-none p-0 text-sm focus:ring-0 focus:outline-none shadow-none text-slate-700 dark:text-slate-200 placeholder-slate-400"
+                                    className="w-full bg-transparent border-none p-0 text-sm focus:ring-0 focus:outline-none shadow-none text-slate-700 dark:text-slate-200 placeholder-slate-500"
                                     style={{ boxShadow: 'none' }} // Force no shadow/outline
                                     onKeyDown={(e) => {
                                         if (e.key === 'Enter') {
@@ -2541,7 +2588,7 @@ export default function ChatWindow({
                              
                              <div className="flex items-center gap-1">
                                  {searchMatches.length > 0 && (
-                                     <span className="text-xs text-slate-400 font-mono mr-2 select-none">
+                                     <span className="text-xs text-slate-500 font-mono mr-2 select-none">
                                          {currentMatchIndex + 1}/{searchMatches.length}
                                      </span>
                                  )}
@@ -2550,7 +2597,7 @@ export default function ChatWindow({
                                  <button 
                                     onClick={nextMatch}
                                     disabled={searchMatches.length === 0}
-                                    className="p-1 text-slate-400 hover:text-sky-500 dark:hover:text-sky-400 disabled:opacity-30 transition-colors flex items-center justify-center"
+                                    className="p-1 text-slate-500 hover:text-sky-500 dark:hover:text-sky-400 disabled:opacity-30 transition-colors flex items-center justify-center"
                                     title="Previous match (Shift+Enter)" 
                                  >
                                      <span className="material-symbols-outlined text-[20px]">keyboard_arrow_up</span>
@@ -2560,7 +2607,7 @@ export default function ChatWindow({
                                  <button 
                                     onClick={prevMatch}
                                     disabled={searchMatches.length === 0}
-                                    className="p-1 text-slate-400 hover:text-sky-500 dark:hover:text-sky-400 disabled:opacity-30 transition-colors flex items-center justify-center"
+                                    className="p-1 text-slate-500 hover:text-sky-500 dark:hover:text-sky-400 disabled:opacity-30 transition-colors flex items-center justify-center"
                                     title="Next match (Enter)"
                                  >
                                      <span className="material-symbols-outlined text-[20px]">keyboard_arrow_down</span>
@@ -2573,7 +2620,7 @@ export default function ChatWindow({
                                         setSearchTerm('');
                                         setSearchMatches([]);
                                     }}
-                                    className="p-1 text-slate-400 hover:text-red-500 dark:hover:text-red-400 ml-1 transition-colors flex items-center justify-center"
+                                    className="p-1 text-slate-500 hover:text-red-500 dark:hover:text-red-400 ml-1 transition-colors flex items-center justify-center"
                                     title="Close"
                                  >
                                      <span className="material-symbols-outlined text-[20px]">cancel</span>
@@ -2747,27 +2794,95 @@ export default function ChatWindow({
             
             {/* Typing Indicator */}
             {typingByRoom[room.id] && typingByRoom[room.id].length > 0 && (
-                <div className="px-4 py-2 text-xs text-slate-500 dark:text-slate-400 font-medium italic animate-pulse flex items-center gap-1 z-10 bg-white/50 dark:bg-slate-900/30 backdrop-blur-sm transition-colors duration-300">
+                <div className="px-4 py-2 text-xs text-slate-600 dark:text-slate-400 font-medium italic animate-pulse flex items-center gap-1 z-10 bg-white/50 dark:bg-slate-900/30 backdrop-blur-sm transition-colors duration-300">
                     {(() => {
                         const users = typingByRoom[room.id];
-                        if (users.length === 1) return <>{renderTextWithEmojis(users[0].name)} is typing...</>;
-                        if (users.length === 2) return <>{renderTextWithEmojis(users[0].name)} and {renderTextWithEmojis(users[1].name)} are typing...</>;
+                        if (users.length === 1) return (
+                            <>
+                                <span className="mr-1">{renderTextWithEmojis(users[0].name)}</span>
+                                is typing...
+                            </>
+                        );
+                        if (users.length === 2) return (
+                            <>
+                                <span className="mr-1">{renderTextWithEmojis(users[0].name)}</span>
+                                and
+                                <span className="mx-1">{renderTextWithEmojis(users[1].name)}</span>
+                                are typing...
+                            </>
+                        );
                         return <>{users.length} people are typing...</>;
                     })()}
                 </div>
             )}
 
-            {/* Message Input or Block Banner */}
-            {canSend ? (
+            {/* Message Input or Acceptance/Block Bar */}
+            {room.type === 'direct' && room.is_accepted === false ? (
+                <div className="p-4 bg-white/50 dark:bg-[#1D1D21]/90 backdrop-blur-md border-t border-slate-200 dark:border-[#232326] flex flex-col items-center gap-4 animate-in slide-in-from-bottom-4 duration-300">
+                    <div className="text-center space-y-1">
+                        <p className="text-sm font-bold text-slate-800 dark:text-slate-100">
+                            {renderTextWithEmojis(room.display_name || room.name)} wants to send you a message
+                        </p>
+                        <p className="text-xs text-slate-500 dark:text-slate-400 max-w-[300px] leading-relaxed">
+                            They won't know you've seen their message until you accept their request.
+                        </p>
+                    </div>
+                    <div className="flex items-center gap-3 w-full max-w-sm">
+                        <button 
+                            onClick={handleRejectRequest}
+                            className="flex-1 py-2.5 px-4 rounded-xl bg-slate-100 hover:bg-red-50 dark:bg-slate-800/50 dark:hover:bg-red-900/20 text-slate-700 dark:text-slate-300 hover:text-red-600 dark:hover:text-red-400 font-bold text-sm transition-all border border-slate-200 dark:border-slate-700 hover:border-red-200 dark:hover:border-red-900/30"
+                        >
+                            Delete
+                        </button>
+                        <button 
+                            onClick={async () => {
+                                // Block
+                                try {
+                                    const res = await fetch(`${import.meta.env.VITE_API_URL}/api/users/me/block`, {
+                                        method: 'POST',
+                                        headers: { 
+                                            'Content-Type': 'application/json',
+                                            Authorization: `Bearer ${token}` 
+                                        },
+                                        body: JSON.stringify({ targetUserId: room.other_user_id })
+                                    });
+                                    if (res.ok) {
+                                        onBack();
+                                        onRefresh?.();
+                                        showNotification('User blocked', 'info');
+                                    }
+                                } catch (e) {
+                                    console.error(e);
+                                }
+                            }}
+                            className="flex-1 py-2.5 px-4 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-800/50 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 font-bold text-sm transition-all border border-slate-200 dark:border-slate-700"
+                        >
+                            Block
+                        </button>
+                        <button 
+                            onClick={handleAcceptRequest}
+                            className="flex-1 py-2.5 px-4 rounded-xl bg-violet-600 hover:bg-violet-700 text-white font-bold text-sm transition-all shadow-lg shadow-violet-500/20"
+                        >
+                            Accept
+                        </button>
+                    </div>
+                </div>
+            ) : room.type === 'direct' && room.other_member_is_accepted === false && messages?.some(m => String(m.user_id) === String(user.id)) ? (
+                <div className="p-4 bg-white/50 dark:bg-[#1D1D21]/90 backdrop-blur-md border-t border-slate-200 dark:border-[#232326] flex flex-col items-center gap-2 animate-in slide-in-from-bottom-4 duration-300">
+                    <p className="text-xs font-semibold text-slate-500 dark:text-slate-400">
+                        Invite sent. You can send more messages once your request is accepted.
+                    </p>
+                </div>
+            ) : canSend ? (
 
-                <>
+                <div className="animate-in fade-in duration-500">
                     {isSelectionMode ? (
                         <SelectionBar 
                             count={selectedMessageIds.size}
                             onCancel={handleCancelSelection}
                             onDelete={handleDeleteSelected}
                             onCopy={handleCopySelectedMessages}
-                            canCopy={canCopy && !Array.from(selectedMessageIds).some(id => messages.find(m => m.id === id)?.is_view_once)}
+                            canCopy={canCopy && !Array.from(selectedMessageIds).some(id => messages?.find(m => m.id === id)?.is_view_once)}
                         />
                     ) : (
                         <MessageInput 
@@ -2795,12 +2910,12 @@ export default function ChatWindow({
                             onUnblock={handleUnblock}
                         />
                     )}
-                </>
+                </div>
             ) : (
                 <div className="p-4 bg-transparent z-10 flex justify-center items-center h-[88px] transition-colors duration-300">
                     <div className="bg-slate-100/80 dark:bg-slate-800/80 px-6 py-3 rounded-full flex items-center gap-2 border border-slate-200 dark:border-slate-700 shadow-lg">
-                        <span className="material-symbols-outlined text-slate-400 text-sm">lock</span>
-                        <span className="text-slate-500 dark:text-slate-400 text-sm font-medium">
+                        <span className="material-symbols-outlined text-slate-500 text-sm">lock</span>
+                        <span className="text-slate-600 dark:text-slate-400 text-sm font-medium">
                             Only{' '}
                             <button 
                                 onClick={handleOpenPrivileged}
@@ -2970,7 +3085,7 @@ export default function ChatWindow({
                             <h3 className="text-lg font-semibold text-slate-800 dark:text-white mb-2">
                                 Delete {deleteSelectionModal.count} message{deleteSelectionModal.count !== 1 ? 's' : ''}?
                             </h3>
-                            <p className="text-sm text-slate-500 dark:text-slate-400 mb-6">
+                            <p className="text-sm text-slate-600 dark:text-slate-400 mb-6">
                                 {deleteSelectionModal.canDeleteForEveryone 
                                     ? "You can delete these messages for everyone or just for yourself."
                                     : "You can only delete these messages for yourself."}
@@ -2997,7 +3112,7 @@ export default function ChatWindow({
                                 
                                 <button
                                     onClick={() => setDeleteSelectionModal({ ...deleteSelectionModal, isOpen: false })}
-                                    className="w-full py-2.5 px-4 rounded-xl text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 font-medium transition-colors mt-2"
+                                    className="w-full py-2.5 px-4 rounded-xl text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 font-medium transition-colors mt-2"
                                 >
                                     Cancel
                                 </button>

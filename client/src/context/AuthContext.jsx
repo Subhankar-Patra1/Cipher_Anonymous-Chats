@@ -113,8 +113,11 @@ export const AuthProvider = ({ children }) => {
         if (isNew) {
             // [FIX] No longer setting 'skipped_sync' for new users.
             // New users start fresh, so "Restore" option shouldn't be forced on them.
+            localStorage.setItem('is_fresh_signup', 'true'); // [NEW] Flag to prevent restore modal on dashboard
+            localStorage.setItem('history_synced', 'true'); // [NEW] Persist "synced" state so refresh doesn't trigger modal
         }
         localStorage.setItem('token', newToken);
+        localStorage.setItem('is_new_login', 'true'); // [NEW] Mark session as a fresh login
         setToken(newToken);
         setUser(newUser);
         
@@ -134,13 +137,18 @@ export const AuthProvider = ({ children }) => {
         setUser(prev => ({ ...prev, ...updates }));
     };
 
-    const logout = () => {
+    const logout = async () => {
         // [FIX] Clear all app lock preferences on logout
         localStorage.removeItem('token');
         localStorage.removeItem('app_passcode');
         localStorage.removeItem('app_lock_enabled');
         localStorage.removeItem('auto_lock_duration');
         localStorage.removeItem('skipped_sync'); // Clear sync skip flag too
+        localStorage.removeItem('history_synced'); // [NEW] Clear history sync flag
+        localStorage.removeItem('is_new_login'); // [NEW] Clear new login flag
+        
+        // [FIX] Securely wipe all E2EE data (keys, device identity)
+        await cryptoManager.clearAllData();
         
         setToken(null);
         setUser(null);

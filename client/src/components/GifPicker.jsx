@@ -170,7 +170,7 @@ export default function GifPicker({ onSendGif }) {
                         <button 
                             type="button"
                             onClick={() => setSearch('')}
-                            className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:hover:text-white"
+                            className="absolute right-2 top-1/2 -translate-y-1/2 w-8 h-8 flex items-center justify-center rounded-full text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-700/50 hover:text-slate-600 dark:hover:text-white transition-all"
                         >
                             <span className="material-symbols-outlined text-[18px]">close</span>
                         </button>

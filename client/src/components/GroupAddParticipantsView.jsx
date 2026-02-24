@@ -14,6 +14,7 @@ const GroupAddParticipantsView = ({
     const [loading, setLoading] = useState(false);
     const [addingUserId, setAddingUserId] = useState(null);
     const [error, setError] = useState('');
+    const [invitedIds, setInvitedIds] = useState(new Set());
 
     useEffect(() => {
         const timer = setTimeout(async () => {
@@ -44,11 +45,18 @@ const GroupAddParticipantsView = ({
         setAddingUserId(userId);
         setError('');
         try {
-            await onAddMember(userId, true);
-            // Optionally clear search or show success
-            setSearchTerm('');
-            setSearchResults([]);
-            onBack();
+            const result = await onAddMember(userId, true);
+            if (result?.invited) {
+                // Privacy blocked - invitation was sent via DM instead
+                setError('');
+                setSearchResults(prev => prev.filter(u => u.id !== userId));
+                setInvitedIds(prev => new Set([...prev, userId]));
+            } else {
+                // Direct add succeeded
+                setSearchTerm('');
+                setSearchResults([]);
+                onBack();
+            }
         } catch (err) {
             setError(err.message || 'Failed to add member');
         } finally {
@@ -110,8 +118,8 @@ const GroupAddParticipantsView = ({
                 {searchResults.map(user => (
                     <div
                         key={user.id}
-                        className="group w-full flex items-center gap-3 p-3 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors cursor-pointer rounded-xl"
-                        onClick={() => !addingUserId && handleAdd(user.id)}
+                        className={`group w-full flex items-center gap-3 p-3 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors cursor-pointer rounded-xl ${invitedIds.has(user.id) ? 'opacity-60' : ''}`}
+                        onClick={() => !addingUserId && !invitedIds.has(user.id) && handleAdd(user.id)}
                     >
                         <div className="w-10 h-10 rounded-full overflow-hidden bg-slate-200 dark:bg-slate-700 flex items-center justify-center shrink-0 transition-colors">
                             {user.avatar_thumb_url ? (
@@ -124,7 +132,9 @@ const GroupAddParticipantsView = ({
                             <div className="text-sm font-bold text-slate-800 dark:text-slate-200 truncate transition-colors">{renderTextWithEmojis(user.display_name)}</div>
                             <div className="text-xs text-slate-500 dark:text-slate-500 truncate transition-colors">{user.username.startsWith('@') ? user.username : '@' + user.username}</div>
                         </div>
-                        {addingUserId === user.id ? (
+                        {invitedIds.has(user.id) ? (
+                            <span className="text-xs font-bold text-emerald-500 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-500/10 px-2.5 py-1 rounded-full">Invited ✓</span>
+                        ) : addingUserId === user.id ? (
                              <div className="animate-spin rounded-full h-5 w-5 border-2 border-slate-500 border-t-transparent"></div>
                         ) : (
                             <button className="w-8 h-8 rounded-full bg-violet-100 dark:bg-violet-600/10 text-violet-600 dark:text-violet-400 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity hover:bg-violet-600 hover:text-white dark:hover:bg-violet-600 dark:hover:text-white">

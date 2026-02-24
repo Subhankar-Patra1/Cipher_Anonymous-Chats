@@ -30,6 +30,8 @@ const authenticate = (req, res, next) => {
 
 router.use(authenticate);
 
+const { checkMessageLimit } = require('./utils/messageLimits');
+
 router.post('/audio', upload.single('audio'), async (req, res) => {
     console.log("Received audio upload request. Body keys:", Object.keys(req.body));
     if (req.file) console.log("File received:", req.file.mimetype, req.file.size);
@@ -40,6 +42,19 @@ router.post('/audio', upload.single('audio'), async (req, res) => {
 
         if (!file) {
             return res.status(400).json({ error: 'No audio file provided' });
+        }
+
+        // [NEW] Enforce Instagram-style limit
+        try {
+            await checkMessageLimit(roomId, req.user.id, 'audio');
+        } catch (e) {
+            if (e.message === 'LIMIT_REACHED') {
+                return res.status(403).json({ error: 'Invite sent. Wait for acceptance to send more messages.' });
+            }
+            if (e.message === 'FORBIDDEN_TYPE') {
+                return res.status(403).json({ error: 'Text messages only until request is accepted.' });
+            }
+            throw e;
         }
 
         // Verify room membership
@@ -172,6 +187,19 @@ router.post('/image', upload.array('images', 10), async (req, res) => {
             return res.status(400).json({ error: 'No image files provided' });
         }
         
+        // [NEW] Enforce Instagram-style limit
+        try {
+            await checkMessageLimit(roomId, req.user.id, 'image');
+        } catch (e) {
+            if (e.message === 'LIMIT_REACHED') {
+                return res.status(403).json({ error: 'Invite sent. Wait for acceptance to send more messages.' });
+            }
+            if (e.message === 'FORBIDDEN_TYPE') {
+                return res.status(403).json({ error: 'Text messages only until request is accepted.' });
+            }
+            throw e;
+        }
+
         console.log('[DEBUG] Upload Image Body:', JSON.stringify(req.body, null, 2));
         console.log('[DEBUG] Files received:', files.length);
 
@@ -306,6 +334,19 @@ router.post('/file', upload.single('file'), async (req, res) => {
             return res.status(400).json({ error: 'No file provided' });
         }
 
+        // [NEW] Enforce Instagram-style limit
+        try {
+            await checkMessageLimit(roomId, req.user.id, 'file');
+        } catch (e) {
+            if (e.message === 'LIMIT_REACHED') {
+                return res.status(403).json({ error: 'Invite sent. Wait for acceptance to send more messages.' });
+            }
+            if (e.message === 'FORBIDDEN_TYPE') {
+                return res.status(403).json({ error: 'Text messages only until request is accepted.' });
+            }
+            throw e;
+        }
+
         console.log('[DEBUG] Upload File Body:', JSON.stringify(req.body, null, 2));
 
         // Verify room membership
@@ -429,6 +470,19 @@ router.post('/', async (req, res) => {
         // Basic validation
         if (!room_id) return res.status(400).json({ error: 'room_id is required' });
         
+        // [NEW] Enforce Instagram-style limit
+        try {
+            await checkMessageLimit(room_id, req.user.id, type);
+        } catch (e) {
+            if (e.message === 'LIMIT_REACHED') {
+                return res.status(403).json({ error: 'Invite sent. Wait for acceptance to send more messages.' });
+            }
+            if (e.message === 'FORBIDDEN_TYPE') {
+                return res.status(403).json({ error: 'Text messages only until request is accepted.' });
+            }
+            throw e;
+        }
+
         // Verify room membership
         const memberRes = await db.query('SELECT * FROM room_members WHERE room_id = $1 AND user_id = $2', [room_id, req.user.id]);
         if (!memberRes.rows[0]) {
@@ -490,6 +544,19 @@ router.post('/', async (req, res) => {
                 RETURNING id, status, reply_to_message_id, created_at, temp_id
             `;
             params = [room_id, req.user.id, address || 'Location', latitude, longitude, address || null, replyToMessageId || null, blockerUserId || null, req.body.mention_user_ids || null, tempId || null];
+
+        } else if (type === 'call_log') {
+            // Use client-provided content (label) and caption (JSON metadata with caller_id, call_type, call_status, duration)
+            const callContent = content || 'Call ended';
+            const callCaption = req.body.caption || JSON.stringify({ call_type: req.body.call_type, call_status: req.body.call_status, duration: req.body.duration });
+            
+            query = `
+                INSERT INTO messages (room_id, user_id, type, content, reply_to_message_id, blocked_for_user_id, mention_user_ids, temp_id, caption) 
+                VALUES ($1, $2, 'call_log', $3, $4, $5, $6, $7, $8) 
+                RETURNING id, status, reply_to_message_id, created_at, temp_id
+            `;
+            
+            params = [room_id, req.user.id, callContent, replyToMessageId || null, blockerUserId || null, req.body.mention_user_ids || null, tempId || null, callCaption];
         } else {
             // Fallback for text
             query = `
@@ -546,23 +613,56 @@ router.post('/', async (req, res) => {
 
                  // We need to shape the room object for THIS recipient (swapping names/avatars)
                  // Using the robust query from rooms.js + unread_count logic
-                 const recipientRoomRes = await db.query(`
-                    SELECT r.*, rm.role, rm.last_read_at,
+                  const recipientRoomRes = await db.query(`
+                    SELECT r.*, rm.role, rm.last_read_at, rm.is_accepted,
                     (SELECT u.display_name FROM room_members rm2 JOIN users u ON rm2.user_id = u.id WHERE rm2.room_id = r.id AND rm2.user_id != $1 LIMIT 1) as other_user_name,
                     (SELECT u.username FROM room_members rm2 JOIN users u ON rm2.user_id = u.id WHERE rm2.room_id = r.id AND rm2.user_id != $1 LIMIT 1) as other_user_username,
                     (SELECT u.avatar_thumb_url FROM room_members rm2 JOIN users u ON rm2.user_id = u.id WHERE rm2.room_id = r.id AND rm2.user_id != $1 LIMIT 1) as other_user_avatar_thumb,
                     (SELECT u.avatar_url FROM room_members rm2 JOIN users u ON rm2.user_id = u.id WHERE rm2.room_id = r.id AND rm2.user_id != $1 LIMIT 1) as other_user_avatar_url,
                     (SELECT u.id FROM room_members rm2 JOIN users u ON rm2.user_id = u.id WHERE rm2.room_id = r.id AND rm2.user_id != $1 LIMIT 1) as other_user_id,
+                    (SELECT rm2.is_accepted FROM room_members rm2 WHERE rm2.room_id = r.id AND rm2.user_id != $1 LIMIT 1) as other_member_is_accepted,
                     (SELECT u.display_name FROM users u WHERE u.id = r.created_by) as creator_name,
                     (SELECT u.username FROM users u WHERE u.id = r.created_by) as creator_username,
-                    (SELECT COUNT(*) FROM messages m WHERE m.room_id = r.id AND m.created_at > COALESCE(rm.last_read_at, '1970-01-01')) as unread_count,
+                    (SELECT COUNT(*) FROM messages m WHERE m.room_id = r.id AND m.created_at > COALESCE(rm.last_read_at, '1970-01-01') AND m.user_id != $1::integer) as unread_count,
                     (SELECT COUNT(*) FROM messages m WHERE m.room_id = r.id AND m.created_at > COALESCE(rm.last_read_at, '1970-01-01') AND $1::integer = ANY(m.mention_user_ids)) as mention_count,
+                    -- [FIX] Include last message fields so message request previews work
+                    COALESCE(last_msg.content, CASE WHEN last_msg.ciphertext IS NOT NULL THEN '🔒 Encrypted Message' ELSE NULL END) as last_message_content,
+                    last_msg.type as last_message_type,
+                    last_msg.user_id as last_message_sender_id,
+                    last_msg.sender_name as last_message_sender_name,
+                    last_msg.id as last_message_id,
+                    last_msg.status as last_message_status,
+                    last_msg.caption as last_message_caption,
+                    last_msg.file_name as last_message_file_name,
+                    last_msg.is_view_once as last_message_is_view_once,
+                    last_msg.viewed_by as last_message_viewed_by,
+                    last_msg.poll_question as last_message_poll_question,
+                    last_msg.is_deleted_for_everyone as last_message_is_deleted,
+                    last_msg.ciphertext as last_message_ciphertext,
+                    last_msg.iv as last_message_iv,
+                    last_msg.key_version as last_message_key_version,
+                    last_msg.temp_id as last_message_temp_id,
                     gp.send_mode, gp.allow_name_change, gp.allow_description_change, gp.allow_add_members, gp.allow_remove_members
                     FROM rooms r 
                     JOIN room_members rm ON r.id = rm.room_id 
                     LEFT JOIN group_permissions gp ON r.id = gp.group_id
+                    LEFT JOIN LATERAL (
+                        SELECT m.content, m.type, m.user_id, m.id, m.status, m.caption, m.file_name,
+                               m.is_view_once, m.viewed_by, m.is_deleted_for_everyone,
+                               m.ciphertext, m.iv, m.key_version, m.temp_id,
+                               u.display_name as sender_name,
+                               p.question as poll_question
+                        FROM messages m
+                        LEFT JOIN users u ON m.user_id = u.id
+                        LEFT JOIN polls p ON m.poll_id = p.id
+                        WHERE m.room_id = r.id
+                        AND (m.deleted_for_user_ids IS NULL OR NOT ($3::text = ANY(m.deleted_for_user_ids)))
+                        AND (m.blocked_for_user_id IS NULL OR m.blocked_for_user_id != $1::integer)
+                        ORDER BY m.created_at DESC
+                        LIMIT 1
+                    ) last_msg ON true
                     WHERE r.id = $2 AND rm.user_id = $1
-                 `, [recipientId, room_id]);
+                 `, [recipientId, room_id, String(recipientId)]);
                  
                  const rawRoom = recipientRoomRes.rows[0];
                  if (rawRoom) {
@@ -575,8 +675,25 @@ router.post('/', async (req, res) => {
                         avatar_url: rawRoom.type === 'direct' ? rawRoom.other_user_avatar_url : rawRoom.avatar_url,
                         creator_name: rawRoom.creator_name,
                         creator_username: rawRoom.creator_username,
-                        unread_count: parseInt(rawRoom.unread_count || 0), // Ensure number
-                        mention_count: parseInt(rawRoom.mention_count || 0) // [NEW] Real-time sync
+                        unread_count: parseInt(rawRoom.unread_count || 0),
+                        mention_count: parseInt(rawRoom.mention_count || 0),
+                        // [FIX] Pass through last message fields
+                        last_message_content: rawRoom.last_message_content,
+                        last_message_type: rawRoom.last_message_type,
+                        last_message_sender_id: rawRoom.last_message_sender_id,
+                        last_message_sender_name: rawRoom.last_message_sender_name,
+                        last_message_id: rawRoom.last_message_id,
+                        last_message_status: rawRoom.last_message_status,
+                        last_message_caption: rawRoom.last_message_caption,
+                        last_message_file_name: rawRoom.last_message_file_name,
+                        last_message_is_view_once: rawRoom.last_message_is_view_once,
+                        last_message_viewed_by: rawRoom.last_message_viewed_by,
+                        last_message_poll_question: rawRoom.last_message_poll_question,
+                        last_message_is_deleted: rawRoom.last_message_is_deleted,
+                        last_message_ciphertext: rawRoom.last_message_ciphertext,
+                        last_message_iv: rawRoom.last_message_iv,
+                        last_message_key_version: rawRoom.last_message_key_version,
+                        last_message_temp_id: rawRoom.last_message_temp_id,
                      };
                      
                      io.to(`user:${recipientId}`).emit('room_added', formattedRoom);
@@ -596,6 +713,7 @@ router.post('/', async (req, res) => {
             user_id: req.user.id,
             type: type,
             content: content || (type === 'gif' ? 'GIF' : type === 'location' ? (req.body.address || 'Location') : ''),
+            caption: req.body.caption || null, // Include caption (used by call_log for metadata)
             gif_url,
             preview_url,
             width,
@@ -1516,6 +1634,55 @@ router.delete('/:id/star', async (req, res) => {
         res.json({ success: true });
     } catch (err) {
         console.error('Error unstarring message:', err);
+        res.status(500).json({ error: 'Server error' });
+    }
+});
+
+// [NEW] Update message (content/caption) - used for call_log updates
+router.patch('/:id', async (req, res) => {
+    try {
+        const { content, caption } = req.body;
+        const messageId = req.params.id;
+
+        // Verify message ownership
+        const msgRes = await db.query('SELECT * FROM messages WHERE id = $1', [messageId]);
+        if (msgRes.rows.length === 0) {
+            return res.status(404).json({ error: 'Message not found' });
+        }
+        
+        const existingMsg = msgRes.rows[0];
+        if (existingMsg.user_id !== req.user.id) {
+            return res.status(403).json({ error: 'Unauthorized to update this message' });
+        }
+
+        // Update DB
+        const updateRes = await db.query(
+            'UPDATE messages SET content = COALESCE($1, content), caption = COALESCE($2, caption) WHERE id = $3 RETURNING *',
+            [content, caption, messageId]
+        );
+
+        const updatedMsgInfo = updateRes.rows[0];
+        
+        // Fetch user info for complete message object
+        const userRes = await db.query('SELECT username, display_name, avatar_thumb_url, avatar_url FROM users WHERE id = $1', [req.user.id]);
+        const user = userRes.rows[0];
+
+        const updatedMessage = {
+            ...existingMsg,
+            ...updatedMsgInfo,
+            username: user.username,
+            display_name: user.display_name,
+            avatar_thumb_url: user.avatar_thumb_url,
+            avatar_url: user.avatar_url
+        };
+
+        // Broadcast update
+        const io = req.app.get('io');
+        io.to(`room:${existingMsg.room_id}`).emit('message_edited', updatedMessage);
+
+        res.json(updatedMessage);
+    } catch (err) {
+        console.error('Error updating message:', err);
         res.status(500).json({ error: 'Server error' });
     }
 });

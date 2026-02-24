@@ -122,6 +122,14 @@ export const saveLocalMessage = async (message) => {
 
 export const updateLocalMessage = async (idOrTempId, updates) => {
     const searchId = String(idOrTempId);
+    // [FIX] Normalize IDs to strings before applying updates.
+    // Without this, spreading a raw server message ({id: 100}) overwrites
+    // the Dexie string id ("100") with a number, breaking future dedup lookups.
+    if (updates.id) updates.id = String(updates.id);
+    if (updates.room_id) updates.room_id = String(updates.room_id);
+    if (updates.tempId) updates.tempId = String(updates.tempId);
+    if (updates.temp_id) updates.temp_id = String(updates.temp_id);
+
     // Try tempId index first
     let count = await db.messages.where('tempId').equals(searchId).modify(updates);
     if (count === 0) {

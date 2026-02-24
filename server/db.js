@@ -213,6 +213,27 @@ const createTables = async () => {
                 PRIMARY KEY (user_id, room_id)
             );
 
+            -- [NEW] Privacy Migrations
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS profile_pic_privacy TEXT DEFAULT 'everyone'; -- everyone, contacts, nobody
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS new_chat_privacy TEXT DEFAULT 'everyone'; -- everyone, contacts, nobody
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS search_privacy TEXT DEFAULT 'everyone'; -- everyone, nobody
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS calls_privacy TEXT DEFAULT 'everyone'; -- everyone, contacts, nobody
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS group_add_privacy TEXT DEFAULT 'everyone'; -- everyone, contacts, nobody
+            
+            ALTER TABLE room_members ADD COLUMN IF NOT EXISTS is_accepted BOOLEAN DEFAULT TRUE;
+            
+            CREATE TABLE IF NOT EXISTS user_privacy_exceptions (
+                user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+                excluded_user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+                privacy_type TEXT DEFAULT 'profile_pic',
+                exception_type TEXT DEFAULT 'never_allow',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            ALTER TABLE user_privacy_exceptions ADD COLUMN IF NOT EXISTS privacy_type TEXT DEFAULT 'profile_pic';
+            ALTER TABLE user_privacy_exceptions ADD COLUMN IF NOT EXISTS exception_type TEXT DEFAULT 'never_allow';
+            -- Ensure primary key (might fail if already exists or data conflicts, but for dev it is ok)
+            -- ALTER TABLE user_privacy_exceptions ADD PRIMARY KEY (user_id, excluded_user_id, privacy_type); 
+
             CREATE TABLE IF NOT EXISTS starred_messages (
                 user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
                 message_id INTEGER REFERENCES messages(id) ON DELETE CASCADE,
@@ -282,6 +303,21 @@ const createTables = async () => {
             );
             CREATE INDEX IF NOT EXISTS idx_user_photos_user_id ON user_photos(user_id);
 
+            -- [NEW] Call Logs
+            CREATE TABLE IF NOT EXISTS calls (
+                id SERIAL PRIMARY KEY,
+                caller_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+                receiver_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+                room_id INTEGER REFERENCES rooms(id) ON DELETE SET NULL,
+                type VARCHAR(20) NOT NULL, -- audio, video
+                status VARCHAR(20) NOT NULL, -- missed, completed, busy, rejected
+                started_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+                ended_at TIMESTAMPTZ,
+                duration INTEGER DEFAULT 0
+            );
+            CREATE INDEX IF NOT EXISTS idx_calls_caller ON calls(caller_id);
+            CREATE INDEX IF NOT EXISTS idx_calls_receiver ON calls(receiver_id);
+
             -- [NEW] Todos Feature
             CREATE TABLE IF NOT EXISTS todos (
                 id SERIAL PRIMARY KEY,
@@ -301,6 +337,19 @@ const createTables = async () => {
                 completed_at TIMESTAMP,
                 order_index INTEGER DEFAULT 0
             );
+            -- [NEW] QR Code Login Sessions
+            CREATE TABLE IF NOT EXISTS qr_login_sessions (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                token VARCHAR(64) UNIQUE NOT NULL,
+                status VARCHAR(20) DEFAULT 'pending',
+                created_at TIMESTAMP DEFAULT NOW(),
+                expires_at TIMESTAMP NOT NULL,
+                confirmed_by_user_id INTEGER REFERENCES users(id),
+                new_device_info JSONB,
+                auth_token TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_qr_login_sessions_token ON qr_login_sessions(token);
+
             -- [PERFORMANCE] Indexes for faster room list and unread counts
             CREATE INDEX IF NOT EXISTS idx_messages_room_id_created_at ON messages(room_id, created_at DESC);
             CREATE INDEX IF NOT EXISTS idx_room_members_user_id ON room_members(user_id);

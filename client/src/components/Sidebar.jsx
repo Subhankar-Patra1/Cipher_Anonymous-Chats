@@ -1,6 +1,9 @@
-import { useState, useEffect, useRef, useMemo } from 'react';
-import { usePresence } from '../context/PresenceContext';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
+import CallHistory from './CallHistory';
+import { AnimatePresence, motion } from 'framer-motion';
+
 import { useAppLock } from '../context/AppLockContext';
+import { usePresence } from '../context/PresenceContext';
 import { useChatLock } from '../context/ChatLockContext';
 import { useTheme } from '../context/ThemeContext';
 import StatusDot from './StatusDot';
@@ -13,6 +16,7 @@ import SidebarContextMenu from './SidebarContextMenu';
 import { ChatListSkeleton } from './SkeletonLoaders';
 import PollIcon from './icons/PollIcon';
 import ViewOnceIcon from './icons/ViewOnceIcon';
+import Tooltip from './Tooltip'; // [NEW] Import Tooltip component
 
 import { cryptoManager } from '../lib/crypto/CryptoManager';
 import db from '../utils/db';
@@ -396,6 +400,7 @@ const LastMessagePreview = ({ room, user, hasSkippedSync }) => {
         if (lr.message_type === 'gif') { setReactionPreview('GIF'); return; }
         if (lr.message_type === 'location') { setReactionPreview('Location'); return; }
         if (lr.message_type === 'poll') { setReactionPreview('Poll'); return; }
+        if (lr.message_type === 'group_invite') { setReactionPreview('Group invitation'); return; }
         if (lr.message_type === 'todo' && !lr.message_ciphertext) { setReactionPreview(`"${lr.message_todo_title || lr.message_content || 'To-Do List'}"`); return; }
         
         // [FIX] Prioritize decryption when encrypted data is available
@@ -447,7 +452,9 @@ const LastMessagePreview = ({ room, user, hasSkippedSync }) => {
             const reactionTime = lr.timestamp ? new Date(lr.timestamp).getTime() : 0;
             const lastMessageTime = room.last_message_created_at ? new Date(room.last_message_created_at).getTime() : 0;
             
-            if (lastMessageTime > reactionTime) {
+            const isReactionToLastMessage = String(lr.message_id) === String(room.last_message_id);
+            
+            if (!isReactionToLastMessage && lastMessageTime > reactionTime) {
                 // Last message is newer than the reaction, don't show reaction notification
                 return null;
             }
@@ -457,12 +464,14 @@ const LastMessagePreview = ({ room, user, hasSkippedSync }) => {
             const emoji = lr.emoji;
             
             return (
-                <span className="flex items-center gap-1 text-slate-500 dark:text-slate-400 min-w-0">
+                <span className="flex items-center gap-1 text-slate-600 dark:text-slate-400 min-w-0">
                     <span className={`shrink-0 ${isMe ? "" : "font-medium text-slate-600 dark:text-slate-300"}`}>{reactorName}</span>
                     <span className="shrink-0">reacted</span>
                     <span className="text-base flex items-center shrink-0">{renderTextWithEmojis(emoji, '1.2em')}</span>
                     <span className="truncate flex items-center gap-1">
-                        to: {lr.message_type === 'todo' && <span className="material-symbols-outlined text-[14px]">checklist</span>}{reactionPreview}
+                        to: {lr.message_type === 'todo' && <span className="material-symbols-outlined text-[14px]">checklist</span>}
+                        {lr.message_type === 'group_invite' && <span className="material-symbols-outlined text-[14px]">groups</span>}
+                        {reactionPreview}
                     </span>
                 </span>
             );
@@ -492,6 +501,7 @@ const LastMessagePreview = ({ room, user, hasSkippedSync }) => {
         else if (room.last_message_type === 'gif') preview = "GIF";
         else if (room.last_message_type === 'poll') preview = room.last_message_poll_question || "Poll";
         else if (room.last_message_type === 'todo') preview = `"${room.last_message_todo_title || room.last_message_content || "To-Do List"}"`;
+        else if (room.last_message_type === 'group_invite') preview = "Group invitation";
         else preview = renderPreviewRaw(content);
 
         // Check if this is a view-once photo
@@ -504,12 +514,14 @@ const LastMessagePreview = ({ room, user, hasSkippedSync }) => {
             : (room.last_message_viewed_by?.includes(user.id)));
 
         return (
-            <span className="flex items-center gap-1 text-slate-500 dark:text-slate-400 min-w-0">
+            <span className="flex items-center gap-1 text-slate-600 dark:text-slate-400 min-w-0">
                 <span className={`shrink-0 ${isMe ? "" : "font-medium text-slate-600 dark:text-slate-300"}`}>{reactorName}</span>
                 <span className="shrink-0">reacted</span>
                 <span className="text-base flex items-center shrink-0">{renderTextWithEmojis(emoji, '1.2em')}</span>
                 <span className="ml-0.5 flex items-center gap-1.5 truncate">
-                    to: {room.last_message_type === 'todo' && <span className="material-symbols-outlined text-[14px]">checklist</span>}{preview}
+                    to: {room.last_message_type === 'todo' && <span className="material-symbols-outlined text-[14px]">checklist</span>}
+                    {room.last_message_type === 'group_invite' && <span className="material-symbols-outlined text-[14px]">groups</span>}
+                    {preview}
                 </span>
             </span>
         );
@@ -530,7 +542,7 @@ const LastMessagePreview = ({ room, user, hasSkippedSync }) => {
     return (
         <span className="flex items-center min-w-0 gap-1">
             {showFileIcon && (
-                <span className="material-symbols-outlined text-[14px] text-slate-400 dark:text-slate-500 shrink-0">description</span>
+                <span className="material-symbols-outlined text-[14px] text-slate-600 dark:text-slate-500 shrink-0">description</span>
             )}
             <span className="truncate py-0.5 leading-normal">{renderPreviewRaw(content)}</span>
             {reactionSummary}
@@ -551,6 +563,22 @@ export default function Sidebar({ rooms, activeRoom, onSelectRoom, loadingRoomId
         return () => window.removeEventListener('cipher:backup-status-changed', handleStatusChange);
     }, []);
 
+    // [FIX] Fetch server backup state on mount so cloud icon is correct after refresh
+    useEffect(() => {
+        const token = localStorage.getItem('token');
+        if (!token) return;
+        fetch(`${import.meta.env.VITE_API_URL}/api/auth/backup`, {
+            headers: { Authorization: `Bearer ${token}` }
+        })
+        .then(res => res.ok ? res.json() : null)
+        .then(data => {
+            if (data && data.is_auto_sync_enabled === true) {
+                setAutoBackupEnabled(true);
+            }
+        })
+        .catch(() => {});
+    }, []);
+
     const { presenceMap, fetchStatuses } = usePresence();
     const { hasPasscode, lockApp } = useAppLock();
     const { isRoomLocked, requestUnlock, cancelUnlock } = useChatLock();
@@ -561,10 +589,13 @@ export default function Sidebar({ rooms, activeRoom, onSelectRoom, loadingRoomId
     const [searchQuery, setSearchQuery] = useState('');
     const [archivedSearchQuery, setArchivedSearchQuery] = useState('');
     const [showShareProfile, setShowShareProfile] = useState(false);
+    const [shareTriggerRect, setShareTriggerRect] = useState(null); // [NEW] Store trigger position
     const [showChatLockModal, setShowChatLockModal] = useState(null); // room to lock/unlock
+    const [showActionMenu, setShowActionMenu] = useState(false); // [NEW] Toggle for header action menu
 
-    // [NEW] Archived State
+    // [NEW] Archived & Request States
     const [viewArchived, setViewArchived] = useState(false);
+    const [viewRequests, setViewRequests] = useState(false);
     const [contextMenu, setContextMenu] = useState({ visible: false, x: 0, y: 0, room: null });
     
     // [NEW] Draft messages state - check localStorage
@@ -606,15 +637,25 @@ export default function Sidebar({ rooms, activeRoom, onSelectRoom, loadingRoomId
         }
         if (r.is_archived) return false; // Hide archived from main list
 
+        // [NEW] Message Requests logic
+        if (tab === 'direct') {
+            if (viewRequests) {
+                if (r.is_accepted !== false) return false;
+            } else {
+                if (r.is_accepted === false) return false;
+            }
+        }
+
         if (r.type !== tab) return false;
         if (tab === 'ai') return true;
         if (!searchQuery.trim()) return true;
         return r.name.toLowerCase().includes(searchQuery.toLowerCase());
     });
     
-    // Reset viewArchived when filter changes
+    // Reset views when filter changes
     useEffect(() => {
         setViewArchived(false);
+        setViewRequests(false);
         setSearchQuery('');
         setArchivedSearchQuery('');
     }, [activeFilter]);
@@ -703,10 +744,54 @@ export default function Sidebar({ rooms, activeRoom, onSelectRoom, loadingRoomId
         }, 50);
     };
 
+    // Render Call History if filter is 'calls'
+    if (tab === 'calls') {
+        return (
+             <div className="w-full h-full bg-white/90 dark:bg-[#1D1D21]/90 backdrop-blur-xl border-r border-slate-200 dark:border-[#232326] flex flex-col transition-colors">
+                <div className="p-6 flex justify-between items-center bg-white/30 dark:bg-[#1D1D21]/30">
+                    <div className="flex items-center gap-3 flex-1 min-w-0 mr-2">
+                        {/* Premium Avatar - Click opens profile */}
+                        <div 
+                            className={`w-10 h-10 rounded-full flex items-center justify-center text-white font-bold text-lg shadow-lg shadow-violet-500/20 overflow-hidden shrink-0 cursor-pointer ${!(user?.avatar_thumb_url || user?.avatar_url) ? 'bg-gradient-to-br from-violet-500 to-indigo-600' : 'bg-slate-200 dark:bg-slate-800'}`}
+                            onClick={onShowProfile}
+                            title="View Profile"
+                        >
+                            {(user?.avatar_thumb_url || user?.avatar_url) ? (
+                                <img src={user?.avatar_thumb_url || user?.avatar_url} alt="Me" className="w-full h-full object-cover" />
+                            ) : (
+                                (user?.display_name || user?.username || '?')[0].toUpperCase()
+                            )}
+                        </div>
+                        
+                        {/* Header Text - No longer clickable to open profile */}
+                        <div className="flex flex-col min-w-0">
+                            <h1 className="font-bold text-slate-800 dark:text-slate-100 text-lg leading-tight truncate">
+                                Calls
+                            </h1>
+                            <p className="text-xs text-slate-600 dark:text-slate-400 font-medium truncate">
+                                Recent History
+                            </p>
+                        </div>
+                    </div>
+                     <div className="flex gap-2">
+                        <button 
+                            onClick={onRefresh}
+                            className="w-10 h-10 rounded-full hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-400 transition-colors flex items-center justify-center shrink-0"
+                            title="Refresh"
+                        >
+                            <span className="material-symbols-outlined">refresh</span>
+                        </button>
+                    </div>
+                </div>
+                <CallHistory onSelectCall={() => {}} activeFilter={tab} />
+            </div>
+        );
+    }
+
     return (
-        <div className="w-full h-full bg-white/90 dark:bg-slate-900/90 backdrop-blur-xl border-r border-slate-200 dark:border-slate-800 flex flex-col transition-colors">
+        <div className="w-full h-full bg-white/90 dark:bg-[#1D1D21]/90 backdrop-blur-xl border-r border-slate-200 dark:border-[#232326] flex flex-col transition-colors">
             {/* ... (Header) ... */}
-            <div className="p-6 flex justify-between items-center bg-white/30 dark:bg-slate-900/30">
+            <div className="p-6 flex justify-between items-center bg-white/30 dark:bg-[#1D1D21]/30">
                 <div className="flex items-center gap-3 flex-1 min-w-0 mr-2">
                     <div 
                         className="flex items-center gap-3 cursor-pointer min-w-0"
@@ -720,9 +805,9 @@ export default function Sidebar({ rooms, activeRoom, onSelectRoom, loadingRoomId
                             )}
                         </div>
                         <div className="min-w-0 flex-1">
-                            <h2 className="font-bold text-slate-800 dark:text-slate-100 truncate transition-colors flex items-center gap-1">{renderTextWithEmojis(user.display_name)}</h2>
+                            <h2 className="font-bold text-slate-800 dark:text-slate-100 truncate transition-colors">{renderTextWithEmojis(user.display_name, '1.35em', '-0.25em')}</h2>
                             <div className="flex items-center gap-1">
-                                <p className="text-xs text-slate-500 dark:text-slate-400 font-medium transition-colors truncate">
+                                <p className="text-xs text-slate-600 dark:text-slate-400 font-medium transition-colors truncate">
                                     {user.username.startsWith('@') ? user.username : `@${user.username}`}
                                 </p>
                             </div>
@@ -731,39 +816,108 @@ export default function Sidebar({ rooms, activeRoom, onSelectRoom, loadingRoomId
                     <button 
                         onClick={(e) => {
                             e.stopPropagation();
+                            const rect = e.currentTarget.getBoundingClientRect();
+                            setShareTriggerRect(rect);
                             setShowShareProfile(true);
                         }}
-                        className="text-slate-400 dark:text-slate-500 hover:text-slate-600 dark:hover:text-white transition-colors"
+                        className="text-slate-600 dark:text-slate-500 hover:text-slate-800 dark:hover:text-white transition-colors"
                         title="Share Profile"
                     >
                         <span className="material-symbols-outlined text-[14px]">qr_code_2</span>
                     </button>
+
+                    {/* [FIX] Auto-Backup Status Indicator - visible on all screen sizes */}
+                    {autoBackupEnabled && (
+                        <div 
+                            className="group/backup relative flex items-center justify-center w-6 h-6 cursor-help"
+                            title="Auto-backup Active"
+                        >
+                            <span className="material-symbols-outlined text-[14px] text-green-500">cloud_done</span>
+                            
+                            {/* Tooltip */}
+                            <div className="absolute top-8 right-0 w-max pointer-events-none opacity-0 group-hover/backup:opacity-100 transition-opacity duration-200 z-50">
+                                <div className="bg-[#2a2a2a] text-white text-xs py-2 px-3 rounded-lg shadow-xl border border-white/5 relative">
+                                    Auto-backup is ON
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                </div>
+
+                {/* [NEW] Header Action Menu Trigger (Plus Icon) - Moved to Right */}
+                <div className="relative">
+                    <Tooltip text={showActionMenu ? "" : "New Chat / Join Room"} position="bottom">
+                        <button 
+                            onClick={(e) => {
+                                e.stopPropagation();
+                                setShowActionMenu(!showActionMenu);
+                            }}
+                            className={`relative z-[102] cursor-pointer w-9 h-9 rounded-full flex items-center justify-center transition-all duration-300 shadow-lg shadow-violet-500/20 ${
+                                showActionMenu 
+                                    ? 'bg-white text-slate-600 dark:bg-slate-800 dark:text-slate-300 rotate-45 border border-slate-200 dark:border-slate-700 ring-4 ring-violet-500/10' 
+                                    : 'bg-gradient-to-br from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 text-white'
+                            }`}
+                        >
+                            <div className="relative w-[18px] h-[18px]">
+                                <span className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[14px] h-[2px] bg-current rounded-full" />
+                                <span className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[2px] h-[14px] bg-current rounded-full" />
+                            </div>
+                        </button>
+                    </Tooltip>
+
+                    {/* Dropdown Menu */}
+                    <AnimatePresence>
+                        {showActionMenu && (
+                            <>
+                                <div 
+                                    className="fixed inset-0 z-[100]" 
+                                    onClick={() => setShowActionMenu(false)}
+                                />
+                                <motion.div 
+                                    initial={{ opacity: 0, scale: 0.9, y: -10 }}
+                                    animate={{ opacity: 1, scale: 1, y: 0 }}
+                                    exit={{ opacity: 0, scale: 0.9, y: -10 }}
+                                    transition={{ duration: 0.2, ease: "easeOut" }}
+                                    className="absolute top-full -right-2 mt-2 w-52 bg-white dark:bg-[#1e1e21] rounded-md shadow-xl shadow-black/20 border border-slate-200/60 dark:border-[#2f2f32] overflow-hidden z-[101] origin-top-right ring-1 ring-black/5"
+                                >
+                                    <div className="flex flex-col">
+                                        <button
+                                            onClick={() => {
+                                                setShowActionMenu(false);
+                                                onCreateRoom();
+                                            }}
+                                            className="group flex items-center gap-3 px-3 py-2.5 text-sm font-medium text-slate-700 dark:text-slate-200 hover:bg-violet-50 dark:hover:bg-violet-500/10 transition-colors text-left w-full"
+                                        >
+                                            <div className="w-8 h-8 rounded-full bg-violet-100 dark:bg-violet-500/20 text-violet-600 dark:text-violet-400 flex items-center justify-center">
+                                                <span className="material-symbols-outlined text-[18px]">add_circle</span>
+                                            </div>
+                                            <span>New Room</span>
+                                        </button>
+                                        <button
+                                            onClick={() => {
+                                                setShowActionMenu(false);
+                                                onJoinRoom();
+                                            }}
+                                            className="group flex items-center gap-3 px-3 py-2.5 text-sm font-medium text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700/50 transition-colors text-left w-full"
+                                        >
+                                            <div className="w-8 h-8 rounded-full bg-slate-100 dark:bg-slate-700 text-slate-500 dark:text-slate-400 flex items-center justify-center">
+                                                <span className="material-symbols-outlined text-[18px]">group_add</span>
+                                            </div>
+                                            <span>Join Room</span>
+                                        </button>
+                                    </div>
+                                </motion.div>
+                            </>
+                        )}
+                    </AnimatePresence>
                 </div>
                 {/* [MODIFIED] Hide on desktop - SideNav handles theme/logout there */}
                 <div className="flex items-center gap-2 md:hidden">
-                    
-                    {/* [NEW] Auto-Backup Status Indicator */}
-                    <div 
-                        className="group/backup relative flex items-center justify-center w-8 h-8 rounded-full hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-help"
-                        title={autoBackupEnabled ? "Auto-backup Active (Session)" : "Auto-backup Inactive"}
-                    >
-                        <span className={`material-symbols-outlined text-lg ${autoBackupEnabled ? 'text-green-500' : 'text-slate-300 dark:text-slate-600'}`}>
-                            {autoBackupEnabled ? 'cloud_done' : 'cloud_off'}
-                        </span>
-                        
-                        {/* Tooltip */}
-                        <div className="absolute top-10 right-0 w-max pointer-events-none opacity-0 group-hover/backup:opacity-100 transition-opacity duration-200 z-50">
-                             <div className="bg-[#2a2a2a] text-white text-xs py-2 px-3 rounded-lg shadow-xl border border-white/5 relative">
-                                {autoBackupEnabled 
-                                    ? "Auto-backup is ON for this session." 
-                                    : "Auto-backup is OFF. Restore to enable."}
-                            </div>
-                        </div>
-                    </div>
 
                     <button 
                         onClick={(e) => toggleTheme(e)} 
-                        className="p-2 rounded-full text-slate-400 dark:text-slate-400 hover:text-amber-500 dark:hover:text-yellow-400 transition-all duration-200"
+                        className="p-2 rounded-full text-slate-600 dark:text-slate-400 hover:text-amber-600 hover:bg-amber-50 dark:hover:text-yellow-400 dark:hover:bg-yellow-400/10 transition-all duration-200"
                         title={theme === 'dark' ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
                     >
                         <span className="material-symbols-outlined text-xl transition-transform duration-500 rotate-0 dark:rotate-180">
@@ -772,7 +926,7 @@ export default function Sidebar({ rooms, activeRoom, onSelectRoom, loadingRoomId
                     </button>
                     <button 
                         onClick={onLogout} 
-                        className="w-10 h-10 flex items-center justify-center rounded-full text-slate-400 hover:text-red-500 hover:bg-red-100 dark:hover:text-red-400 dark:hover:bg-red-500/10 transition-all duration-200"
+                        className="w-10 h-10 flex items-center justify-center rounded-full text-slate-600 dark:text-slate-400 hover:text-red-600 hover:bg-red-100 dark:hover:text-red-400 dark:hover:bg-red-500/10 transition-all duration-200"
                         title="Logout"
                     >
                         <span className="material-symbols-outlined text-xl">logout</span>
@@ -782,7 +936,7 @@ export default function Sidebar({ rooms, activeRoom, onSelectRoom, loadingRoomId
                         <div className="relative group/lock-container">
                              <button 
                                 onClick={handleLockClick}
-                                className="w-10 h-10 flex items-center justify-center rounded-full text-slate-400 hover:text-violet-500 hover:bg-violet-100 dark:hover:text-violet-400 dark:hover:bg-violet-900/20 transition-all duration-200 relative"
+                                className="w-10 h-10 flex items-center justify-center rounded-full text-slate-600 dark:text-slate-400 hover:text-violet-600 hover:bg-violet-100 dark:hover:text-violet-400 dark:hover:bg-violet-900/20 transition-all duration-200 relative"
                             >
                                 <span className={`material-symbols-outlined text-xl transition-all duration-300 ${isLocking ? 'scale-110 text-violet-500' : ''}`}>
                                     {isLocking ? 'lock' : 'lock_open'}
@@ -804,7 +958,7 @@ export default function Sidebar({ rooms, activeRoom, onSelectRoom, loadingRoomId
 
             {/* [MODIFIED] Tab buttons - Hidden on desktop (SideNav handles it), visible on mobile */}
             <div className="p-4 pb-2 md:hidden">
-                <div className="flex p-1 bg-slate-100 dark:bg-slate-950/50 rounded-xl border border-slate-200 dark:border-slate-800/50 transition-colors">
+                <div className="flex p-1 bg-slate-100 dark:bg-[#17171A]/50 rounded-xl border border-slate-200 dark:border-slate-800/50 transition-colors">
                     <button 
                         className={`flex-1 py-2 text-sm font-medium rounded-lg transition-all duration-200 relative ${tab === 'group' ? 'bg-white dark:bg-slate-800 text-slate-900 dark:text-white shadow-sm' : 'text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200'}`}
                         onClick={() => setTab('group')}
@@ -848,7 +1002,7 @@ export default function Sidebar({ rooms, activeRoom, onSelectRoom, loadingRoomId
             {tab !== 'ai' && !viewArchived && (
                 <div className="px-4 pb-2">
                     <div className="relative">
-                        <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-lg">
+                        <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-slate-600 dark:text-slate-500 text-lg">
                             search
                         </span>
                         <input
@@ -856,7 +1010,7 @@ export default function Sidebar({ rooms, activeRoom, onSelectRoom, loadingRoomId
                             value={searchQuery}
                             onChange={(e) => setSearchQuery(e.target.value)}
                             placeholder={tab === 'group' ? "Search groups..." : "Search people..."}
-                            className="w-full bg-slate-100 dark:bg-slate-950/50 border border-slate-300 dark:border-slate-700 rounded-xl py-2 pl-9 pr-4 text-sm text-slate-700 dark:text-slate-200 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-violet-500/50 transition-all"
+                            className="w-full bg-slate-100 dark:bg-[#17171A]/50 border border-slate-300 dark:border-slate-700 rounded-xl py-2 pl-9 pr-4 text-sm text-slate-900 dark:text-slate-200 placeholder:text-slate-600 dark:placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-violet-500/50 transition-all font-medium"
                         />
                         {searchQuery && (
                             <button 
@@ -870,12 +1024,47 @@ export default function Sidebar({ rooms, activeRoom, onSelectRoom, loadingRoomId
                 </div>
             )}
 
+            {/* Message Requests Toggle Row */}
+            {!viewArchived && !viewRequests && tab === 'direct' && !searchQuery && rooms.some(r => r.type === 'direct' && r.is_accepted === false) && (
+                <div className="px-4 pb-1">
+                    <button 
+                        onClick={() => setViewRequests(true)}
+                        className="w-full flex items-center justify-between p-2 text-violet-600 hover:text-violet-800 dark:text-violet-400 dark:hover:text-violet-300 hover:bg-violet-50 dark:hover:bg-violet-900/10 rounded-md transition-colors text-sm font-semibold"
+                    >
+                        <div className="flex items-center gap-2">
+                             <span className="material-symbols-outlined text-[18px]">mark_chat_unread</span>
+                             <span>Message Requests</span>
+                        </div>
+                        <span className="text-xs bg-violet-600 text-white px-2 py-0.5 rounded-full font-bold">
+                            {rooms.filter(r => r.type === 'direct' && r.is_accepted === false).length}
+                        </span>
+                    </button>
+                </div>
+            )}
+
+            {/* Back from Requests Header */}
+            {viewRequests && (
+                <div className="flex flex-col border-b border-slate-100 dark:border-slate-800/50 bg-violet-50/30 dark:bg-violet-900/5">
+                    <div className="px-4 py-3 flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                            <button 
+                                onClick={() => setViewRequests(false)}
+                                className="p-1.5 rounded-full transition-colors text-violet-500 hover:text-violet-900 dark:text-violet-400 dark:hover:text-white hover:bg-violet-100 dark:hover:bg-violet-900/20"
+                            >
+                                <span className="material-symbols-outlined text-sm font-bold">arrow_back</span>
+                            </button>
+                            <span className="text-sm font-bold text-violet-700 dark:text-violet-300">Message Requests</span>
+                        </div>
+                    </div>
+                </div>
+            )}
+
             {/* Archived Toggle Row - Moved Below Search */}
-            {!viewArchived && rooms.some(r => r.is_archived) && tab !== 'ai' && !searchQuery && (
+            {!viewArchived && !viewRequests && rooms.some(r => r.is_archived) && tab !== 'ai' && !searchQuery && (
                 <div className="px-4 pb-1">
                     <button 
                         onClick={() => setViewArchived(true)}
-                        className="w-full flex items-center justify-between p-2 text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800/50 rounded-md transition-colors text-sm font-medium"
+                        className="w-full flex items-center justify-between p-2 text-slate-600 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800/50 rounded-md transition-colors text-sm font-medium"
                     >
                         <div className="flex items-center gap-2">
                              <span className="material-symbols-outlined text-[18px]">inventory_2</span>
@@ -902,15 +1091,13 @@ export default function Sidebar({ rooms, activeRoom, onSelectRoom, loadingRoomId
                      </div>
                      <div className="px-4 pb-2">
                         <div className="relative">
-                            <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-lg">
-                                search
-                            </span>
+                            <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-slate-600 dark:text-slate-400 text-lg">search</span>
                             <input
                                 type="text"
                                 value={archivedSearchQuery}
                                 onChange={(e) => setArchivedSearchQuery(e.target.value)}
                                 placeholder="Search archived..."
-                                className="w-full bg-slate-100 dark:bg-slate-950/50 border border-slate-300 dark:border-slate-700 rounded-xl py-2 pl-9 pr-4 text-sm text-slate-700 dark:text-slate-200 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-violet-500/50 transition-all"
+                                className="w-full bg-slate-100 dark:bg-slate-800 text-slate-900 dark:text-slate-100 placeholder-slate-600 dark:placeholder-slate-400 text-sm rounded-xl py-2 pl-9 pr-4 focus:outline-none focus:ring-2 focus:ring-violet-500/50 transition-all font-medium"
                             />
                             {archivedSearchQuery && (
                                 <button 
@@ -971,7 +1158,7 @@ export default function Sidebar({ rooms, activeRoom, onSelectRoom, loadingRoomId
                         className={`w-full text-left p-3 rounded-lg flex items-center gap-3 transition-all duration-200 group hover:translate-x-1 cursor-pointer select-none ${
                             activeRoom?.id === room.id 
                             ? 'bg-violet-100 dark:bg-violet-600/10 text-violet-700 dark:text-violet-300 border border-violet-200 dark:border-violet-500/20 shadow-sm' 
-                            : 'text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800/50 hover:text-slate-900 dark:hover:text-slate-200 border border-transparent'
+                            : 'text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-[#2A2A2D] hover:text-slate-900 dark:hover:text-slate-200 border border-transparent'
                         } ${loadingRoomId === room.id ? 'opacity-50 pointer-events-none' : ''}`}
                         onContextMenu={(e) => {
                             e.preventDefault();
@@ -1012,7 +1199,7 @@ export default function Sidebar({ rooms, activeRoom, onSelectRoom, loadingRoomId
                         </div>
                         <div className="flex-1 min-w-0 flex justify-between items-center">
                             <div className="min-w-0">
-                                <span className="truncate font-medium block">
+                                <span className="truncate font-medium block text-slate-700 dark:text-slate-100">
                                     {room.type === 'ai' ? 'Sparkle AI' : linkifyText(room.name)}
                                 </span>
                                 {room.type === 'group' && !room.last_message_content && !room.last_message_type && !drafts[room.id] ? (
@@ -1067,7 +1254,7 @@ export default function Sidebar({ rooms, activeRoom, onSelectRoom, loadingRoomId
                                         </span>
                                     </div>
                                 ) : (
-                                    <div className="text-xs text-slate-500 dark:text-slate-400 flex items-center gap-1 min-w-0">
+                                    <div className="text-xs text-slate-600 dark:text-slate-400 flex items-center gap-1 min-w-0">
                                         {String(room.last_message_sender_id) === String(user.id) && room.type !== 'ai' && !room.last_message_is_deleted && !['image', 'file', 'video', 'audio', 'location', 'gif', 'poll'].includes(room.last_message_type) && (
                                             <span className={`material-symbols-outlined text-[16px] shrink-0 ${
                                                 room.last_message_status === 'seen' ? 'text-blue-500' :
@@ -1092,7 +1279,7 @@ export default function Sidebar({ rooms, activeRoom, onSelectRoom, loadingRoomId
 
                                                 if (room.last_message_is_deleted) {
                                                     return (
-                                                        <span className="inline-flex items-center gap-1 italic text-slate-500 dark:text-slate-400">
+                                                        <span className="inline-flex items-center gap-1 italic text-slate-600 dark:text-slate-400">
                                                             <span className="material-symbols-outlined text-[16px] shrink-0">block</span>
                                                             <span className="pr-1">This message was deleted</span>
                                                         </span>
@@ -1139,10 +1326,10 @@ export default function Sidebar({ rooms, activeRoom, onSelectRoom, loadingRoomId
                                                                      return (
                                                                          <div className="flex items-center gap-1">
                                                                              <ViewOnceIcon 
-                                                                                 className="w-4 h-4 text-slate-500 dark:text-slate-400" 
+                                                                                 className="w-4 h-4 text-slate-600 dark:text-slate-400" 
                                                                                  isOpened={isOpened} 
                                                                              />
-                                                                             <span className={`truncate ${isOpened ? 'text-slate-500 dark:text-slate-400' : ''}`}>
+                                                                             <span className={`truncate ${isOpened ? 'text-slate-600 dark:text-slate-400' : ''}`}>
                                                                                  {isOpened ? 'Opened' : 'Photo'}
                                                                              </span>
                                                                          </div>
@@ -1153,7 +1340,7 @@ export default function Sidebar({ rooms, activeRoom, onSelectRoom, loadingRoomId
                                                                              <span className={`material-symbols-outlined text-[16px] shrink-0 mr-1 ${
                                                                                 room.last_message_status === 'seen' ? 'text-blue-500' :
                                                                                 room.last_message_status === 'error' ? 'text-red-400' :
-                                                                                'text-slate-400'
+                                                                                'text-slate-500'
                                                                             }`}>
                                                                                 {(room.last_message_status === 'sending' || room.last_message_status === 'pending') ? 'access_time' : 
                                                                                  room.last_message_status === 'error' ? 'error' :
@@ -1184,7 +1371,7 @@ export default function Sidebar({ rooms, activeRoom, onSelectRoom, loadingRoomId
                                                                      <span className={`material-symbols-outlined text-[16px] shrink-0 ${
                                                                         room.last_message_status === 'error' ? 'text-red-400' :
                                                                         room.last_message_status === 'seen' ? 'text-blue-500' :
-                                                                        'text-slate-400'
+                                                                        'text-slate-500'
                                                                     }`}>
                                                                         {(room.last_message_status === 'sending' || room.last_message_status === 'pending') ? 'access_time' : 
                                                                          room.last_message_status === 'error' ? 'error' :
@@ -1212,7 +1399,7 @@ export default function Sidebar({ rooms, activeRoom, onSelectRoom, loadingRoomId
                                                                      <span className={`material-symbols-outlined text-[16px] shrink-0 ${
                                                                         room.last_message_status === 'error' ? 'text-red-400' :
                                                                         room.last_message_status === 'seen' ? 'text-blue-500' :
-                                                                        'text-slate-400'
+                                                                        'text-slate-500'
                                                                     }`}>
                                                                         {(room.last_message_status === 'sending' || room.last_message_status === 'pending') ? 'access_time' : 
                                                                          room.last_message_status === 'error' ? 'error' :
@@ -1237,7 +1424,7 @@ export default function Sidebar({ rooms, activeRoom, onSelectRoom, loadingRoomId
                                                                      <span className={`material-symbols-outlined text-[16px] shrink-0 ${
                                                                         room.last_message_status === 'error' ? 'text-red-400' :
                                                                         room.last_message_status === 'seen' ? 'text-blue-500' :
-                                                                        'text-slate-400'
+                                                                        'text-slate-500'
                                                                     }`}>
                                                                         {(room.last_message_status === 'sending' || room.last_message_status === 'pending') ? 'access_time' : 
                                                                          room.last_message_status === 'error' ? 'error' :
@@ -1262,7 +1449,7 @@ export default function Sidebar({ rooms, activeRoom, onSelectRoom, loadingRoomId
                                                                      <span className={`material-symbols-outlined text-[16px] shrink-0 ${
                                                                         room.last_message_status === 'error' ? 'text-red-400' :
                                                                         room.last_message_status === 'seen' ? 'text-blue-500' :
-                                                                        'text-slate-400'
+                                                                        'text-slate-500'
                                                                     }`}>
                                                                         {(room.last_message_status === 'sending' || room.last_message_status === 'pending') ? 'access_time' : 
                                                                          room.last_message_status === 'error' ? 'error' :
@@ -1287,7 +1474,7 @@ export default function Sidebar({ rooms, activeRoom, onSelectRoom, loadingRoomId
                                                                      <span className={`material-symbols-outlined text-[16px] shrink-0 ${
                                                                         room.last_message_status === 'error' ? 'text-red-400' :
                                                                         room.last_message_status === 'seen' ? 'text-blue-500' :
-                                                                        'text-slate-400'
+                                                                        'text-slate-500'
                                                                     }`}>
                                                                         {(room.last_message_status === 'sending' || room.last_message_status === 'pending') ? 'access_time' : 
                                                                          room.last_message_status === 'error' ? 'error' :
@@ -1334,7 +1521,7 @@ export default function Sidebar({ rooms, activeRoom, onSelectRoom, loadingRoomId
                                                                      <span className={`material-symbols-outlined text-[16px] shrink-0 ${
                                                                         room.last_message_status === 'error' ? 'text-red-400' :
                                                                         room.last_message_status === 'seen' ? 'text-blue-500' :
-                                                                        'text-slate-400'
+                                                                        'text-slate-500'
                                                                     }`}>
                                                                         {(room.last_message_status === 'sending' || room.last_message_status === 'pending') ? 'access_time' : 
                                                                          room.last_message_status === 'error' ? 'error' :
@@ -1363,6 +1550,81 @@ export default function Sidebar({ rooms, activeRoom, onSelectRoom, loadingRoomId
                                                                 <span className="truncate py-0.5 leading-normal">{room.last_message_content || 'To-Do List'}</span>
                                                             </span>
                                                         );
+                                                    case 'group_invite':
+                                                        return (
+                                                            <span className="flex items-center gap-1">
+                                                                {String(room.last_message_sender_id) === String(user.id) ? (
+                                                                    <>
+                                                                        <span className="shrink-0">You:</span>
+                                                                        <span className="material-symbols-outlined text-[16px] shrink-0 text-violet-500">diversity_3</span>
+                                                                        <span>Group invitation</span>
+                                                                    </>
+                                                                ) : (
+                                                                    <>
+                                                                        <span className="material-symbols-outlined text-[16px] shrink-0 text-violet-500">diversity_3</span>
+                                                                        <span>sent a group invitation</span>
+                                                                    </>
+                                                                )}
+                                                            </span>
+                                                        );
+                                                    case 'call_log': {
+                                                        // Parse call metadata from caption
+                                                        let callMeta = {};
+                                                        try {
+                                                            if (room.last_message_caption) {
+                                                                callMeta = JSON.parse(room.last_message_caption);
+                                                            }
+                                                        } catch (e) { /* ignore parse errors */ }
+                                                        
+                                                        const isCallFromMe = String(callMeta.caller_id) === String(user.id);
+                                                        const isIncomingCall = callMeta.call_status === 'initiated' && !isCallFromMe;
+                                                        const callType = callMeta.call_type === 'video' ? 'video' : 'voice';
+                                                        
+                                                        if (isIncomingCall) {
+                                                            return (
+                                                                <span className="flex items-center gap-1.5 text-green-500 font-medium">
+                                                                    <span className="material-symbols-outlined text-[17px] text-green-500 animate-pulse shrink-0">
+                                                                        {callType === 'video' ? 'videocam' : 'call'}
+                                                                    </span>
+                                                                    <span className="truncate">
+                                                                        Incoming {callType} call
+                                                                    </span>
+                                                                </span>
+                                                            );
+                                                        }
+                                                        
+                                                        if (callMeta.call_status === 'connected') {
+                                                            return (
+                                                                <span className="flex items-center gap-1.5 text-green-500 font-medium">
+                                                                    <span className="material-symbols-outlined text-[17px] text-green-500 shrink-0">
+                                                                        {callType === 'video' ? 'videocam' : 'call'}
+                                                                    </span>
+                                                                    <span className="truncate flex items-center gap-1">
+                                                                        {callType === 'video' ? 'Video' : 'Voice'} call
+                                                                        <span className="inline-block w-1 h-1 bg-green-500 rounded-full shrink-0"></span>
+                                                                        In call
+                                                                    </span>
+                                                                </span>
+                                                            );
+                                                        }
+                                                        
+                                                        return (
+                                                            <span className="flex items-center gap-1">
+                                                                <span className={`material-symbols-outlined text-[16px] shrink-0 ${
+                                                                    callMeta.call_status === 'missed' || callMeta.call_status === 'declined'
+                                                                        ? 'text-red-400' 
+                                                                        : isCallFromMe ? 'text-green-500' : 'text-slate-500'
+                                                                }`}>
+                                                                    {isCallFromMe ? 'call_made' : 
+                                                                     callMeta.call_status === 'missed' || callMeta.call_status === 'declined' 
+                                                                        ? 'call_missed' : 'call_received'}
+                                                                </span>
+                                                                <span className="truncate py-0.5 leading-normal">
+                                                                    {room.last_message_content || (callType === 'video' ? 'Video call' : 'Voice call')}
+                                                                </span>
+                                                            </span>
+                                                        );
+                                                    }
                                                     default:
                                                         if (room.last_message_content && room.last_message_content.includes('pinned a message')) {
                                                             return (
@@ -1516,38 +1778,18 @@ export default function Sidebar({ rooms, activeRoom, onSelectRoom, loadingRoomId
             )}
 
             {/* Actions */}
-            <div className="p-4 border-t border-slate-200/50 dark:border-slate-800/50 bg-white/30 dark:bg-slate-900/30 space-y-3 transition-colors duration-300">
-                {tab === 'ai' ? (
-                   <div className="text-center text-xs text-slate-400">
-                       AI Assistant is ready
-                   </div>
-                ) : (
-                    <>
-                        <button 
-                            onClick={onCreateRoom}
-                            className="w-full bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 text-white py-2.5 rounded-xl text-sm font-bold flex items-center justify-center gap-2 shadow-lg shadow-violet-500/20 transition-all duration-200 transform hover:scale-[1.02]"
-                        >
-                            <span className="material-symbols-outlined text-lg">add_circle</span>
-                            New Room
-                        </button>
-                        <button 
-                            onClick={onJoinRoom}
-                            className="w-full bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 py-2.5 rounded-xl text-sm font-bold flex items-center justify-center gap-2 border border-slate-200 dark:border-slate-700 transition-all duration-200 transform hover:scale-[1.02]"
-                        >
-                            <span className="material-symbols-outlined text-lg">login</span>
-                            Join Room
-                        </button>
-                    </>
-                )}
+            {/* Actions - Removed bottom buttons, kept container for spacing/border or remove entire div if preferred */}
+            <div className="border-t border-slate-200/50 dark:border-[#232326]/50 bg-white/30 dark:bg-[#17171A]/30 transition-colors duration-300">
+                {/* Empty container or maybe just spacing - effectively removing the buttons */}
             </div>
 
             
-            {showShareProfile && (
-                <ProfileShareModal 
-                    user={user} 
-                    onClose={() => setShowShareProfile(false)} 
-                />
-            )}
+            <ProfileShareModal 
+                isOpen={showShareProfile}
+                user={user} 
+                triggerRect={shareTriggerRect}
+                onClose={() => setShowShareProfile(false)} 
+            />
 
 
 

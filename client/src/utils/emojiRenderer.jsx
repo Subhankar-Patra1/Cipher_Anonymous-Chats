@@ -1,10 +1,8 @@
+import emojiRegexSource from 'emoji-regex';
 
 // Utility to parse text and replace emoji characters with Apple-style emoji images
 
-// Regex to match emojis (simplified version, might need a more robust one)
-// Using a broad range for emojis
-// Regex to match emojis including flags (RI pairs) and ZWJ sequences
-const emojiRegex = /[\u{1F1E6}-\u{1F1FF}]{2}|(?:[\u{1F300}-\u{1F9FF}]|[\u{2600}-\u{26FF}]|[\u{2700}-\u{27BF}]|[\u{1F1E6}-\u{1F1FF}]|[\u{1F191}-\u{1F251}]|[\u{1F004}]|[\u{1F0CF}]|[\u{1F170}-\u{1F171}]|[\u{1F18E}]|[\u{1F191}-\u{1F19A}])(?:\u{200D}(?:[\u{1F300}-\u{1F9FF}]|[\u{2600}-\u{26FF}]|[\u{2700}-\u{27BF}]|[\u{1F1E6}-\u{1F1FF}]|[\u{1F191}-\u{1F251}]|[\u{1F004}]|[\u{1F0CF}]|[\u{1F170}-\u{1F171}]|[\u{1F18E}]|[\u{1F191}-\u{1F19A}]))*/gu;
+const emojiRegex = emojiRegexSource();
 
 // Mapping or function to get image URL
 export const getAppleEmojiUrl = (emojiChar) => {
@@ -28,7 +26,7 @@ export const getAppleEmojiUrl = (emojiChar) => {
     return `https://cdn.jsdelivr.net/npm/emoji-datasource-apple/img/apple/64/${hex}.png`;
 };
 
-export const renderTextWithEmojis = (text, size = '1.45em') => {
+export const renderTextWithEmojis = (text, size = '1.45em', verticalAlign = '-0.35em') => {
     if (!text) return text;
     
     // If text is not a string, return as is
@@ -52,7 +50,7 @@ export const renderTextWithEmojis = (text, size = '1.45em') => {
                     src={getAppleEmojiUrl(emojiChar)} 
                     alt={emojiChar} 
                     className="inline-block select-none pointer-events-none object-contain" 
-                    style={{ width: size, height: size, verticalAlign: '-0.35em' }}
+                    style={{ width: size, height: size, verticalAlign: verticalAlign }}
                     draggable="false"
                     onError={(e) => {
                         e.target.style.display = 'none';

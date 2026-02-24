@@ -7,7 +7,7 @@ export function ThemeProvider({ children }) {
         // Check localStorage or system preference
         const savedTheme = localStorage.getItem('theme');
         if (savedTheme) {
-            return savedTheme;
+            return savedTheme === 'onyx' ? 'dark' : savedTheme;
         }
         return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
     });
@@ -18,18 +18,21 @@ export function ThemeProvider({ children }) {
         // Remove both classes first to ensure clean state
         root.classList.remove('light', 'dark');
         
-        // Add the current theme class
+        // Add the current theme class(es)
         root.classList.add(theme);
         
         // Save to localStorage
         localStorage.setItem('theme', theme);
     }, [theme]);
 
-    const toggleTheme = (e) => {
+    const toggleTheme = (e, forcedTheme) => {
+        if (forcedTheme && theme === forcedTheme) return;
+        const nextTheme = forcedTheme || (theme === 'dark' ? 'light' : 'dark');
+
         // Fallback for browsers regarding View Transitions
         if (!document.startViewTransition) {
             document.documentElement.classList.add('theme-transition');
-            setTheme(prev => prev === 'dark' ? 'light' : 'dark');
+            setTheme(nextTheme);
             setTimeout(() => {
                 document.documentElement.classList.remove('theme-transition');
             }, 500);
@@ -46,7 +49,7 @@ export function ThemeProvider({ children }) {
         );
 
         const transition = document.startViewTransition(() => {
-            setTheme(prev => prev === 'dark' ? 'light' : 'dark');
+            setTheme(nextTheme);
         });
 
         transition.ready.then(() => {
@@ -55,12 +58,6 @@ export function ThemeProvider({ children }) {
                 `circle(${endRadius}px at ${x}px ${y}px)`
             ];
 
-            const isDark = theme === 'dark'; // changing TO light if current is dark
-            // But wait, the state updates inside startViewTransition.
-            // If theme WAS dark, we are going to light. New view is light.
-            // Actually, we animate the NEW view growing if going to light (or dark).
-            // Usually we animate the "new" content revealed on top.
-            
             document.documentElement.animate(
                 {
                     clipPath: clipPath
@@ -75,7 +72,7 @@ export function ThemeProvider({ children }) {
     };
 
     return (
-        <ThemeContext.Provider value={{ theme, toggleTheme }}>
+        <ThemeContext.Provider value={{ theme, toggleTheme, setTheme }}>
             {children}
         </ThemeContext.Provider>
     );

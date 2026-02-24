@@ -1,9 +1,285 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useNavigate, useLocation } from 'react-router-dom';
 import SpinLoading from '../components/SpinLoading';
 import OAuthButtons from '../components/OAuthButtons';
 import { cryptoManager } from '../lib/crypto/CryptoManager';
+import CipherQR from '../components/CipherQR';
+import { io as socketIO } from 'socket.io-client';
+
+// [NEW] QR Login Panel Component
+const QRLoginPanel = ({ onSuccess }) => {
+    const [qrToken, setQrToken] = useState(null);
+    const [expiresAt, setExpiresAt] = useState(null);
+    const [timeLeft, setTimeLeft] = useState(0);
+    const [qrStatus, setQrStatus] = useState('loading'); // loading | ready | expired | authenticated | error
+    const [qrError, setQrError] = useState(null);
+    const [isRefreshing, setIsRefreshing] = useState(false);
+    const socketRef = useRef(null);
+    const pollRef = useRef(null);
+    const timerRef = useRef(null);
+
+    const generateQRSession = useCallback(async () => {
+        setQrStatus('loading');
+        setQrError(null);
+        try {
+            const res = await fetch(`${import.meta.env.VITE_API_URL}/api/auth/qr-session`, {
+                method: 'POST'
+            });
+            if (!res.ok) throw new Error('Failed to create QR session');
+            const data = await res.json();
+            setQrToken(data.token);
+            setExpiresAt(new Date(data.expiresAt));
+            setQrStatus('ready');
+            return data.token;
+        } catch (err) {
+            console.error('[QR] Error generating session:', err);
+            setQrError('Failed to generate QR code. Check your connection.');
+            setQrStatus('error');
+            return null;
+        }
+    }, []);
+
+    // Connect to /qr namespace and subscribe
+    useEffect(() => {
+        let currentToken = null;
+
+        const init = async () => {
+            const token = await generateQRSession();
+            if (!token) return;
+            currentToken = token;
+
+            // Connect to /qr namespace (no auth needed)
+            const socket = socketIO(`${import.meta.env.VITE_API_URL}/qr`, {
+                transports: ['websocket', 'polling']
+            });
+            socketRef.current = socket;
+
+            socket.on('connect', () => {
+                socket.emit('qr:subscribe', { token });
+            });
+
+            socket.on('qr:authenticated', (data) => {
+                setQrStatus('authenticated');
+                // Clean up
+                if (pollRef.current) clearInterval(pollRef.current);
+                if (timerRef.current) clearInterval(timerRef.current);
+                // Small delay for visual feedback
+                setTimeout(() => {
+                    onSuccess(data.authToken, data.user);
+                }, 800);
+            });
+
+            // Fallback polling every 3 seconds in case WebSocket fails
+            pollRef.current = setInterval(async () => {
+                try {
+                    const statusRes = await fetch(`${import.meta.env.VITE_API_URL}/api/auth/qr-session/${currentToken}/status`);
+                    if (!statusRes.ok) return;
+                    const statusData = await statusRes.json();
+                    if (statusData.status === 'authenticated' && statusData.authToken) {
+                        setQrStatus('authenticated');
+                        clearInterval(pollRef.current);
+                        if (timerRef.current) clearInterval(timerRef.current);
+                        setTimeout(() => {
+                            onSuccess(statusData.authToken, statusData.user);
+                        }, 800);
+                    } else if (statusData.status === 'expired') {
+                        setQrStatus('expired');
+                        clearInterval(pollRef.current);
+                    }
+                } catch (_) {}
+            }, 3000);
+        };
+
+        init();
+
+        return () => {
+            if (socketRef.current) {
+                if (currentToken) socketRef.current.emit('qr:unsubscribe', { token: currentToken });
+                socketRef.current.disconnect();
+            }
+            if (pollRef.current) clearInterval(pollRef.current);
+            if (timerRef.current) clearInterval(timerRef.current);
+        };
+    }, []);
+
+    // Countdown timer
+    useEffect(() => {
+        if (!expiresAt || qrStatus !== 'ready') return;
+
+        const updateTimer = () => {
+            const remaining = Math.max(0, Math.ceil((expiresAt.getTime() - Date.now()) / 1000));
+            setTimeLeft(remaining);
+            if (remaining <= 0) {
+                setQrStatus('expired');
+                if (pollRef.current) clearInterval(pollRef.current);
+            }
+        };
+
+        updateTimer();
+        timerRef.current = setInterval(updateTimer, 1000);
+        return () => clearInterval(timerRef.current);
+    }, [expiresAt, qrStatus]);
+
+    const handleRefresh = async () => {
+        setIsRefreshing(true);
+        // Disconnect old socket
+        if (socketRef.current) {
+            if (qrToken) socketRef.current.emit('qr:unsubscribe', { token: qrToken });
+            socketRef.current.disconnect();
+        }
+        if (pollRef.current) clearInterval(pollRef.current);
+        if (timerRef.current) clearInterval(timerRef.current);
+
+        const newToken = await generateQRSession();
+        setIsRefreshing(false);
+        if (!newToken) return;
+
+        // Reconnect socket with new token
+        const socket = socketIO(`${import.meta.env.VITE_API_URL}/qr`, {
+            transports: ['websocket', 'polling']
+        });
+        socketRef.current = socket;
+
+        socket.on('connect', () => {
+            socket.emit('qr:subscribe', { token: newToken });
+        });
+
+        socket.on('qr:authenticated', (data) => {
+            setQrStatus('authenticated');
+            if (pollRef.current) clearInterval(pollRef.current);
+            if (timerRef.current) clearInterval(timerRef.current);
+            setTimeout(() => onSuccess(data.authToken, data.user), 800);
+        });
+
+        // Restart polling
+        pollRef.current = setInterval(async () => {
+            try {
+                const statusRes = await fetch(`${import.meta.env.VITE_API_URL}/api/auth/qr-session/${newToken}/status`);
+                if (!statusRes.ok) return;
+                const statusData = await statusRes.json();
+                if (statusData.status === 'authenticated' && statusData.authToken) {
+                    setQrStatus('authenticated');
+                    clearInterval(pollRef.current);
+                    if (timerRef.current) clearInterval(timerRef.current);
+                    setTimeout(() => onSuccess(statusData.authToken, statusData.user), 800);
+                } else if (statusData.status === 'expired') {
+                    setQrStatus('expired');
+                    clearInterval(pollRef.current);
+                }
+            } catch (_) {}
+        }, 3000);
+    };
+
+    const qrValue = qrToken ? JSON.stringify({
+        type: 'cipher_qr_login',
+        token: qrToken,
+        server: import.meta.env.VITE_API_URL
+    }) : '';
+
+    return (
+        <div className="space-y-6 min-h-[420px]">
+            {/* QR Code Container */}
+            <div className="flex flex-col items-center">
+                <div className="relative">
+                    {/* QR Code Background */}
+                    <div className={`transition-all duration-500 ${
+                        qrStatus === 'authenticated' ? 'scale-95' :
+                        qrStatus === 'expired' ? 'opacity-40 blur-[2px]' : ''
+                    }`}>
+                        {qrStatus === 'loading' ? (
+                            <div className="w-[280px] h-[280px] flex items-center justify-center bg-transparent">
+                                <span className="material-symbols-outlined text-slate-500 text-4xl animate-spin">progress_activity</span>
+                            </div>
+                        ) : qrStatus === 'error' ? (
+                            <div className="w-[280px] h-[280px] flex flex-col items-center justify-center gap-3 bg-transparent">
+                                <span className="material-symbols-outlined text-red-400 text-4xl">error</span>
+                                <p className="text-xs text-red-400 text-center">{qrError}</p>
+                            </div>
+                        ) : (
+                            <CipherQR value={qrValue} size={280} />
+                        )}
+                    </div>
+
+                    {/* Refreshing Loader Overlay */}
+                    {isRefreshing && (
+                        <div className="absolute inset-0 flex flex-col items-center justify-center bg-slate-950/80 backdrop-blur-sm z-10" style={{ borderRadius: 'inherit' }}>
+                            <span className="material-symbols-outlined text-violet-400 text-4xl animate-spin">progress_activity</span>
+                            <p className="text-xs text-slate-400 mt-2 font-medium">Generating new QR...</p>
+                        </div>
+                    )}
+
+                    {/* Expired Overlay */}
+                    {qrStatus === 'expired' && !isRefreshing && (
+                        <div className="absolute inset-0 flex flex-col items-center justify-center">
+                            <button
+                                onClick={handleRefresh}
+                                className="bg-violet-600 hover:bg-violet-500 text-white px-5 py-2.5 rounded-xl font-bold text-sm flex items-center gap-2 shadow-lg shadow-violet-500/30 transition-all transform hover:scale-105 active:scale-95"
+                            >
+                                <span className="material-symbols-outlined text-lg">refresh</span>
+                                Refresh QR Code
+                            </button>
+                        </div>
+                    )}
+
+                    {/* Authenticated Overlay */}
+                    {qrStatus === 'authenticated' && (
+                        <div className="absolute inset-0 flex flex-col items-center justify-center bg-slate-950/90 rounded-2xl">
+                            <div className="w-16 h-16 rounded-full bg-emerald-500 flex items-center justify-center mb-2 animate-scale-up">
+                                <span className="material-symbols-outlined text-white text-3xl">check</span>
+                            </div>
+                            <p className="text-sm font-bold text-emerald-400">Logged In!</p>
+                        </div>
+                    )}
+                </div>
+
+                {/* Timer */}
+                {qrStatus === 'ready' && (
+                    <div className="mt-4 flex items-center gap-2">
+                        <div className="relative w-32 h-1.5 bg-slate-800 rounded-full overflow-hidden">
+                            <div 
+                                ref={(el) => {
+                                    if (el && timeLeft > 0) {
+                                        // Start at current percentage, then smoothly animate to 0
+                                        el.style.transition = 'none';
+                                        el.style.width = `${(timeLeft / 120) * 100}%`;
+                                        requestAnimationFrame(() => {
+                                            requestAnimationFrame(() => {
+                                                el.style.transition = `width ${timeLeft}s linear`;
+                                                el.style.width = '0%';
+                                            });
+                                        });
+                                    }
+                                }}
+                                className="absolute inset-y-0 left-0 bg-gradient-to-r from-violet-500 to-indigo-500 rounded-full"
+                            />
+                        </div>
+                        <span className="text-xs text-slate-500 font-mono tabular-nums w-8">{timeLeft}s</span>
+                    </div>
+                )}
+            </div>
+
+            {/* Instructions */}
+            {qrStatus !== 'authenticated' && (
+                <div className="bg-slate-900/50 rounded-xl border border-slate-800/50 p-4 space-y-3">
+                    <p className="text-xs font-bold text-slate-400 uppercase tracking-wider">How to scan</p>
+                    {[
+                        { icon: 'smartphone', text: 'Open Cipher on your logged-in device' },
+                        { icon: 'settings', text: 'Go to Profile → Linked Devices' },
+                        { icon: 'qr_code_scanner', text: 'Tap "Link New Device" and scan this QR' }
+                    ].map((step, i) => (
+                        <div key={i} className="flex items-center gap-3">
+                            <div className="w-7 h-7 rounded-full bg-violet-500/10 flex items-center justify-center shrink-0">
+                                <span className="text-violet-400 text-xs font-bold">{i + 1}</span>
+                            </div>
+                            <p className="text-xs text-slate-400">{step.text}</p>
+                        </div>
+                    ))}
+                </div>
+            )}
+        </div>
+    );
+};
 
 export default function Auth() {
     const { login } = useAuth();
@@ -31,6 +307,7 @@ export default function Auth() {
     const [isLoading, setIsLoading] = useState(false);
     const [isSubmitting, setIsSubmitting] = useState(false);
     const [copied, setCopied] = useState(false); // [NEW] Track copy state
+    const [loginTab, setLoginTab] = useState('password'); // [NEW] 'password' | 'qr'
     
     // [NEW] Rate Limiting State
     const [failedAttempts, setFailedAttempts] = useState(() => {
@@ -529,14 +806,14 @@ export default function Auth() {
                     <div className="w-full max-w-md space-y-8">
                     <div className="text-center lg:text-left">
                         <h2 className="text-3xl font-bold text-white mb-2">
-                            {view === 'login' ? 'Welcome Back' : 
+                            {view === 'login' ? (loginTab === 'qr' ? 'QR Code Login' : 'Welcome Back') : 
                              view === 'signup' ? 'Create Account' : 
                              view === 'recovery' ? 'Recover Account' : 
                              view === 'setup_backup' ? 'Cloud Backup' : 
                              view === 'entering_dashboard' ? 'All Set!' : 'Account Created'}
                         </h2>
                         <p className="text-slate-400">
-                            {view === 'login' ? 'Enter your details to access your workspace.' : 
+                            {view === 'login' ? (loginTab === 'qr' ? 'Scan this QR code from your other device.' : 'Enter your details to access your workspace.') : 
                              view === 'signup' ? 'Get started with your free account today.' : 
                              view === 'recovery' ? 'Enter your recovery code to reset your password.' : 
                              view === 'setup_backup' ? 'Create a password-protected backup of your encryption keys.' :
@@ -544,6 +821,39 @@ export default function Auth() {
                              'Save your recovery code securely.'}
                         </p>
                     </div>
+
+                    {/* [NEW] Login Method Tabs */}
+                    {view === 'login' && (
+                        <div className="relative flex bg-slate-900/50 rounded-full p-1 border border-slate-800/50">
+                            {/* Sliding highlight pill */}
+                            <div 
+                                className="absolute top-1 bottom-1 w-[calc(50%-4px)] bg-violet-600 rounded-full shadow-lg shadow-violet-500/20 transition-all duration-300 ease-[cubic-bezier(0.4,0,0.2,1)]"
+                                style={{ left: loginTab === 'password' ? '4px' : 'calc(50% + 0px)' }}
+                            />
+                            <button
+                                onClick={() => setLoginTab('password')}
+                                className={`relative z-10 flex-1 py-2.5 px-4 rounded-[10px] text-sm font-bold transition-colors duration-300 flex items-center justify-center gap-2 ${
+                                    loginTab === 'password'
+                                        ? 'text-white'
+                                        : 'text-slate-400 hover:text-slate-200'
+                                }`}
+                            >
+                                <span className="material-symbols-outlined text-lg">password</span>
+                                Password
+                            </button>
+                            <button
+                                onClick={() => setLoginTab('qr')}
+                                className={`relative z-10 flex-1 py-2.5 px-4 rounded-[10px] text-sm font-bold transition-colors duration-300 flex items-center justify-center gap-2 ${
+                                    loginTab === 'qr'
+                                        ? 'text-white'
+                                        : 'text-slate-400 hover:text-slate-200'
+                                }`}
+                            >
+                                <span className="material-symbols-outlined text-lg">qr_code_2</span>
+                                QR Code
+                            </button>
+                        </div>
+                    )}
 
                     {/* [NEW] Lockout Timer Display */}
                     {lockoutRemaining > 0 && (
@@ -756,6 +1066,25 @@ export default function Auth() {
                                 <p className="text-sm text-slate-400">Decryption keys ready.</p>
                             </div>
                         </div>
+                    ) : view === 'login' && loginTab === 'qr' ? (
+                        <QRLoginPanel
+                            onSuccess={async (authToken, user) => {
+                                localStorage.setItem('last_login_method', 'qr');
+                                await login(authToken, user, false);
+                                const pendingInvite = localStorage.getItem('pendingInvite');
+                                if (pendingInvite) {
+                                    try {
+                                        const { type, value } = JSON.parse(pendingInvite);
+                                        localStorage.removeItem('pendingInvite');
+                                        if (type === 'group') navigate(`/dashboard?joinCode=${value}`);
+                                        else if (type === 'direct') navigate(`/dashboard?chatUser=${value}`);
+                                        else navigate('/');
+                                        return;
+                                    } catch (e) { console.error('Invalid pending invite', e); }
+                                }
+                                navigate('/');
+                            }}
+                        />
                     ) : (
                         <form onSubmit={handleSubmit} className="space-y-6">
                             {/* Display Name Field */}
@@ -765,7 +1094,7 @@ export default function Auth() {
                                     <div className="relative">
                                         <input 
                                             type="text" 
-                                            className="w-full bg-slate-900/50 text-white rounded-xl pl-10 pr-4 py-3 focus:outline-none focus:ring-2 focus:ring-violet-500/50 border border-slate-800 focus:border-violet-500/50 transition-all placeholder:text-slate-600"
+                                            className="w-full bg-slate-900/50 text-white rounded-xl pl-10 pr-4 py-3 focus:outline-none focus:ring-2 focus:ring-violet-500/50 border border-slate-800 focus:border-violet-500/50 transition-all placeholder:text-slate-600 cursor-text"
                                             placeholder="Shadow"
                                             value={formData.displayName}
                                             onChange={e => setFormData({...formData, displayName: e.target.value})}
@@ -782,7 +1111,7 @@ export default function Auth() {
                                 <div className="relative">
                                     <input 
                                         type="text" 
-                                        className={`w-full bg-slate-900/50 text-white rounded-xl pl-10 pr-10 py-3 focus:outline-none focus:ring-2 border transition-all placeholder:text-slate-600 ${
+                                        className={`w-full bg-slate-900/50 text-white rounded-xl pl-10 pr-10 py-3 focus:outline-none focus:ring-2 border transition-all placeholder:text-slate-600 cursor-text ${
                                             view === 'signup' && usernameStatus === 'available' ? 'border-green-500/50 focus:border-green-500 focus:ring-green-500/20' :
                                             view === 'signup' && usernameStatus === 'taken' ? 'border-red-500/50 focus:border-red-500 focus:ring-red-500/20' :
                                             'border-slate-800 focus:border-violet-500/50 focus:ring-violet-500/50'

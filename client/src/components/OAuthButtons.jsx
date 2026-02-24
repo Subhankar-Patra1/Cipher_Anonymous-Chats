@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000';
 
@@ -10,6 +10,13 @@ export default function OAuthButtons({ mode, lastUsedMethod }) {
         // Redirect to backend OAuth route
         window.location.href = `${API_URL}/api/auth/${provider}`;
     };
+
+    // [FIX] Reset loading state when user navigates back (BFCache)
+    useEffect(() => {
+        const handlePageShow = () => setLoading(null);
+        window.addEventListener('pageshow', handlePageShow);
+        return () => window.removeEventListener('pageshow', handlePageShow);
+    }, []);
 
     return (
         <div className="space-y-4 pt-2">

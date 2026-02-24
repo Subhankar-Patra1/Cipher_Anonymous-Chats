@@ -52,8 +52,31 @@
   }
   
   html.dark body {
-    @apply bg-slate-950 text-slate-50;
+    background-color: #1D1D21;
+    @apply text-slate-50;
   }
+
+  /* Discord-like Neutral Dark Mode Overrides */
+  /* Discord-like Neutral Dark Mode Overrides - STRICTLY NEUTRAL */
+  html.dark .bg-slate-950 {
+    background-color: #1D1D21 !important;
+  }
+  html.dark .bg-slate-900 {
+    background-color: #17171A !important; /* Sidebar - Darker Neutral */
+  }
+  html.dark .bg-slate-800 {
+    background-color: #232326 !important; /* Panels/Cards - Neutral */
+  }
+  html.dark .border-slate-800,
+  html.dark .border-slate-800\/50 {
+    border-color: #232326 !important;
+  }
+  html.dark .border-slate-700,
+  html.dark .border-slate-700\/50 {
+    border-color: #3f4147 !important;
+  }
+
+
 }
 
 /* Bold text live preview in editor */
@@ -533,6 +556,29 @@ html.landing-scroll {
       transform: scale(1); 
     }
   }
+
+  @keyframes menuBornInUp {
+    0% { 
+      opacity: 0; 
+      transform: scale(0.85); 
+    }
+    100% { 
+      opacity: 1; 
+      transform: scale(1); 
+    }
+  }
+
+  /* Menu die out animation - shrinks back to button */
+  @keyframes menuDieOut {
+    0% { 
+      opacity: 1; 
+      transform: scale(1); 
+    }
+    100% { 
+      opacity: 0; 
+      transform: scale(0.3); 
+    }
+  }
 }
 
 @keyframes shimmer {
@@ -558,6 +604,28 @@ html.landing-scroll {
 @keyframes scanline {
   0% { background-position: 0 0, 0 0; }
   100% { background-position: 0 4px, 4px 0; }
+}
+
+/* Premium Menu Items */
+.menu-item {
+  @apply w-full flex items-center gap-3 px-4 py-2.5 text-left text-sm transition-all duration-150;
+  @apply text-slate-700 dark:text-slate-200;
+}
+
+.menu-item:hover {
+  @apply bg-slate-100 dark:bg-white/10;
+}
+
+.menu-item .material-symbols-outlined {
+  @apply transition-transform duration-200 text-[20px];
+}
+
+.menu-item-danger {
+  @apply text-red-500 dark:text-red-400;
+}
+
+.menu-item-danger:hover {
+  @apply bg-red-50 dark:bg-red-500/10 text-red-600 dark:text-red-400;
 }
 
 .grid-background {
@@ -833,6 +901,14 @@ html.landing-scroll {
   @apply mb-3;
 }
 
+.markdown-content p:last-child {
+  @apply mb-0;
+}
+
+.markdown-content p:first-child {
+  @apply mt-0;
+}
+
 .markdown-content h1, 
 .markdown-content h2, 
 .markdown-content h3, 
@@ -1069,4 +1145,71 @@ input::-ms-clear,
 input::-webkit-contacts-auto-fill-button,
 input::-webkit-credentials-auto-fill-button {
     display: none !important;
+}
+/* Utility to hide scrollbars while keeping scroll functionality */
+.scrollbar-hide {
+  -ms-overflow-style: none;  /* IE and Edge */
+  scrollbar-width: none;  /* Firefox */
+}
+
+/* Mask utility to hint at scrollable content below */
+.mask-fade-bottom {
+  -webkit-mask-image: linear-gradient(to bottom, black 93%, transparent 100%);
+  mask-image: linear-gradient(to bottom, black 93%, transparent 100%);
+}
+
+/* Reaction Emoji Picker Overrides */
+/* Targeted fix for Search Bar Width and Separation */
+.EmojiPickerReact .epr-search-container {
+  width: 250px !important; /* Safe width to leave room for gear */
+  flex: none !important;   /* Don't grow or shrink */
+  margin-left: 10px !important;
+  margin-right: auto !important;
+  background: transparent !important;
+  border: none !important;
+  padding: 0 !important;
+  display: flex !important;
+  align-items: center !important;
+}
+
+.EmojiPickerReact .epr-search {
+  width: 100% !important;
+  border-radius: 8px !important; /* Standard rounded rect */
+  /* Light Mode */
+  background: #ffffff !important; 
+  border: 1px solid #cbd5e1 !important; 
+  height: 40px !important; 
+  padding-left: 36px !important; /* Ensure text doesn't overlap icon */
+}
+
+html.dark .EmojiPickerReact .epr-search {
+  /* Dark Mode */
+  background: #2b2d31 !important;
+  border: 1px solid #1e1f22 !important; 
+  color: #dbdee1 !important;
+}
+
+.EmojiPickerReact .epr-search:focus {
+  border-color: #8b5cf6 !important;
+  box-shadow: 0 0 0 2px rgba(139, 92, 246, 0.2) !important;
+}
+
+
+@keyframes emoji-shake {
+  0%, 100% { transform: rotate(0deg) scale(1.35); }
+  25% { transform: rotate(-8deg) scale(1.35); }
+  75% { transform: rotate(8deg) scale(1.35); }
+}
+
+.animate-emoji-shake {
+  animation: emoji-shake 0.5s ease-in-out infinite;
+}
+
+@keyframes tooltipIn {
+  from { opacity: 0; transform: scale(0.95); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+.animate-tooltip-in {
+  animation: tooltipIn 0.15s ease-out forwards;
 }

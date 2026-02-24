@@ -301,6 +301,7 @@ export default function FilePreviewModal({ files, onClose, onSend, recipientName
                                         }
                                     }}
                                     lazyLoadEmojis={true}
+                                    previewConfig={{ showPreview: false }}
                                 />
                             </div>
                         )}

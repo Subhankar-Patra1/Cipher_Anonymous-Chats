@@ -83,6 +83,7 @@ export default function PickerPanel({ onEmojiClick, onGifClick, disableGifTab = 
                         width="100%"
                         height="100%"
                         style={{ border: 'none', borderRadius: '0' }}
+                        previewConfig={{ showPreview: false }}
                     />
                 ) : (
                     <GifPicker onSendGif={onGifClick} />

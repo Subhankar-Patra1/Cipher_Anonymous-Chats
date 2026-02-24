@@ -1,7 +1,9 @@
 import React, { useEffect, useRef, useState, useLayoutEffect, useMemo } from 'react';
+import { createPortal } from 'react-dom';
 import { linkifyText } from '../utils/linkify';
 import UnreadDivider from './UnreadDivider';
 import { useAuth } from '../context/AuthContext';
+import { useCall } from '../context/CallContext';
 import AudioPlayer from './AudioPlayer';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -26,7 +28,8 @@ import { linkToBigEmoji, isSingleEmoji, splitEmojis } from '../utils/animatedEmo
 import emojiRegex from 'emoji-regex'; // [NEW] For spoiler emoji detection
 import ReactionPicker, { REACTION_MAP } from './ReactionPicker'; // [NEW]
 import ReactionDetailsModal from './ReactionDetailsModal'; // [NEW]
-import TodoMessage from './TodoMessage'; // [NEW]
+import TodoMessage from './TodoMessage';
+import GroupInviteMessage from './GroupInviteMessage'; // [NEW]
 import { Emoji, EmojiStyle } from 'emoji-picker-react';
 import db, { updateLocalMessage } from '../utils/db';
 
@@ -35,12 +38,11 @@ const getUnifiedFromEmoji = (emoji) => {
     // Check presest map first
     if (REACTION_MAP[emoji]) return REACTION_MAP[emoji];
     
-    // Convert to unified code (simple version)
-    // NOTE: This handles simple emojis. Complex sequences might need more robust logic or a library.
-    // However, emoji-picker-react usually provides unified on click, but we store the CHAR in DB.
-    // For now, we try to convert code point to hex.
+    // Convert to unified code (handle surrogates/multi-char)
     try {
-        return emoji.codePointAt(0).toString(16);
+        return Array.from(emoji)
+            .map(c => c.codePointAt(0).toString(16))
+            .join('-');
     } catch (e) {
         return null;
     }
@@ -101,7 +103,7 @@ const CodeBlock = ({ inline, className, children, ...props }) => {
     return !inline && match ? (
         <div className="relative group/code my-4 rounded-lg overflow-hidden border border-slate-200 dark:border-slate-700">
             <div className="flex items-center justify-between px-3 py-1.5 bg-slate-100 dark:bg-slate-700/50 border-b border-slate-200 dark:border-slate-700">
-                <span className="text-[10px] uppercase font-bold text-slate-500 dark:text-slate-400">
+                <span className="text-[10px] uppercase font-bold text-slate-600 dark:text-slate-400">
                     {match[1]}
                 </span>
                 <button 
@@ -142,14 +144,18 @@ const getContrastColor = (hexColor) => {
     return yiq >= 128 ? 'text-slate-900' : 'text-white';
 };
 
-export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone, onRetry, onRetryDecryption, onMarkHeard, onEdit, onImageLoad, onRegenerate, onPin, onStar, onUnstar, searchTerm, scrollToMessage, onImageClick, isSelectionMode, isSelected, onToggleSelection, onEnableSelectionMode, bubbleColor, onBottomInView, onViewInfo, isRestoreAnimation, animationDelay, onReact, onUnreact, onViewReactions, hasSkippedSync, onOpenProfile }) => { // [MODIFIED] Added onOpenProfile
+export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone, onRetry, onRetryDecryption, onMarkHeard, onEdit, onImageLoad, onRegenerate, onPin, onStar, onUnstar, searchTerm, scrollToMessage, onImageClick, isSelectionMode, isSelected, onToggleSelection, onEnableSelectionMode, bubbleColor, onBottomInView, onViewInfo, isRestoreAnimation, animationDelay, onReact, onUnreact, onViewReactions, hasSkippedSync, onOpenProfile, activeReactionMessageId, setActiveReactionMessageId }) => { // [MODIFIED] Added lifted state props
  // [MODIFIED] Added onImageClick
     const [showMenu, setShowMenu] = useState(false);
     const [menuClosing, setMenuClosing] = useState(false); // [NEW] For close animation
+    const [menuDirection, setMenuDirection] = useState('down'); // [NEW] Smart positioning
+    const [menuStyle, setMenuStyle] = useState({}); // [NEW] For Portal positioning
     const [showFeedback, setShowFeedback] = useState(false); // [NEW] Feedback state
     const [viewingMessageInfo, setViewingMessageInfo] = useState(null); // [NEW] State for MessageInfoModal
-    const [showReactionPicker, setShowReactionPicker] = useState(false); // [NEW]
+    const showReactionPicker = activeReactionMessageId === msg.id; // [NEW] Derived from parent
+    const [hasOverflow, setHasOverflow] = useState(false); // [NEW] For overflow hint
     const menuRef = useRef(null);
+    const triggerRef = useRef(null); // [NEW] For portal positioning
     const reactionButtonRef = useRef(null); // [NEW] Add ref for reaction button
     
     // [NEW] Read More Logic
@@ -244,18 +250,66 @@ export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone,
         setTimeout(() => {
             setShowMenu(false);
             setMenuClosing(false);
-        }, 180); // Match animation duration
+        }, 150); // [MODIFIED] Faster collapse
+        setHasOverflow(false); // Reset overflow hint
     };
 
     const toggleMenu = (e) => {
         e.stopPropagation();
-        if (isSelectionMode) return; // [NEW] Disable menu in selection mode
+        if (isSelectionMode) return; 
         if (showMenu) {
             closeMenu();
         } else {
+            // [NEW] Calculate best direction and fixed position for Portal
+            const rect = e.currentTarget.getBoundingClientRect();
+            const viewportH = window.innerHeight;
+            const viewportW = window.innerWidth;
+            const menuWidth = 192; // w-48 = 12rem = 192px
+            const menuMaxHeight = 480; // Natural max height for full menu
+            
+            const spaceBelow = viewportH - rect.bottom - 20;
+            const spaceAbove = rect.top - 20;
+            
+            // Horizontal positioning
+            let left = isMe ? rect.right - menuWidth : rect.left;
+            if (left < 10) left = 10;
+            if (left + menuWidth > viewportW - 10) left = viewportW - menuWidth - 10;
+
+            // Logic: Only go DOWN if it fits COMPLETELY. Otherwise, pick the best side.
+            let direction;
+            if (spaceBelow >= menuMaxHeight) {
+                direction = 'down';
+            } else if (spaceAbove > spaceBelow) {
+                direction = 'up';
+            } else {
+                direction = 'down';
+            }
+
+            let style = { left: `${left}px` };
+            
+            if (direction === 'up') {
+                style.bottom = `${viewportH - rect.top + 2}px`;
+                style.maxHeight = `${Math.max(200, spaceAbove)}px`;
+                style.transformOrigin = isMe ? 'bottom right' : 'bottom left';
+            } else {
+                style.top = `${rect.bottom + 2}px`;
+                style.maxHeight = `${Math.max(200, spaceBelow)}px`;
+                style.transformOrigin = isMe ? 'top right' : 'top left';
+            }
+            
+            setMenuDirection(direction);
+            setMenuStyle(style);
             setShowMenu(true);
         }
     };
+
+    // [NEW] Detect initial overflow for fade effect
+    useLayoutEffect(() => {
+        if (showMenu && menuRef.current) {
+            const { scrollHeight, clientHeight } = menuRef.current;
+            setHasOverflow(scrollHeight > clientHeight + 10);
+        }
+    }, [showMenu]);
 
     useEffect(() => {
         const handleClickOutside = (event) => {
@@ -263,22 +317,26 @@ export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone,
                 closeMenu();
             }
         };
+
+        const handleScroll = (event) => {
+            if (showMenu && !menuClosing) {
+                // Ignore scroll events from within the menu itself
+                if (menuRef.current && menuRef.current.contains(event.target)) {
+                    return;
+                }
+                closeMenu();
+            }
+        };
+
         if (showMenu) {
             document.addEventListener('mousedown', handleClickOutside);
-            // [NEW] Scroll into view when opened - with small delay for accuracy
-            setTimeout(() => {
-                if (menuRef.current) {
-                    menuRef.current.scrollIntoView({ 
-                        behavior: 'smooth', 
-                        block: 'nearest' 
-                    });
-                }
-            }, 50);
+            window.addEventListener('scroll', handleScroll, true);
         }
         return () => {
             document.removeEventListener('mousedown', handleClickOutside);
+            window.removeEventListener('scroll', handleScroll, true);
         };
-    }, [showMenu]);
+    }, [showMenu, menuClosing]);
 
     const handleDeleteForMe = async () => {
         try {
@@ -329,14 +387,17 @@ export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone,
                 id={`msg-${msg.id}`}
                 className={`flex ${isMe ? 'justify-end' : 'justify-start'} group max-w-full my-1`}
             >
-                <div className={`
-                    max-w-[75%] rounded-2xl flex items-center gap-3
-                    ${isMe 
-                        ? `bg-violet-600 text-white ${(msg.type === 'image' || msg.type === 'video' || msg.type === 'gif') ? 'rounded-xl' : 'rounded-2xl'} rounded-tr-sm` 
-                        : 'bg-white dark:bg-slate-800 text-slate-800 dark:text-gray-100 rounded-tl-sm border border-slate-200 dark:border-slate-700 shadow-sm'
-                    }
-                    ${(msg.type === 'image' || msg.type === 'video' || msg.type === 'gif') ? 'p-[2px]' : 'px-3 py-2'}
-                `}>
+                <div 
+                    className={`
+                        max-w-[75%] rounded-2xl flex items-center gap-3
+                        ${isMe 
+                            ? `bg-violet-600 text-white ${(msg.type === 'image' || msg.type === 'video' || msg.type === 'gif') ? 'rounded-xl' : 'rounded-2xl'} rounded-tr-sm` 
+                            : 'bg-white dark:bg-slate-800 text-slate-800 dark:text-gray-100 rounded-tl-sm border border-slate-200 dark:border-slate-700 shadow-sm'
+                        }
+                        ${(msg.type === 'image' || msg.type === 'video' || msg.type === 'gif') ? 'p-[2px]' : 'px-3 py-2'}
+                    `}
+                    style={isMe && bubbleColor ? { backgroundColor: bubbleColor, borderColor: 'transparent' } : {}}
+                >
                     <div className="flex flex-col">
                         <span className="text-sm font-medium opacity-90">
                            Encrypted Message
@@ -379,10 +440,10 @@ export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone,
             >
                 <div className={`max-w-[75%] flex flex-col ${isMe ? 'items-end' : 'items-start'}`}>
                     <div className={`
-                         px-3 py-2 text-sm italic text-slate-500 dark:text-slate-400
+                         px-3 py-2 text-sm italic text-slate-600 dark:text-slate-400
                          ${isMe 
-                             ? 'bg-slate-100 dark:bg-slate-900/50 rounded-2xl rounded-tr-sm border border-slate-200 dark:border-slate-800' 
-                             : 'bg-slate-100 dark:bg-slate-900/50 rounded-2xl rounded-tl-sm border border-slate-200 dark:border-slate-800'
+                             ? 'bg-slate-50 dark:bg-white/5 rounded-2xl rounded-tr-sm border border-slate-100 dark:border-white/10 shadow-sm' 
+                             : 'bg-slate-50 dark:bg-white/5 rounded-2xl rounded-tl-sm border border-slate-100 dark:border-white/10 shadow-sm'
                          }
                     `}>
                         <div className="flex items-center gap-2">
@@ -409,10 +470,7 @@ export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone,
                     : ''}
                 ${!isRestoreAnimation && isMe && (msg.status === 'sending' || msg.status === 'pending' || msg.tempId) ? 'animate-message-send' : ''}
             `}
-            style={{
-                ...(isMe && bubbleColor ? { backgroundColor: bubbleColor, borderColor: 'transparent' } : {}),
-                ...(isRestoreAnimation ? { animationDelay } : {})
-            }}
+            style={(isRestoreAnimation ? { animationDelay } : {})}
             onClick={(e) => {
                 if (isSelectionMode) {
                     e.stopPropagation();
@@ -476,7 +534,7 @@ export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone,
                                 const isUnknown = !msg.display_name && !msg.username;
                                 if (!isAi && !isUnknown && onOpenProfile) onOpenProfile(msg.user_id);
                             }}
-                            className={`text-xs font-medium cursor-pointer hover:underline transition-colors ${isAi ? 'text-transparent bg-clip-text bg-gradient-to-r from-fuchsia-500 to-purple-600 font-bold' : 'text-slate-500 dark:text-slate-400'}
+                            className={`text-xs font-medium cursor-pointer hover:underline transition-colors ${isAi ? 'text-transparent bg-clip-text bg-gradient-to-r from-fuchsia-500 to-purple-600 font-bold' : 'text-slate-600 dark:text-slate-400'}
                             ${(!msg.display_name && !msg.username) ? '!cursor-default !no-underline' : ''}`}
                         >
                             {renderTextWithEmojis(isAi ? (msg.display_name && msg.display_name !== 'Assistant' ? msg.display_name : 'Sparkle AI') : (msg.display_name || msg.username || 'Unknown User'))}
@@ -489,20 +547,20 @@ export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone,
                     <div className="relative w-fit max-w-full">
                     <div className={`
                         message-bubble
-                        ${(msg.type === 'image' || msg.type === 'gif' || msg.type === 'location' || ((linkToBigEmoji(msg.content) || isSingleEmoji(msg.content) || isSpoilerOnlyEmojis(msg.content)) && !msg.replyTo)) ? 'p-1' : 'px-4 py-3'}
-                        ${((linkToBigEmoji(msg.content) || isSingleEmoji(msg.content) || isSpoilerOnlyEmojis(msg.content)) && !msg.replyTo) ? 'bg-transparent shadow-none border-none !p-0' : 'shadow-md'} 
+                        ${(msg.type === 'image' || msg.type === 'gif' || msg.type === 'location' || msg.type === 'group_invite' || ((linkToBigEmoji(msg.content) || isSingleEmoji(msg.content) || isSpoilerOnlyEmojis(msg.content)) && !msg.replyTo)) ? 'p-1' : (isAi ? 'px-4 py-2.5' : 'px-4 py-3')}
+                        ${(((linkToBigEmoji(msg.content) || isSingleEmoji(msg.content) || isSpoilerOnlyEmojis(msg.content)) && !msg.replyTo) || msg.type === 'group_invite') ? 'bg-transparent shadow-none border-none !p-0' : 'shadow-md'} 
                         text-sm leading-relaxed break-all relative overflow-hidden
-                        ${((linkToBigEmoji(msg.content) || isSingleEmoji(msg.content) || isSpoilerOnlyEmojis(msg.content)) && !msg.replyTo) 
+                        ${(((linkToBigEmoji(msg.content) || isSingleEmoji(msg.content) || isSpoilerOnlyEmojis(msg.content)) && !msg.replyTo) || msg.type === 'group_invite') 
                             ? '' // No background classes for Big Emoji or Spoiler Emoji
                             : isMe 
                                 ? `bg-violet-600 border border-violet-500/50 ${(msg.type === 'gif') ? 'rounded-[10px]' : 'rounded-2xl rounded-tr-sm'} whitespace-pre-wrap` 
                                 : isAi 
-                                    ? `bg-white dark:bg-slate-800/80 text-slate-800 dark:text-slate-100 ${(msg.type === 'gif') ? 'rounded-[10px]' : 'rounded-2xl rounded-tl-sm'} border border-purple-200 dark:border-purple-500/30 shadow-purple-500/5 min-w-[200px]` 
+                                    ? `bg-white dark:bg-slate-800/80 text-slate-800 dark:text-slate-100 ${(msg.type === 'gif') ? 'rounded-[10px]' : 'rounded-2xl rounded-tl-sm'} border border-purple-200 dark:border-purple-500/30 shadow-purple-500/5` 
                                     : `bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-200 ${(msg.type === 'gif') ? 'rounded-[10px]' : 'rounded-2xl rounded-tl-sm'} border border-slate-200 dark:border-slate-700 whitespace-pre-wrap`
                         }
                         ${isMe ? (bubbleColor ? getContrastColor(bubbleColor) : 'text-white') : ''}
                     `}
-                    style={isMe && bubbleColor ? { backgroundColor: bubbleColor, borderColor: 'transparent' } : {}}
+                    style={(isMe && bubbleColor && !(((linkToBigEmoji(msg.content) || isSingleEmoji(msg.content) || isSpoilerOnlyEmojis(msg.content)) && !msg.replyTo) || msg.type === 'group_invite')) ? { backgroundColor: bubbleColor, borderColor: 'transparent' } : {}}
                     >
                         {(msg.isSkeleton || (!msg.isDecrypted && msg.ciphertext && !msg.content && msg.type !== 'system')) ? (
                             <div className="flex gap-1 py-1">
@@ -633,7 +691,7 @@ export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone,
                                 {/* Overlay Status Icon for Audio */}
                                 {isMe && (
                                     <div className="absolute bottom-1 right-1 flex items-center justify-center p-0.5 rounded-full bg-black/30 backdrop-blur-[1px] z-20">
-                                        {(msg.status === 'sending' || msg.status === 'pending') && <span className="material-symbols-outlined text-[10px] text-white">access_time</span>}
+                                        {(msg.status === 'sending' || msg.status === 'pending') && <span className="material-symbols-outlined text-[14px] text-white">access_time</span>}
                                         {msg.status === 'error' && (
                                             <button 
                                                 onClick={(e) => { e.stopPropagation(); onRetry && onRetry(msg); }}
@@ -681,7 +739,7 @@ export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone,
                                     {/* Overlay Status Icon for GIF */}
                                     {isMe && (
                                         <div className="absolute bottom-1 right-[38px] flex items-center justify-center p-0.5 rounded-full bg-black/30 backdrop-blur-[1px] z-20">
-                                            {(msg.status === 'sending' || msg.status === 'pending') && <span className="material-symbols-outlined text-[10px] text-white">access_time</span>}
+                                            {(msg.status === 'sending' || msg.status === 'pending') && <span className="material-symbols-outlined text-[14px] text-white">access_time</span>}
                                             {msg.status === 'error' && (
                                                 <button 
                                                     onClick={(e) => { e.stopPropagation(); onRetry && onRetry(msg); }}
@@ -705,6 +763,8 @@ export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone,
                             </>
                         ) : msg.type === 'todo' ? (
                             <TodoMessage msg={msg} />
+                        ) : msg.type === 'group_invite' ? (
+                            <GroupInviteMessage msg={msg} isMe={isMe} token={token} />
                         ) : ((linkToBigEmoji(msg.content) || isSingleEmoji(msg.content)) && !msg.replyTo) ? (
                             // Big emoji display - render each emoji separately
                             <div className="p-2 flex gap-1 flex-wrap">
@@ -821,7 +881,7 @@ export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone,
                                                 }
                                             </span>
                                             {msg.is_view_once && (
-                                                <span className="text-[10px] text-slate-500 dark:text-slate-400">
+                                                <span className="text-[10px] text-slate-600 dark:text-slate-500">
                                                     {(!isMe && !isDownloaded) ? ((msg.image_size ? formatBytes(msg.image_size) + ' • ' : '') + 'View once') : 'View once'}
                                                 </span>
                                             )}
@@ -830,7 +890,7 @@ export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone,
                                         {/* Overlay Status Icon for View Once */}
                                         {isMe && !isViewOnceOpened && (
                                             <div className="absolute top-1/2 -translate-y-1/2 right-3 flex items-center justify-center">
-                                                {(msg.status === 'sending' || msg.status === 'pending') && <span className="material-symbols-outlined text-[10px] text-slate-400">access_time</span>}
+                                                {(msg.status === 'sending' || msg.status === 'pending') && <span className="material-symbols-outlined text-[14px] text-slate-500">access_time</span>}
                                                 {msg.status === 'error' && (
                                                     <button 
                                                         onClick={(e) => { e.stopPropagation(); onRetry && onRetry(msg); }}
@@ -931,7 +991,7 @@ export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone,
                                         {/* Overlay Status Icon for Grid */}
                                         {isMe && (
                                             <div className="absolute bottom-1 right-1 flex items-center justify-center p-0.5 rounded-full bg-black/30 backdrop-blur-[1px] z-20">
-                                                {(msg.status === 'sending' || msg.status === 'pending') && <span className="material-symbols-outlined text-[10px] text-white">access_time</span>}
+                                                {(msg.status === 'sending' || msg.status === 'pending') && <span className="material-symbols-outlined text-[14px] text-white">access_time</span>}
                                                 {msg.status === 'error' && (
                                                     <button 
                                                         onClick={(e) => { e.stopPropagation(); onRetry && onRetry(msg); }}
@@ -1075,7 +1135,7 @@ export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone,
                                     {/* Overlay Status Icon */}
                                     {isMe && (
                                         <div className="absolute bottom-1 right-1 flex items-center justify-center p-0.5 rounded-full bg-black/30 backdrop-blur-[1px] z-20">
-                                            {(msg.status === 'sending' || msg.status === 'pending') && <span className="material-symbols-outlined text-[10px] text-white">access_time</span>}
+                                            {(msg.status === 'sending' || msg.status === 'pending') && <span className="material-symbols-outlined text-[14px] text-white">access_time</span>}
                                             {msg.status === 'error' && (
                                                 <button 
                                                     onClick={(e) => { e.stopPropagation(); onRetry && onRetry(msg); }}
@@ -1153,7 +1213,6 @@ export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone,
                                                 // I need to add the state first. Using a separate replace for that.
                                                 // This replacement is just for the render.
                                                 // Wait, I should add the state and handler in a previous or separate step if I can't do it all at once.
-                                                // But I can try to do it all if I target a larger block.
                                                 // Let's stick to targeting the download implementation.
                                                 
                                                 // Just calling the handler I will add.
@@ -1258,7 +1317,7 @@ export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone,
                                     {/* Overlay Status Icon for File */}
                                     {isMe && (
                                         <div className="absolute -bottom-1 -right-1 flex items-center justify-center z-20 drop-shadow-md">
-                                            {(msg.status === 'sending' || msg.status === 'pending') && <span className="material-symbols-outlined text-[10px] text-violet-200/80">access_time</span>}
+                                            {(msg.status === 'sending' || msg.status === 'pending') && <span className="material-symbols-outlined text-[14px] text-violet-200/80">access_time</span>}
                                             {msg.status === 'error' && (
                                                 <button 
                                                     onClick={(e) => { e.stopPropagation(); onRetry && onRetry(msg); }}
@@ -1288,8 +1347,8 @@ export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone,
                                     {/* Overlay Status Icon for Location */}
                                     {isMe && (
                                         <div className="absolute bottom-1 right-1 flex items-center justify-center p-0.5 rounded-full bg-black/30 backdrop-blur-[1px] z-20">
-                                            {(msg.status === 'sending' || msg.status === 'pending') && <span className="material-symbols-outlined text-[10px] text-white">access_time</span>}
-                                            {msg.status === 'error' && <span className="material-symbols-outlined text-[12px] text-red-400">error</span>}
+                                            {(msg.status === 'sending' || msg.status === 'pending') && <span className="material-symbols-outlined text-[14px] text-white">access_time</span>}
+                                            {msg.status === 'error' && <span className="material-symbols-outlined text-[14px] text-red-400">error</span>}
                                             {msg.status === 'sent' && <span className="material-symbols-outlined text-[14px] text-violet-200/90">check</span>}
                                             {msg.status === 'delivered' && <span className="material-symbols-outlined text-[14px] text-violet-200/90">done_all</span>}
                                             {msg.status === 'seen' && <span className="material-symbols-outlined text-[14px] text-blue-400 font-bold filled">done_all</span>}
@@ -1330,13 +1389,97 @@ export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone,
                                     {/* Overlay Status Icon for Poll */}
                                     {isMe && (
                                         <div className="absolute bottom-1 right-1 flex items-center justify-center p-0.5 rounded-full bg-black/30 backdrop-blur-[1px] z-20">
-                                            {(msg.status === 'sending' || msg.status === 'pending') && <span className="material-symbols-outlined text-[10px] text-white">access_time</span>}
-                                            {msg.status === 'error' && <span className="material-symbols-outlined text-[12px] text-red-400">error</span>}
+                                            {(msg.status === 'sending' || msg.status === 'pending') && <span className="material-symbols-outlined text-[14px] text-white">access_time</span>}
+                                            {msg.status === 'error' && <span className="material-symbols-outlined text-[14px] text-red-400">error</span>}
                                             {msg.status === 'sent' && <span className="material-symbols-outlined text-[14px] text-violet-200/90">check</span>}
                                             {msg.status === 'delivered' && <span className="material-symbols-outlined text-[14px] text-violet-200/90">done_all</span>}
                                             {msg.status === 'seen' && <span className="material-symbols-outlined text-[14px] text-blue-400 font-bold filled">done_all</span>}
                                         </div>
                                     )}
+                                </div>
+                            ) : msg.type === 'call_log' ? (
+                                <div className="flex items-center gap-3 py-2 px-1 min-w-[200px]">
+                                    {/* Phone icon with hover glow */}
+                                    <div 
+                                        className={`
+                                            w-10 h-10 rounded-full flex items-center justify-center shrink-0 transition-all duration-300 cursor-pointer
+                                            ${isMe ? 'bg-white/20 text-white' : 'bg-slate-200 dark:bg-slate-700 text-slate-500 dark:text-slate-400'}
+                                            hover:bg-green-500 dark:hover:bg-green-500 hover:text-white
+                                        `}
+                                        onClick={(e) => {
+                                            e.stopPropagation();
+                                            const meta = JSON.parse(msg.caption || '{}');
+                                            const iAmCaller = meta.caller_id ? meta.caller_id === user?.id : isMe;
+                                            const callUserId = iAmCaller ? meta.target_id : (meta.caller_id || msg.user_id);
+                                            if (callUserId) {
+                                                window.dispatchEvent(new CustomEvent('cipher:initiate-call', { 
+                                                    detail: { 
+                                                        userId: callUserId,
+                                                        roomId: msg.room_id,
+                                                        type: meta.call_type || 'audio',
+                                                        targetName: iAmCaller ? meta.target_name : (msg.display_name || msg.sender_name),
+                                                        targetAvatar: iAmCaller ? meta.target_avatar : (msg.avatar_thumb_url || msg.sender_profile_pic)
+                                                    } 
+                                                }));
+                                            }
+                                        }}
+                                        title="Click to call"
+                                    >
+                                        <span className="material-symbols-outlined text-[24px]">
+                                            {JSON.parse(msg.caption || '{}').call_type === 'video' ? 'videocam' : 'call'}
+                                        </span>
+                                    </div>
+                                    
+                                    <div className="flex flex-col flex-1 min-w-0">
+                                        {(() => {
+                                            const meta = JSON.parse(msg.caption || '{}');
+                                            const iAmCaller = meta.caller_id ? meta.caller_id === user?.id : isMe;
+                                            const status = meta.call_status;
+                                            
+                                            let label = 'Call ended';
+                                            let iconName = 'call_end';
+                                            let iconColor = '';
+                                            
+                                            if (status === 'completed') {
+                                                const dur = meta.duration;
+                                                label = dur ? `Call ended · ${formatDuration(dur * 1000)}` : 'Call ended';
+                                                iconName = iAmCaller ? 'call_made' : 'call_received';
+                                                iconColor = 'text-green-400';
+                                            } else if (status === 'missed') {
+                                                label = iAmCaller ? 'No answer' : 'Missed call';
+                                                iconName = iAmCaller ? 'call_made' : 'call_missed';
+                                                iconColor = iAmCaller ? 'text-amber-400' : 'text-red-400';
+                                            } else if (status === 'cancelled') {
+                                                label = iAmCaller ? 'Cancelled' : 'Missed call';
+                                                iconName = iAmCaller ? 'call_made' : 'call_missed';
+                                                iconColor = iAmCaller ? 'text-amber-400' : 'text-red-400';
+                                            } else if (status === 'declined') {
+                                                label = iAmCaller ? 'Declined' : 'You declined';
+                                                iconName = 'call_end';
+                                                iconColor = 'text-red-400';
+                                            } else if (status === 'busy') {
+                                                label = 'Line busy';
+                                                iconName = 'phone_disabled';
+                                                iconColor = 'text-amber-400';
+                                            } else if (status === 'initiated') {
+                                                label = 'Outgoing call';
+                                                iconName = 'call';
+                                                iconColor = 'text-green-400';
+                                            }
+                                            
+                                            return (
+                                                <>
+                                                    <span className={`text-sm font-medium ${isMe ? 'text-white' : 'text-slate-800 dark:text-slate-200'}`}>
+                                                        {meta.call_type === 'video' ? 'Video call' : 'Voice call'}
+                                                    </span>
+                                                    <div className="flex items-center gap-1 text-xs opacity-80">
+                                                        <span className={`material-symbols-outlined text-[14px] ${iconColor}`}>{iconName}</span>
+                                                        <span>{label}</span>
+                                                    </div>
+                                                </>
+                                            );
+                                        })()}
+                                    </div>
                                 </div>
                             ) : msg.isSkeleton ? (
                                 <div className="flex items-center gap-1.5 py-3 px-1 ml-1">
@@ -1398,27 +1541,22 @@ export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone,
                         </>
                         )}
                         
+                        {/* [MODIFIED] Status Icons moved back inside bubble for text messages */}
                         {isMe && !['image', 'gif', 'file', 'audio', 'location', 'poll'].includes(msg.type) && (
-                            <div className={`absolute flex items-center gap-1 ${
-                                (isSpoilerOnlyEmojis(msg.content) && !msg.replyTo)
-                                    ? 'bottom-3 right-3 text-white drop-shadow-[0_1px_2px_rgba(0,0,0,0.8)]'
-                                    : ((linkToBigEmoji(msg.content) || (splitEmojis(msg.content).length >= 1 && splitEmojis(msg.content).length <= 3 && isSingleEmoji(msg.content))) && !msg.replyTo)
-                                        ? 'bottom-1 right-0 bg-black/30 backdrop-blur-[2px] rounded-full px-1.5 py-0.5 text-white/90 shadow-sm'
-                                        : 'bottom-0.5 right-1.5 text-violet-200/80 drop-shadow-md'
-                            }`}>
-                                {(msg.status === 'sending' || msg.status === 'pending') && <span className="material-symbols-outlined text-[10px]">access_time</span>}
+                            <div className="absolute right-2 bottom-1 flex items-center gap-0.5">
+                                {(msg.status === 'sending' || msg.status === 'pending') && <span className="material-symbols-outlined text-[14px] opacity-70">access_time</span>}
                                 {msg.status === 'error' && (
                                     <button 
                                         onClick={(e) => { e.stopPropagation(); onRetry && onRetry(msg); }}
-                                        className="hover:text-red-200 transition-colors"
-                                        title="Retry Upload"
+                                        className="hover:text-red-500 transition-colors"
+                                        title="Retry"
                                     >
-                                        <span className="material-symbols-outlined text-[14px] text-red-300">refresh</span>
+                                        <span className="material-symbols-outlined text-[14px] text-red-500">refresh</span>
                                     </button>
                                 )}
-                                {msg.status === 'sent' && <span className="material-symbols-outlined text-[14px] text-violet-200/90">check</span>}
-                                {msg.status === 'delivered' && <span className="material-symbols-outlined text-[14px] text-violet-200/90">done_all</span>}
-                                {msg.status === 'seen' && <span className="material-symbols-outlined text-[14px] text-blue-400 font-bold filled">done_all</span>}
+                                {msg.status === 'sent' && <span className="material-symbols-outlined text-[14px] opacity-70">check</span>}
+                                {msg.status === 'delivered' && <span className="material-symbols-outlined text-[14px] opacity-70">done_all</span>}
+                                {msg.status === 'seen' && <span className="material-symbols-outlined text-[14px] text-blue-300 font-bold filled">done_all</span>}
                             </div>
                         )}
                     </div>
@@ -1435,18 +1573,21 @@ export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone,
                                 ref={reactionButtonRef}
                                 type="button"
                                 className={`
-                                    ${showReactionPicker ? 'opacity-100 text-violet-500 bg-slate-100 dark:bg-slate-800/50' : 'opacity-0 group-hover:opacity-100'}
+                                    ${activeReactionMessageId === msg.id ? 'opacity-100 text-slate-800 dark:text-white bg-slate-100 dark:bg-slate-800/50' : 'opacity-0 group-hover:opacity-100'}
                                     transition-opacity duration-150
-                                    text-slate-400 dark:text-slate-300 hover:text-violet-500 dark:hover:text-violet-400
+                                    text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-white
                                     w-7 h-7 flex items-center justify-center rounded-full
                                 `}
-                                onClick={() => setShowReactionPicker(!showReactionPicker)}
+                                onClick={(e) => {
+                                    e.stopPropagation();
+                                    setActiveReactionMessageId(activeReactionMessageId === msg.id ? null : msg.id);
+                                }}
                                 title="Add reaction"
                             >
                                 <span className="material-symbols-outlined text-[18px]">add_reaction</span>
                             </button>
 
-                            {showReactionPicker && (
+                            {activeReactionMessageId === msg.id && (
                                 <ReactionPicker
                                     className=""
                                     origin={isMe ? 'bottom-right' : 'bottom-left'}
@@ -1454,12 +1595,14 @@ export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone,
                                     currentReaction={myReaction}
                                     onSelect={(emoji) => {
                                         onReact(msg.id, emoji);
+                                        // Optional: close on select? User might want to multi-react? 
+                                        // Usually reaction picker closes on select.
                                     }}
                                     onRemove={() => {
                                         onUnreact(msg.id);
                                     }}
                                     onClose={() => {
-                                        setShowReactionPicker(false);
+                                        setActiveReactionMessageId(null);
                                     }}
                                 />
                             )}
@@ -1476,11 +1619,12 @@ export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone,
                       )) && !isSelectionMode && (
                         <div className="relative">
                             <button
+                                ref={triggerRef}
                                 type="button"
                                 className={`
                                     ${showMenu ? 'opacity-100 text-slate-800 dark:text-white bg-slate-100 dark:bg-slate-800/50' : 'opacity-0 group-hover:opacity-100'}
                                     transition-opacity duration-150
-                                    text-slate-400 dark:text-slate-300 hover:text-slate-600 dark:hover:text-white
+                                    text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-white
                                     w-7 h-7 flex items-center justify-center rounded-full
                                 `}
                                 onClick={toggleMenu}
@@ -1488,29 +1632,35 @@ export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone,
                                 <span className="material-symbols-outlined text-[18px]">more_horiz</span>
                             </button>
 
-                            {showMenu && (
+                            {showMenu && createPortal(
                                 <div
                                     ref={menuRef}
                                     className={`
-                                        absolute top-[calc(100%+8px)]
-                                        ${isMe ? 'right-0' : 'left-0'}
+                                        fixed
                                         w-48
+                                        overflow-y-auto
                                         rounded-2xl
-                                        bg-white dark:bg-slate-900
+                                        bg-white dark:bg-[#232326]
                                         border border-slate-200 dark:border-slate-700/70
                                         shadow-2xl shadow-black/20 dark:shadow-black/60
-                                        py-1
                                         z-[9999]
+                                        scrollbar-hide
+                                        ${hasOverflow ? 'mask-fade-bottom' : ''}
                                         transition-all duration-[180ms] ease-out
                                         ${menuClosing 
-                                            ? 'opacity-0 scale-95' 
-                                            : 'opacity-100 scale-100 animate-[menuBornIn_180ms_ease-out]'}
+                                            ? 'animate-[menuDieOut_150ms_ease-in] opacity-0' 
+                                            : `opacity-100 scale-100 ${menuDirection === 'up' ? 'animate-[menuBornInUp_180ms_ease-out]' : 'animate-[menuBornIn_180ms_ease-out]'}`}
                                     `}
-                                    style={{ transformOrigin: isMe ? 'top right' : 'top left' }}
+                                    style={menuStyle}
+                                    onScroll={(e) => {
+                                        const { scrollTop, scrollHeight, clientHeight } = e.currentTarget;
+                                        setHasOverflow(scrollHeight - scrollTop > clientHeight + 10);
+                                    }}
                                 >
+                                    {/* AI Regenerate */}
                                     {isAi && onRegenerate && (
                                         <button 
-                                            className="w-full flex items-center gap-2 px-3 py-2.5 text-left text-sm text-slate-700 dark:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 first:rounded-t-2xl last:rounded-b-2xl transition-colors"
+                                            className="menu-item first:rounded-t-2xl last:rounded-b-2xl"
                                             onClick={(e) => {
                                                 e.stopPropagation();
                                                 onRegenerate(msg.id);
@@ -1522,21 +1672,103 @@ export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone,
                                         </button>
                                     )}
 
-                                    {isAi ? (
-                                        <>
+                                    {/* Copy Option */}
+                                    {msg.type !== 'call_log' && !msg.is_view_once && (
+                                        <button 
+                                            className="menu-item first:rounded-t-2xl last:rounded-b-2xl"
+                                            onClick={async (e) => {
+                                                e.stopPropagation();
+                                                if (msg.type === 'image') {
+                                                    try {
+                                                        const response = await fetch(msg.image_url, {
+                                                            mode: 'cors',
+                                                            credentials: 'omit',
+                                                            cache: 'no-cache'
+                                                        });
+                                                        const originalBlob = await response.blob();
+                                                        const imageBitmap = await createImageBitmap(originalBlob);
+                                                        const canvas = document.createElement('canvas');
+                                                        canvas.width = imageBitmap.width;
+                                                        canvas.height = imageBitmap.height;
+                                                        const ctx = canvas.getContext('2d');
+                                                        ctx.drawImage(imageBitmap, 0, 0);
+                                                        const pngBlob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
+                                                        await navigator.clipboard.write([
+                                                            new ClipboardItem({ 'image/png': pngBlob })
+                                                        ]);
+                                                    } catch (err) {
+                                                        console.error('Failed to copy image:', err);
+                                                        alert('Failed to copy image. ' + err.message);
+                                                    }
+                                                } else {
+                                                    navigator.clipboard.writeText(msg.content);
+                                                }
+                                                closeMenu();
+                                            }}
+                                        >
+                                            <span className="material-symbols-outlined text-base">content_copy</span>
+                                            <span>{msg.type === 'image' ? 'Copy' : 'Copy Text'}</span>
+                                        </button>
+                                    )}
+
+                                    {/* Reply Option */}
+                                    {msg.type !== 'call_log' ? (
+                                        !onRegenerate && msg.type !== 'group_invite' && (
                                             <button 
-                                                className="w-full flex items-center gap-2 px-3 py-2.5 text-left text-sm text-slate-700 dark:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors first:rounded-t-2xl last:rounded-b-2xl"
+                                                className="menu-item first:rounded-t-2xl last:rounded-b-2xl"
                                                 onClick={(e) => {
                                                     e.stopPropagation();
-                                                    navigator.clipboard.writeText(msg.content);
+                                                    const raw = msg.content || "";
+                                                    const normalized = raw.replace(/\s+/g, " ").trim();
+                                                    const maxLen = 120;
+                                                    const snippet = normalized.length > maxLen ? normalized.slice(0, maxLen) + "…" : normalized;
+                                                    onReply({
+                                                        id: msg.id,
+                                                        sender: msg.display_name || msg.username,
+                                                        text: snippet,
+                                                        type: msg.type,
+                                                        file_name: msg.file_name,
+                                                        caption: msg.caption,
+                                                        audio_duration_ms: msg.audio_duration_ms,
+                                                        is_view_once: msg.is_view_once,
+                                                        poll_question: msg.poll?.question,
+                                                        latitude: msg.latitude,
+                                                        longitude: msg.longitude,
+                                                        address: msg.address,
+                                                        attachments: msg.attachments,
+                                                        todo: msg.todo
+                                                    });
                                                     closeMenu();
                                                 }}
                                             >
-                                                <span className="material-symbols-outlined text-base">content_copy</span>
-                                                <span>Copy Text</span>
+                                                <span className="material-symbols-outlined text-base">reply</span>
+                                                <span>Reply</span>
                                             </button>
+                                        )
+                                    ) : (
+                                        <button 
+                                            className="menu-item first:rounded-t-2xl last:rounded-b-2xl"
+                                            onClick={(e) => {
+                                                e.stopPropagation();
+                                                onReply({
+                                                    id: msg.id,
+                                                    sender: msg.display_name || msg.username,
+                                                    text: msg.content || (JSON.parse(msg.caption || '{}').call_type === 'video' ? 'Video call' : 'Voice call'),
+                                                    type: msg.type
+                                                });
+                                                closeMenu();
+                                            }}
+                                        >
+                                            <span className="material-symbols-outlined text-base">reply</span>
+                                            <span>Reply</span>
+                                        </button>
+                                    )}
+
+                                    {/* AI Feedback */}
+                                    {isAi && !isMe && msg.type !== 'call_log' && (
+                                        <>
                                             <button 
-                                                className="w-full flex items-center gap-2 px-3 py-2.5 text-left text-sm text-slate-700 dark:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors first:rounded-t-2xl last:rounded-b-2xl"
+                                                className="menu-item first:rounded-t-2xl last:rounded-b-2xl"
                                                 onClick={(e) => {
                                                     e.stopPropagation();
                                                     closeMenu();
@@ -1548,7 +1780,7 @@ export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone,
                                                 <span>Good response</span>
                                             </button>
                                             <button 
-                                                className="w-full flex items-center gap-2 px-3 py-2.5 text-left text-sm text-slate-700 dark:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors first:rounded-t-2xl last:rounded-b-2xl"
+                                                className="menu-item first:rounded-t-2xl last:rounded-b-2xl"
                                                 onClick={(e) => {
                                                     e.stopPropagation();
                                                     closeMenu();
@@ -1560,45 +1792,12 @@ export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone,
                                                 <span>Bad response</span>
                                             </button>
                                         </>
-                                    ) : (
-                                        !onRegenerate && (
-                                        <button 
-                                            className="w-full flex items-center gap-2 px-3 py-2.5 text-left text-sm text-slate-700 dark:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors first:rounded-t-2xl last:rounded-b-2xl"
-                                            onClick={(e) => {
-                                                e.stopPropagation();
-                                                const raw = msg.content || "";
-                                                const normalized = raw.replace(/\s+/g, " ").trim();
-                                                const maxLen = 120;
-                                                const snippet = normalized.length > maxLen ? normalized.slice(0, maxLen) + "…" : normalized;
-                                                onReply({
-                                                    id: msg.id,
-                                                    sender: msg.display_name || msg.username,
-                                                    text: snippet,
-                                                    type: msg.type,
-                                                    file_name: msg.file_name,
-                                                    caption: msg.caption,
-                                                    audio_duration_ms: msg.audio_duration_ms,
-                                                    is_view_once: msg.is_view_once,
-                                                    poll_question: msg.poll?.question,
-                                                    latitude: msg.latitude,
-                                                    longitude: msg.longitude,
-                                                    address: msg.address,
-                                                    attachments: msg.attachments, // [NEW] Pass attachments
-                                                    todo: msg.todo // [NEW] Pass todo object for title access
-                                                });
-                                                closeMenu();
-                                            }}
-                                        >
-                                            <span className="material-symbols-outlined text-base">reply</span>
-                                            <span>Reply</span>
-                                        </button>
-                                        )
                                     )}
 
-                                    {/* [NEW] Edit Option */}
-                                    {isMe && !isAudio && msg.type !== 'gif' && msg.type !== 'file' && msg.type !== 'location' && msg.type !== 'poll' && msg.type !== 'todo' && !msg.is_deleted_for_everyone && (msg.type !== 'image' || msg.caption) && (
+                                    {/* Edit Option */}
+                                    {isMe && msg.type !== 'call_log' && !isAudio && msg.type !== 'gif' && msg.type !== 'file' && msg.type !== 'location' && msg.type !== 'poll' && msg.type !== 'todo' && msg.type !== 'group_invite' && !msg.is_deleted_for_everyone && (msg.type !== 'image' || msg.caption) && (
                                         <button 
-                                            className="w-full flex items-center gap-2 px-3 py-2.5 text-left text-sm text-slate-700 dark:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors first:rounded-t-2xl last:rounded-b-2xl"
+                                            className="menu-item first:rounded-t-2xl last:rounded-b-2xl"
                                             onClick={(e) => {
                                                 e.stopPropagation();
                                                 onEdit(msg);
@@ -1610,19 +1809,21 @@ export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone,
                                         </button>
                                     )}
 
-                                    {isAudio && msg.status !== 'error' ? (
+                                    {/* Audio Download */}
+                                    {isAudio && msg.status !== 'error' && (
                                         <button 
-                                            className="w-full flex items-center gap-2 px-3 py-2.5 text-left text-sm text-slate-700 dark:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors first:rounded-t-2xl last:rounded-b-2xl"
+                                            className="menu-item first:rounded-t-2xl last:rounded-b-2xl"
                                             onClick={handleDownload}
                                         >
                                             <span className="material-symbols-outlined text-base">download</span>
                                             <span>Download</span>
                                         </button>
-                                    ) : null}
+                                    )}
 
+                                    {/* GIF Link */}
                                     {msg.type === 'gif' && (
                                         <button 
-                                            className="w-full flex items-center gap-2 px-3 py-2.5 text-left text-sm text-slate-700 dark:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors first:rounded-t-2xl last:rounded-b-2xl"
+                                            className="menu-item first:rounded-t-2xl last:rounded-b-2xl"
                                             onClick={(e) => {
                                                 e.stopPropagation();
                                                 navigator.clipboard.writeText(msg.gif_url);
@@ -1634,158 +1835,69 @@ export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone,
                                         </button>
                                     )}
 
-                                    {msg.type !== 'audio' && msg.type !== 'gif' && msg.type !== 'file' && msg.type !== 'location' && msg.type !== 'poll' && msg.type !== 'todo' && !isAi && !msg.is_view_once && (
-                                        // Check if this is a multi-image message
-                                        (msg.attachments && msg.attachments.length > 1) ? (
-                                            // Download All button for multi-image messages
-                                            <button 
-                                                className="w-full flex items-center gap-2 px-3 py-2.5 text-left text-sm text-slate-700 dark:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors first:rounded-t-2xl last:rounded-b-2xl"
-                                                onClick={async (e) => {
-                                                    e.stopPropagation();
-                                                    
-                                                    // Helper to trigger fallback download (all images to Downloads folder)
-                                                    const fallbackDownload = async () => {
-                                                        // Fetch all images as blobs first
-                                                        const blobs = await Promise.all(
-                                                            msg.attachments.map(async (att) => {
-                                                                const response = await fetch(att.url, {
-                                                                    mode: 'cors',
-                                                                    credentials: 'omit',
-                                                                    cache: 'no-cache'
-                                                                });
-                                                                return response.blob();
-                                                            })
-                                                        );
-                                                        
-                                                        // Download all at once
-                                                        blobs.forEach((blob, i) => {
-                                                            const blobUrl = URL.createObjectURL(blob);
-                                                            const extension = blob.type.includes('png') ? 'png' : 
-                                                                            blob.type.includes('gif') ? 'gif' : 
-                                                                            blob.type.includes('webp') ? 'webp' : 'jpg';
-                                                            
-                                                            const link = document.createElement('a');
-                                                            link.href = blobUrl;
-                                                            link.download = `image_${i + 1}.${extension}`;
-                                                            link.click();
-                                                            
-                                                            // Cleanup after a short delay
-                                                            setTimeout(() => URL.revokeObjectURL(blobUrl), 1000);
-                                                        });
-                                                    };
-                                                    
-                                                    try {
-                                                        // Try to use File System Access API (folder picker)
-                                                        if (typeof window.showDirectoryPicker === 'function') {
-                                                            try {
-                                                                const dirHandle = await window.showDirectoryPicker({
-                                                                    mode: 'readwrite',
-                                                                    startIn: 'pictures'
-                                                                });
-                                                                
-                                                                // Download all images to the selected folder
-                                                                for (let i = 0; i < msg.attachments.length; i++) {
-                                                                    const att = msg.attachments[i];
-                                                                    
-                                                                    const response = await fetch(att.url, {
-                                                                        mode: 'cors',
-                                                                        credentials: 'omit',
-                                                                        cache: 'no-cache'
-                                                                    });
-                                                                    const blob = await response.blob();
-                                                                    
-                                                                    const extension = blob.type.includes('png') ? 'png' : 
-                                                                                    blob.type.includes('gif') ? 'gif' : 
-                                                                                    blob.type.includes('webp') ? 'webp' : 'jpg';
-                                                                    const filename = `image_${i + 1}.${extension}`;
-                                                                    
-                                                                    const fileHandle = await dirHandle.getFileHandle(filename, { create: true });
-                                                                    const writable = await fileHandle.createWritable();
-                                                                    await writable.write(blob);
-                                                                    await writable.close();
-                                                                }
-                                                                
-                                                                alert(`Successfully downloaded ${msg.attachments.length} images!`);
-                                                            } catch (apiErr) {
-                                                                // User cancelled or API failed - use fallback
-                                                                if (apiErr.name !== 'AbortError') {
-                                                                    console.log('File System API failed, using fallback:', apiErr.message);
-                                                                    await fallbackDownload();
-                                                                }
-                                                            }
-                                                        } else {
-                                                            // API not available, use fallback
-                                                            await fallbackDownload();
+                                    {/* Download All (Multi-image) */}
+                                    {msg.type !== 'call_log' && (msg.attachments && msg.attachments.length > 1) && !isAi && !msg.is_view_once && (
+                                        <button 
+                                            className="menu-item first:rounded-t-2xl last:rounded-b-2xl"
+                                            onClick={async (e) => {
+                                                e.stopPropagation();
+                                                const fallbackDownload = async () => {
+                                                    const blobs = await Promise.all(
+                                                        msg.attachments.map(async (att) => {
+                                                            const response = await fetch(att.url, { mode: 'cors', credentials: 'omit', cache: 'no-cache' });
+                                                            return response.blob();
+                                                        })
+                                                    );
+                                                    blobs.forEach((blob, i) => {
+                                                        const blobUrl = URL.createObjectURL(blob);
+                                                        const extension = blob.type.includes('png') ? 'png' : blob.type.includes('gif') ? 'gif' : blob.type.includes('webp') ? 'webp' : 'jpg';
+                                                        const link = document.createElement('a');
+                                                        link.href = blobUrl;
+                                                        link.download = `image_${i + 1}.${extension}`;
+                                                        link.click();
+                                                        setTimeout(() => URL.revokeObjectURL(blobUrl), 1000);
+                                                    });
+                                                };
+                                                try {
+                                                    if (typeof window.showDirectoryPicker === 'function') {
+                                                        const dirHandle = await window.showDirectoryPicker({ mode: 'readwrite', startIn: 'pictures' });
+                                                        for (let i = 0; i < msg.attachments.length; i++) {
+                                                            const att = msg.attachments[i];
+                                                            const response = await fetch(att.url, { mode: 'cors', credentials: 'omit', cache: 'no-cache' });
+                                                            const blob = await response.blob();
+                                                            const extension = blob.type.includes('png') ? 'png' : blob.type.includes('gif') ? 'gif' : blob.type.includes('webp') ? 'webp' : 'jpg';
+                                                            const filename = `image_${i + 1}.${extension}`;
+                                                            const fileHandle = await dirHandle.getFileHandle(filename, { create: true });
+                                                            const writable = await fileHandle.createWritable();
+                                                            await writable.write(blob);
+                                                            await writable.close();
                                                         }
-                                                    } catch (err) {
-                                                        console.error('Failed to download images:', err);
-                                                        alert('Failed to download images. ' + err.message);
-                                                    }
-                                                    closeMenu();
-                                                }}
-                                            >
-                                                <span className="material-symbols-outlined text-base">download</span>
-                                                <span>Download All</span>
-                                            </button>
-                                        ) : (
-                                            // Copy button for single image or text messages
-                                            !msg.is_view_once && (
-                                            <button 
-                                                className="w-full flex items-center gap-2 px-3 py-2.5 text-left text-sm text-slate-700 dark:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors first:rounded-t-2xl last:rounded-b-2xl"
-                                                onClick={async (e) => {
-                                                    e.stopPropagation();
-                                                    if (msg.type === 'image') {
-                                                        try {
-                                                            const response = await fetch(msg.image_url, {
-                                                                mode: 'cors',
-                                                                credentials: 'omit',
-                                                                cache: 'no-cache'
-                                                            });
-                                                            const originalBlob = await response.blob();
-                                                            
-                                                            const imageBitmap = await createImageBitmap(originalBlob);
-                                                            
-                                                            const canvas = document.createElement('canvas');
-                                                            canvas.width = imageBitmap.width;
-                                                            canvas.height = imageBitmap.height;
-                                                            const ctx = canvas.getContext('2d');
-                                                            ctx.drawImage(imageBitmap, 0, 0);
-                                                            
-                                                            const pngBlob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
-                                                            
-                                                            await navigator.clipboard.write([
-                                                                new ClipboardItem({
-                                                                    'image/png': pngBlob
-                                                                })
-                                                            ]);
-                                                        } catch (err) {
-                                                            console.error('Failed to copy image:', err);
-                                                            alert('Failed to copy image. ' + err.message);
-                                                        }
+                                                        alert(`Successfully downloaded ${msg.attachments.length} images!`);
                                                     } else {
-                                                        navigator.clipboard.writeText(msg.content);
+                                                        await fallbackDownload();
                                                     }
-                                                    closeMenu();
-                                                }}
-                                            >
-                                                <span className="material-symbols-outlined text-base">content_copy</span>
-                                                <span>{msg.type === 'image' ? 'Copy' : 'Copy Text'}</span>
-                                            </button>
-                                            )
-                                        )
+                                                } catch (apiErr) {
+                                                    if (apiErr.name !== 'AbortError') {
+                                                        console.log('File System API failed, using fallback:', apiErr.message);
+                                                        await fallbackDownload();
+                                                    }
+                                                }
+                                                closeMenu();
+                                            }}
+                                        >
+                                            <span className="material-symbols-outlined text-base">download</span>
+                                            <span>Download All</span>
+                                        </button>
                                     )}
 
-                                    {/* [NEW] Star/Unstar Option */}
+                                    {/* Star Option */}
                                     {!isAi && !msg.is_deleted_for_everyone && !msg.is_view_once && (
                                         <button 
-                                            className="w-full flex items-center gap-2 px-3 py-2.5 text-left text-sm text-slate-700 dark:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors first:rounded-t-2xl last:rounded-b-2xl"
+                                            className="menu-item first:rounded-t-2xl last:rounded-b-2xl"
                                             onClick={(e) => {
                                                 e.stopPropagation();
-                                                if (msg.is_starred) {
-                                                    onUnstar(msg.id);
-                                                } else {
-                                                    onStar(msg.id);
-                                                }
+                                                if (msg.is_starred) onUnstar(msg.id);
+                                                else onStar(msg.id);
                                                 closeMenu();
                                             }}
                                         >
@@ -1796,10 +1908,10 @@ export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone,
                                         </button>
                                     )}
 
-                                    {/* [NEW] Pin/Unpin Option */}
+                                    {/* Pin Option */}
                                     {!isAi && onPin && !msg.is_deleted_for_everyone && !msg.is_view_once && (
                                         <button 
-                                            className="w-full flex items-center gap-2 px-3 py-2.5 text-left text-sm text-slate-700 dark:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors first:rounded-t-2xl last:rounded-b-2xl"
+                                            className="menu-item first:rounded-t-2xl last:rounded-b-2xl"
                                             onClick={(e) => {
                                                 e.stopPropagation();
                                                 onPin(msg);
@@ -1810,77 +1922,66 @@ export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone,
                                             <span>{msg.is_pinned ? 'Unpin' : 'Pin'}</span>
                                         </button>
                                     )}
-                                    
-                                    {!isAi && (
-                                        <button
-                                            className="w-full flex items-center gap-2 px-3 py-2.5 text-left text-sm text-red-500 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors first:rounded-t-2xl last:rounded-b-2xl"
-                                            onClick={(e) => {
-                                                e.stopPropagation();
-                                                handleDeleteForMe();
-                                                closeMenu();
-                                            }}
-                                        >
-                                            <span className="material-symbols-outlined text-base">delete</span>
-                                            <span>Delete for me</span>
-                                        </button>
-                                    )}
 
-                                    {isAi && (
-                                        <button
-                                            className="w-full flex items-center gap-2 px-3 py-2.5 text-left text-sm text-red-500 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors first:rounded-t-2xl last:rounded-b-2xl"
-                                            onClick={(e) => {
-                                                e.stopPropagation();
-                                                handleDeleteForMe();
-                                                closeMenu();
-                                            }}
-                                        >
-                                            <span className="material-symbols-outlined text-base">delete</span>
-                                            <span>Delete</span>
-                                        </button>
-                                    )}
-
-                                    {msg.user_id === user.id && !isAi && (
-                                        <button
-                                            className="w-full flex items-center gap-2 px-3 py-2.5 text-left text-sm text-red-600 dark:text-red-500 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors first:rounded-t-2xl last:rounded-b-2xl"
-                                            onClick={(e) => {
-                                                e.stopPropagation();
-                                                onDeleteForEveryone(msg);
-                                                closeMenu();
-                                            }}
-                                        >
-                                            <span className="material-symbols-outlined text-base">delete_forever</span>
-                                            <span>Delete for everyone</span>
-                                        </button>
-                                    )}
-
-                                    {/* [NEW] Message Info */}
-                                    {!msg.is_deleted_for_everyone && msg.type !== 'system' && (isMe || msg.room_type === 'group' || (msg.room_type === 'direct' && isMe)) && (
-                                        <button
-                                            className="w-full flex items-center gap-2 px-3 py-2.5 text-left text-sm text-slate-700 dark:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors first:rounded-t-2xl last:rounded-b-2xl"
-                                            onClick={(e) => {
-                                                e.stopPropagation();
-                                                onViewInfo(msg.id);
-                                                closeMenu();
-                                            }}
-                                        >
-                                            <span className="material-symbols-outlined text-base">info</span>
-                                            <span>Message info</span>
-                                        </button>
-                                    )}
-                                    
-                                    {/* [NEW] Select Option */}
+                                    {/* Select Option */}
                                     <button
-                                        className="w-full flex items-center gap-2 px-3 py-2.5 text-left text-sm text-slate-700 dark:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors first:rounded-t-2xl last:rounded-b-2xl"
-                                        onClick={(e) => {
-                                            e.stopPropagation();
-                                            onEnableSelectionMode(msg.id);
-                                            closeMenu();
-                                        }}
-                                    >
-                                        <span className="material-symbols-outlined text-base">check_circle</span>
-                                        <span>Select</span>
-                                    </button>
-                                </div>
+                                            className="menu-item first:rounded-t-2xl last:rounded-b-2xl"
+                                            onClick={(e) => {
+                                                e.stopPropagation();
+                                                onEnableSelectionMode?.(msg.id);
+                                                closeMenu();
+                                            }}
+                                        >
+                                            <span className="material-symbols-outlined text-base">check_circle</span>
+                                            <span>Select</span>
+                                        </button>
+
+                                    {/* Delete Options */}
+                                    <>
+                                        {!isAi && (
+                                            <button
+                                                className="menu-item menu-item-danger first:rounded-t-2xl last:rounded-b-2xl"
+                                                onClick={(e) => {
+                                                    e.stopPropagation();
+                                                    handleDeleteForMe();
+                                                    closeMenu();
+                                                }}
+                                            >
+                                                <span className="material-symbols-outlined text-base">delete</span>
+                                                <span>Delete for me</span>
+                                            </button>
+                                        )}
+
+                                        {isAi && (
+                                            <button
+                                                className="menu-item menu-item-danger first:rounded-t-2xl last:rounded-b-2xl"
+                                                onClick={(e) => {
+                                                    e.stopPropagation();
+                                                    handleDeleteForMe();
+                                                    closeMenu();
+                                                }}
+                                            >
+                                                <span className="material-symbols-outlined text-base">delete</span>
+                                                <span>Delete</span>
+                                            </button>
+                                        )}
+
+                                        {msg.user_id === user.id && !isAi && (
+                                            <button
+                                                className="menu-item menu-item-danger first:rounded-t-2xl last:rounded-b-2xl"
+                                                onClick={(e) => {
+                                                    e.stopPropagation();
+                                                    onDeleteForEveryone(msg);
+                                                    closeMenu();
+                                                }}
+                                            >
+                                                <span className="material-symbols-outlined text-base">delete_forever</span>
+                                                <span>Delete for everyone</span>
+                                            </button>
+                                        )}
+                                    </>
+                                </div>,
+                                document.body
                             )}
                         </div>
                     )}
@@ -1947,7 +2048,7 @@ export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone,
                 </div>
                 
                 
-                <div className={`text-[10px] mt-1 px-1 flex items-center justify-end gap-1 select-none transition-opacity ${
+                <div className={`text-[10px] mt-1 px-1 flex items-center ${isMe ? 'justify-end' : 'justify-start text-slate-500'} gap-1 select-none transition-opacity ${
                     (msg.status === 'sending' || msg.status === 'pending' || msg.is_pinned || msg.is_starred) 
                         ? 'opacity-100 text-slate-600 dark:text-slate-300' 
                         : `opacity-0 group-hover:opacity-100 ${isMe ? 'text-slate-600 dark:text-slate-400' : 'text-slate-600 dark:text-slate-400'}`
@@ -2006,6 +2107,7 @@ export default function MessageList({
     const [viewingImage, setViewingImage] = useState(null);
     const [viewingMessageInfo, setViewingMessageInfo] = useState(null); // [NEW] Info Modal State
     const [reactionMenu, setReactionMenu] = useState(null); // [NEW] { messageId, anchorRect }
+    const [activeReactionMessageId, setActiveReactionMessageId] = useState(null); // [NEW] Mutually exclusive reaction picker
 
     const [showScrollButton, setShowScrollButton] = useState(false);
     const scrollRef = useRef(null);
@@ -2482,7 +2584,7 @@ export default function MessageList({
                                 <span className="material-symbols-outlined text-slate-400 text-3xl">lock_clock</span>
                              </div>
                              <h3 className="text-lg font-bold text-slate-700 dark:text-slate-200 mb-2">Chat History Hidden</h3>
-                             <p className="text-sm text-slate-500 text-center max-w-xs mb-4">
+                             <p className="text-sm text-slate-600 text-center max-w-xs mb-4">
                                  Previous messages are hidden. You can restore them anytime.
                              </p>
                              <button
@@ -2564,7 +2666,7 @@ export default function MessageList({
                                      />
                                  ) : null}
                              <div className="flex justify-center my-6 group/system animate-slide-in-up">
-                                 <div className="flex items-center gap-2 px-4 py-1.5 rounded-full bg-white/60 dark:bg-slate-900/40 border border-slate-200/50 dark:border-slate-800/50 backdrop-blur-sm transition-all hover:bg-white/80 dark:hover:bg-slate-900/60 hover:border-slate-300 dark:hover:border-slate-700 shadow-sm">
+                                 <div className="flex items-center gap-2 px-4 py-1.5 rounded-full bg-white/60 dark:bg-[#232326]/40 border border-slate-200/50 dark:border-slate-800/50 backdrop-blur-sm transition-all hover:bg-white/80 dark:hover:bg-[#2A2A2D]/60 hover:border-slate-300 dark:hover:border-slate-700 shadow-sm">
                                      <span className={`material-symbols-outlined text-[16px] ${textColor}`}>
                                          {icon}
                                      </span>
@@ -2578,7 +2680,7 @@ export default function MessageList({
                                              }
                                              if (msg.content.includes('pinned a message')) {
                                                  const name = msg.user_id === currentUser.id ? 'You' : (msg.display_name || 'Someone');
-                                                 return `${name} pinned a message`;
+                                                 return renderTextWithEmojis(`${name} pinned a message`);
                                              }
                                              return linkifyText(msg.content, '', "text-blue-600 dark:text-blue-400 hover:underline");
                                          })()}
@@ -2637,6 +2739,9 @@ export default function MessageList({
                             onViewReactions={(m, rect) => setReactionMenu({ messageId: m.id, anchorRect: rect })} // [NEW]
                             hasSkippedSync={hasSkippedSync}
                             onOpenProfile={onOpenProfile}
+                            // [NEW] Lifted State for Reaction Picker
+                            activeReactionMessageId={activeReactionMessageId}
+                            setActiveReactionMessageId={setActiveReactionMessageId}
                         />
                         </React.Fragment>
                     );
@@ -2670,7 +2775,7 @@ export default function MessageList({
             <button
                 onClick={scrollToBottom}
                 className={`
-                    absolute bottom-5 right-5 rounded-full bg-white/80 dark:bg-slate-900/80 backdrop-blur-sm 
+                    absolute bottom-5 right-5 rounded-full bg-white/80 dark:bg-[#232326]/80 backdrop-blur-sm 
                     border border-slate-200 dark:border-slate-700 shadow-lg shadow-black/10 dark:shadow-black/50 text-slate-600 dark:text-slate-200 
                     flex items-center justify-center z-20 transition-all duration-300 ease-in-out
                     hover:bg-white dark:hover:bg-slate-800 hover:text-slate-900 dark:hover:text-white hover:scale-110 active:scale-95
@@ -2693,7 +2798,7 @@ export default function MessageList({
                     bg-slate-950/60 backdrop-blur-sm
                 ">
                     <div className="
-                        bg-white dark:bg-slate-900 rounded-2xl shadow-2xl
+                        bg-white dark:bg-[#232326] rounded-2xl shadow-2xl
                         border border-slate-200 dark:border-slate-700
                         w-full max-w-sm px-6 py-5
                         transition-colors

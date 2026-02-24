@@ -135,7 +135,7 @@ export const saveBackupConfig = async (config) => {
         id: 'current',
         salt: config.salt,
         iv: config.iv,
-        enabled: true,
+        enabled: config.enabled !== undefined ? config.enabled : true,
         updatedAt: Date.now()
     });
 };
@@ -148,4 +148,17 @@ export const getBackupConfig = async () => {
 export const clearBackupConfig = async () => {
     const db = await initDB();
     await db.delete('backup_config', 'current');
+};
+
+export const clearE2EEDatabase = async () => {
+    const db = await initDB();
+    // Clear all stores to ensure no stale keys/identity persist after logout
+    const tx = db.transaction(['device_identity', 'room_keys', 'trusted_keys', 'backup_config'], 'readwrite');
+    await Promise.all([
+        tx.objectStore('device_identity').clear(),
+        tx.objectStore('room_keys').clear(),
+        tx.objectStore('trusted_keys').clear(),
+        tx.objectStore('backup_config').clear()
+    ]);
+    await tx.done;
 };

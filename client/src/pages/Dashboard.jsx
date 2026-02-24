@@ -87,6 +87,10 @@ export default function Dashboard() {
         showRestoreOption: false 
     }); // [NEW] Centralized profile state
 
+    // [NEW] Track if history has been synced/restored in the current local session.
+    // This is more robust than counting keys which can be race-affected by incoming messages.
+    const [historySynced, setHistorySynced] = useState(localStorage.getItem('history_synced') === 'true');
+
     const handleOpenProfile = useCallback((userId, roomId = null, showRestore = false) => {
         setProfileState({
             isOpen: true,
@@ -283,6 +287,7 @@ export default function Dashboard() {
         setSyncState({ active: false, status: '', showBackupPrompt: false, mode: 'approve' });
 
         localStorage.setItem('skipped_sync', 'true');
+        localStorage.removeItem('is_new_login'); // [NEW] Clear new login flag
         const now = Date.now();
         localStorage.setItem('history_hidden_at', now.toString()); // [NEW] Mark when history was hidden
         setHasSkippedSync(true);
@@ -538,7 +543,7 @@ export default function Dashboard() {
                     // [OPTIMIZATION] Decryption now happens at component-level for faster UI load
                     // Removing the blocking Promise.all here allows the dashboard to render instantly
                     setRooms(prev => {
-                        return enriched.map(newRoom => {
+                        const updatedRooms = enriched.map(newRoom => {
                             const existing = prev.find(r => String(r.id) === String(newRoom.id));
                             if (existing) {
                                 // [NEW] Preserve plaintext from UI state if not in server response
@@ -556,6 +561,24 @@ export default function Dashboard() {
                             }
                             return newRoom;
                         });
+
+                        // [NEW] Refresh Active Room if it matches a fetched room
+                        // This ensures that ChatWindow reflects updates (like is_accepted) immediately
+                        setActiveRoom(prevActive => {
+                            if (!prevActive) return prevActive;
+                            const matched = updatedRooms.find(r => String(r.id) === String(prevActive.id));
+                            if (matched) {
+                                // Merge fresh data but PRESERVE initialMessages and other local states
+                                return { 
+                                    ...prevActive, 
+                                    ...matched,
+                                    initialMessages: prevActive.initialMessages // Preserve local chat history
+                                };
+                            }
+                            return prevActive;
+                        });
+
+                        return updatedRooms;
                     });
                     
                     // [FIX] Return enriched data so callers can use it immediately (for wait logic)
@@ -581,8 +604,24 @@ export default function Dashboard() {
         if (!socket || syncAttemptedRef.current || hasSkippedSync) return;
         
         const checkRestoreStatus = async () => {
+            // [FIX] Use explicit historySynced flag + key count. 
+            // If we have historySynced, we DEFINITELY don't need a prompt.
+            // If we have keys > 0, we check if it might be a race condition from a call/new msg.
             const count = await countRoomKeys();
-            if (count > 0) return; // Already have keys
+            if (historySynced) return; 
+
+            // [FIX] specific check for fresh signups (new accounts)
+            if (localStorage.getItem('is_fresh_signup') === 'true') {
+                console.log('[Restore] Skipping restore check for new account');
+                localStorage.removeItem('is_fresh_signup');
+                return;
+            }
+
+            if (count > 0 && !localStorage.getItem('is_new_login')) {
+                // If we have keys and it's NOT a fresh login, assume we are good.
+                // If it IS a fresh login but we already have keys (race), we still want to prompt for restore.
+                return;
+            }
             
             syncAttemptedRef.current = true; // Prevent loop
 
@@ -614,7 +653,7 @@ export default function Dashboard() {
         };
 
         checkRestoreStatus();
-    }, [socket, triggerSync, token, hasSkippedSync, user]);
+    }, [socket, triggerSync, token, hasSkippedSync, user, historySynced]);
 
     useEffect(() => {
         // [FIX] robust check for deviceId
@@ -648,7 +687,13 @@ export default function Dashboard() {
         newSocket.on('room_added', (newRoom) => {
             console.log('[DEBUG-CLIENT] room_added received:', newRoom);
             setRooms(prev => {
-                if (prev.find(r => String(r.id) === String(newRoom.id))) return prev;
+                const existingIndex = prev.findIndex(r => String(r.id) === String(newRoom.id));
+                if (existingIndex > -1) {
+                    // Update existing room with fresh data (e.g. unhidden status)
+                    const updated = [...prev];
+                    updated[existingIndex] = newRoom;
+                    return sortRooms(updated);
+                }
                 return sortRooms([newRoom, ...prev]);
             });
             newSocket.emit('join_room', newRoom.id);
@@ -946,9 +991,10 @@ export default function Dashboard() {
 
         // [NEW] Handle Message Edit (Updates Sidebar & BACKGROUND DEXIE)
         newSocket.on('message_edited', async (msg) => {
+            let processed = msg;
             // 1. Update Dexie
             try {
-                const processed = await processIncomingMessage(msg);
+                processed = await processIncomingMessage(msg);
                 await updateLocalMessage(msg.id, { 
                     ...processed,
                     isDecrypted: true,
@@ -1531,6 +1577,21 @@ export default function Dashboard() {
             }
         });
 
+        // [FIX] Handle Request Accepted (Update "other_member_is_accepted" so input appears)
+        newSocket.on('room:request:accepted', ({ roomId }) => {
+            console.log('[DEBUG] Room request accepted:', roomId);
+            setRooms(prev => prev.map(r => {
+                if (String(r.id) === String(roomId)) {
+                    return { ...r, other_member_is_accepted: true };
+                }
+                return r;
+            }));
+
+            if (activeRoomRef.current && String(activeRoomRef.current.id) === String(roomId)) {
+                setActiveRoom(prev => ({ ...prev, other_member_is_accepted: true }));
+            }
+        });
+
         // [NEW] Group Permissions Updated
         newSocket.on('group:permissions:updated', ({ groupId, permissions }) => {
             console.log('[DEBUG] Permissions updated:', groupId, permissions);
@@ -1652,6 +1713,9 @@ export default function Dashboard() {
                 setSyncState({ active: false, status: 'Success!', showBackupPrompt: true, mode: 'approve' });
                 // Trigger animation on next chat open
                 setJustRestored(true);
+                setHistorySynced(true);
+                localStorage.setItem('history_synced', 'true');
+                localStorage.removeItem('is_new_login'); // [NEW] Clear new login flag
                 showNotification('Chat history synced successfully!', 'success');
                 
                 // 4. Notify other devices to clear popups ONLY after decryption is done
@@ -1993,24 +2057,33 @@ export default function Dashboard() {
                 },
                 body: JSON.stringify(roomData)
             });
-            if (res.ok) {
-                const newRoom = await res.json();
-                
-                // [FIX] Use functional state update to prevent duplicates and race conditions
-                setRooms(prev => {
-                    const exists = prev.find(r => String(r.id) === String(newRoom.id));
-                    if (exists) {
-                        // Preserve existing room data (like plaintext preview) if it's already there
-                        return prev;
-                    }
-                    return sortRooms([newRoom, ...prev]);
-                });
-                
-                setShowCreateModal(false);
-                await handleSelectRoom(newRoom);
+            if (!res.ok) {
+                // [NEW] Attempt to parse error message
+                let errorMsg = 'Failed to create room';
+                try {
+                    const errorData = await res.json();
+                    errorMsg = errorData.error || errorMsg;
+                } catch (e) { /* ignore json parse error */ }
+                throw new Error(errorMsg);
             }
+
+            const newRoom = await res.json();
+            
+            // [FIX] Use functional state update to prevent duplicates and race conditions
+            setRooms(prev => {
+                const exists = prev.find(r => String(r.id) === String(newRoom.id));
+                if (exists) {
+                    // Preserve existing room data (like plaintext preview) if it's already there
+                    return prev;
+                }
+                return sortRooms([newRoom, ...prev]);
+            });
+            
+            setShowCreateModal(false);
+            await handleSelectRoom(newRoom);
         } catch (err) {
             console.error(err);
+            throw err; // Re-throw so modal can catch it
         }
     };
 
@@ -2366,7 +2439,7 @@ export default function Dashboard() {
         {/* Notification Permission Banner */}
         {!syncState.active && <NotificationPermissionBanner />}
         
-        <div className={`fixed inset-0 h-[100dvh] w-full bg-gray-50 dark:bg-slate-950 text-slate-900 dark:text-white overflow-hidden flex border border-slate-200 dark:border-slate-800 ${isResizing ? 'select-none cursor-col-resize' : ''} animate-dashboard-entry transition-colors`}>
+        <div className={`fixed inset-0 h-[100dvh] w-full bg-gray-50 dark:bg-[#1D1D21] text-slate-900 dark:text-white overflow-hidden flex border border-slate-200 dark:border-slate-800 ${isResizing ? 'select-none cursor-col-resize' : ''} animate-dashboard-entry transition-colors`}>
             {/* [NEW] SideNav - Desktop only icon filter bar */}
             <SideNav 
                 activeFilter={activeFilter}
@@ -2379,7 +2452,7 @@ export default function Dashboard() {
             <div 
                 className={`
                     ${(activeRoom || pendingUnlockRoom) ? 'hidden md:flex' : 'flex'} 
-                    h-full z-10 shrink-0
+                    h-full z-20 shrink-0
                     w-full md:w-[var(--sidebar-width)]
                 `}
                 style={{ '--sidebar-width': `${sidebarWidth}px` }}
@@ -2422,7 +2495,7 @@ export default function Dashboard() {
             <ChatAreaLockGuard onUnlockComplete={handleSelectRoom}>
             <div className={`
                 ${(activeRoom || pendingUnlockRoom) ? 'flex' : 'hidden md:flex'} 
-                flex-1 flex-col h-full bg-gray-50 dark:bg-slate-950 relative z-0 min-w-0 overflow-hidden transition-colors duration-300
+                flex-1 flex-col h-full bg-gray-50 dark:bg-[#1D1D21] relative z-0 min-w-0 overflow-hidden transition-colors duration-300
             `}>
                 {activeRoom ? (
                     activeRoom.type === 'ai' ? (
@@ -2463,42 +2536,12 @@ export default function Dashboard() {
                         />
                     )
                 ) : (
-                    <div className="flex-1 flex flex-col items-center justify-center bg-gray-50/50 dark:bg-slate-950 relative overflow-hidden">
-                        {/* Background Ambient Effects */}
-                        <div className="absolute inset-0 pointer-events-none overflow-hidden">
-                            <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-violet-500/10 rounded-full blur-3xl animate-pulse-slow mix-blend-multiply dark:mix-blend-screen" />
-                            <div className="absolute bottom-1/4 right-1/4 w-96 h-96 bg-indigo-500/10 rounded-full blur-3xl animate-pulse-slow mix-blend-multiply dark:mix-blend-screen" style={{ animationDelay: '1s' }} />
-                        </div>
-
+                    <div className="flex-1 flex flex-col items-center justify-center bg-gray-50/50 dark:bg-[#1D1D21] relative overflow-hidden">
+                        
                         <div className="relative z-10 text-center p-8 max-w-lg animate-fade-in-up">
-                            {/* Animated Illustration */}
-                            <div className="mb-8 relative inline-block group cursor-default">
-                                <div className="absolute inset-0 bg-violet-500/20 blur-xl rounded-full scale-0 group-hover:scale-110 transition-transform duration-500" />
-                                <div className="relative w-32 h-32 bg-white dark:bg-slate-900 rounded-3xl shadow-2xl flex items-center justify-center border border-slate-200 dark:border-slate-800 transform rotate-3 group-hover:rotate-6 transition-transform duration-500">
-                                    <div className="absolute inset-2 border border-dashed border-slate-300 dark:border-slate-700 rounded-2xl" />
-                                    <div className="flex gap-1 animate-bounce-slight">
-                                        <div className="w-2 h-2 rounded-full bg-violet-500" style={{ animationDelay: '0ms' }} />
-                                        <div className="w-2 h-2 rounded-full bg-indigo-500" style={{ animationDelay: '150ms' }} />
-                                        <div className="w-2 h-2 rounded-full bg-sky-500" style={{ animationDelay: '300ms' }} />
-                                    </div>
-                                    <span className="material-symbols-outlined text-4xl text-slate-400 dark:text-slate-500 absolute bottom-6 right-6 transform -rotate-12 group-hover:rotate-0 transition-transform">
-                                        send
-                                    </span>
-                                </div>
-                                {/* Floating Elements */}
-                                <div className="absolute -top-4 -right-4 bg-white dark:bg-slate-800 p-2 rounded-xl shadow-lg border border-slate-100 dark:border-slate-700 animate-float" style={{ animationDelay: '0.5s' }}>
-                                    <span className="material-symbols-outlined text-green-500 text-lg">lock</span>
-                                </div>
-                                <div className="absolute -bottom-2 -left-6 bg-white dark:bg-slate-800 px-3 py-1 rounded-full shadow-lg border border-slate-100 dark:border-slate-700 animate-float" style={{ animationDelay: '1.5s' }}>
-                                    <span className="text-xs font-mono text-slate-500">
-                                        <span className="w-1.5 h-1.5 rounded-full bg-green-500 inline-block mr-1" />
-                                        Online
-                                    </span>
-                                </div>
-                            </div>
-
+                            
                             <h2 className="text-3xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-slate-900 via-violet-800 to-slate-900 dark:from-white dark:via-violet-200 dark:to-white mb-3">
-                                Welcome, {renderTextWithEmojis(user?.display_name || 'Guest', '1.1em')}
+                                Welcome, {renderTextWithEmojis(user?.display_name || 'Guest', '1em', '-0.1em')}
                             </h2>
                             <p className="text-slate-500 dark:text-slate-400 text-lg mb-8 leading-relaxed">
                                 Select a conversation from the sidebar or start a new room to begin secure messaging.
@@ -2581,10 +2624,10 @@ export default function Dashboard() {
             {/* [PHASE 1 & 2] Key Sync & Restore UI (Global) */}
             {syncState.active && (
                 <div className="fixed inset-0 z-[1000] bg-slate-900/90 backdrop-blur-md flex flex-col items-center justify-center p-4 md:p-8 animate-in fade-in duration-300">
-                <div className="w-full max-w-md bg-white dark:bg-slate-900 rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-800 overflow-hidden flex flex-col" onClick={e => e.stopPropagation()}>
+                <div className="w-full max-w-md bg-white dark:bg-[#1D1D21] rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-800 overflow-hidden flex flex-col" onClick={e => e.stopPropagation()}>
                         
                         {/* Tabs */}
-                        <div className="flex p-2 bg-slate-100 dark:bg-slate-950/50">
+                        <div className="flex p-2 bg-slate-100 dark:bg-[#1D1D21]/50">
                             <button 
                                 onClick={() => {
                                     setSyncState(prev => ({ ...prev, mode: 'approve' }));
@@ -2673,7 +2716,7 @@ export default function Dashboard() {
                                                 value={restorePassword}
                                                 onChange={(e) => setRestorePassword(e.target.value)}
                                                 placeholder="Enter backup password"
-                                                className="w-full px-5 py-4 rounded-2xl bg-slate-100 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-violet-500 transition-all pr-12"
+                                                className="w-full px-5 py-4 rounded-2xl bg-slate-100 dark:bg-[#17171A] border border-slate-200 dark:border-slate-800 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-violet-500 transition-all pr-12"
                                                 required
                                             />
                                             <button
@@ -2814,7 +2857,7 @@ export default function Dashboard() {
             {pendingSyncRequest && (
                 <div className="fixed inset-0 z-[2000] flex items-center justify-center p-4">
                     <div className="absolute inset-0 bg-slate-950/80 backdrop-blur-sm" onClick={() => setPendingSyncRequest(null)} />
-                    <div className="relative w-full max-w-sm bg-white dark:bg-slate-900 rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-800 overflow-hidden animate-modal-scale">
+                    <div className="relative w-full max-w-sm bg-white dark:bg-[#1D1D21] rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-800 overflow-hidden animate-modal-scale">
                         <div className="p-6 text-center">
                             <div className="w-16 h-16 bg-violet-100 dark:bg-violet-900/30 rounded-2xl flex items-center justify-center mx-auto mb-4">
                                 <span className="material-symbols-outlined text-violet-600 dark:text-violet-400 text-3xl">
@@ -2906,11 +2949,14 @@ export default function Dashboard() {
                 await waitForAllDecryptions(freshRooms || rooms);
                 
                 localStorage.removeItem('skipped_sync');
+                localStorage.removeItem('is_new_login'); // [NEW] Clear new login flag
                 setHasSkippedSync(false);
                 setJustRestored(true); // Trigger background animation
                 
                 // Close modal AFTER decryption is complete
                 setShowRestoreModal(false);
+                setHistorySynced(true);
+                localStorage.setItem('history_synced', 'true');
                 showNotification('Chat history restored!', 'success');
             }}
             token={token}

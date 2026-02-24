@@ -872,7 +872,7 @@ export default function GroupInfoModal({ room, onClose, onLeave, onKick, socket,
                             <p className="text-xs text-slate-500 dark:text-slate-400 font-mono">#{room.code}</p>
                         </div>
                     </div>
-                    <button onClick={onClose} className="p-2 -mr-2 text-slate-400 hover:text-slate-600 dark:hover:text-white transition-colors rounded-full">
+                    <button onClick={onClose} className="w-9 h-9 flex items-center justify-center -mr-2 text-slate-400 hover:text-slate-600 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors rounded-full">
                         <span className="material-symbols-outlined">close</span>
                     </button>
                 </div>

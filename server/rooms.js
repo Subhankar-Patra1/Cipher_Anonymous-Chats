@@ -121,13 +121,47 @@ router.post('/', async (req, res) => {
 
         try {
             // Fetch users to get display names and usernames
-            const targetUserRes = await db.query('SELECT display_name, username, avatar_thumb_url, avatar_url FROM users WHERE id = $1', [targetUserId]);
+            const targetUserRes = await db.query('SELECT display_name, username, avatar_thumb_url, avatar_url, new_chat_privacy FROM users WHERE id = $1', [targetUserId]);
             const targetUser = targetUserRes.rows[0];
-            
-            const creatorRes = await db.query('SELECT display_name, username, avatar_thumb_url, avatar_url FROM users WHERE id = $1', [req.user.id]);
-            const creator = creatorRes.rows[0];
 
             if (!targetUser) return res.status(404).json({ error: 'Target user not found' });
+
+            // [NEW] Respect New Chat Privacy
+            const privacy = targetUser.new_chat_privacy || 'everyone';
+            
+            // Check if they are contacts (have groups in common)
+            const commonGroupsRes = await db.query(`
+                SELECT 1 FROM room_members rm1
+                JOIN room_members rm2 ON rm1.room_id = rm2.room_id
+                JOIN rooms r ON rm1.room_id = r.id
+                WHERE rm1.user_id = $1 AND rm2.user_id = $2 AND r.type = 'group'
+                LIMIT 1
+            `, [req.user.id, targetUserId]);
+
+            const areContacts = commonGroupsRes.rows.length > 0;
+
+            if (privacy === 'nobody') {
+                return res.status(403).json({ error: 'This user does not accept new chat requests' });
+            }
+
+            // [FIX] Privacy Logic Update:
+            // - Everyone: Always accepted (Direct to Inbox)
+            // - Contacts: Accepted if contact, otherwise Request (Hidden/Pending)
+            
+            let isAccepted = false;
+            if (privacy === 'everyone') {
+                isAccepted = true;
+            } else if (privacy === 'contacts') {
+                if (areContacts) {
+                    isAccepted = true;
+                } else {
+                    // Allowed to create, but not accepted (Request)
+                    isAccepted = false;
+                }
+            } else {
+                 // Fallback (should be covered by 'everyone' usually, acts as 'everyone' for now)
+                 isAccepted = true;
+            }
 
             // Check if DM already exists
             const checkRes = await db.query(`
@@ -151,7 +185,8 @@ router.post('/', async (req, res) => {
                     username: targetUser.username,
                     other_user_id: targetUserId,
                     avatar_thumb_url: targetUser.avatar_thumb_url,
-                    avatar_url: targetUser.avatar_url
+                    avatar_url: targetUser.avatar_url,
+                    is_accepted: true // [FIX] Creator always has accepted status
                 });
             }
 
@@ -160,8 +195,8 @@ router.post('/', async (req, res) => {
             const roomId = insertRoomRes.rows[0].id;
 
             // Add both users
-            await db.query('INSERT INTO room_members (room_id, user_id, role, is_hidden) VALUES ($1, $2, $3, $4)', [roomId, req.user.id, 'owner', false]);
-            await db.query('INSERT INTO room_members (room_id, user_id, role, is_hidden) VALUES ($1, $2, $3, $4)', [roomId, targetUserId, 'member', true]);
+            await db.query('INSERT INTO room_members (room_id, user_id, role, is_hidden, is_accepted) VALUES ($1, $2, $3, $4, $5)', [roomId, req.user.id, 'owner', false, true]);
+            await db.query('INSERT INTO room_members (room_id, user_id, role, is_hidden, is_accepted) VALUES ($1, $2, $3, $4, $5)', [roomId, targetUserId, 'member', true, isAccepted]);
 
             // Fetch created room
             const roomRes = await db.query('SELECT * FROM rooms WHERE id = $1', [roomId]);
@@ -174,7 +209,9 @@ router.post('/', async (req, res) => {
                 username: targetUser.username,
                 other_user_id: targetUserId,
                 avatar_thumb_url: targetUser.avatar_thumb_url,
-                avatar_url: targetUser.avatar_url
+                avatar_url: targetUser.avatar_url,
+                is_accepted: true, // [FIX] Creator always has accepted status
+                other_member_is_accepted: isAccepted
             };
             
             // [FIX] Do NOT emit room_added to target yet. Wait for first message.
@@ -245,6 +282,41 @@ router.post('/', async (req, res) => {
 });
 
 // Join Room (via Code)
+// Preview group info before joining
+router.get('/preview/:code', async (req, res) => {
+    const { code } = req.params;
+    try {
+        const result = await db.query(
+            `SELECT id, name, type, avatar_url, bio as description, expires_at,
+            (SELECT COUNT(*) FROM room_members rm WHERE rm.room_id = rooms.id) as member_count,
+            EXISTS(SELECT 1 FROM room_members rm WHERE rm.room_id = rooms.id AND rm.user_id = $2) as is_member
+             FROM rooms WHERE code = $1`, 
+            [code, req.user.id]
+        );
+        
+        const room = result.rows[0];
+        if (!room) return res.status(404).json({ error: 'Group not found' });
+        
+        // Check expiry if applicable
+        if (room.expires_at && new Date(room.expires_at) < new Date()) {
+             return res.status(410).json({ error: 'Invite expired' });
+        }
+        
+        res.json({
+            id: room.id,
+            name: room.name,
+            avatar_url: room.avatar_url,
+            member_count: parseInt(room.member_count) || 0,
+            description: room.description,
+            is_member: room.is_member,
+            expires_at: room.expires_at
+        });
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: 'Server error' });
+    }
+});
+
 router.post('/join', async (req, res) => {
     const { code } = req.body;
     
@@ -320,6 +392,9 @@ router.post('/join', async (req, res) => {
             creator_username: creator.username     // [NEW]
         };
 
+        // [NEW] Real-time update for the joining user
+        io.to(`user:${req.user.id}`).emit('room_added', fullRoom);
+
         res.json(fullRoom);
     } catch (error) {
         console.error(error);
@@ -348,6 +423,128 @@ router.post('/:id/members', async (req, res) => {
          // Check if already member
         const memberCheck = await db.query('SELECT 1 FROM room_members WHERE room_id = $1 AND user_id = $2', [roomId, targetUserId]);
         if (memberCheck.rows.length > 0) return res.status(400).json({ error: 'Already a member' });
+
+        // [NEW] Check target user's group_add_privacy setting
+        const targetPrivacyRes = await db.query('SELECT group_add_privacy, display_name, username, avatar_thumb_url, avatar_url FROM users WHERE id = $1', [targetUserId]);
+        const targetUser = targetPrivacyRes.rows[0];
+        if (!targetUser) return res.status(404).json({ error: 'User not found' });
+
+        const groupAddPrivacy = targetUser.group_add_privacy || 'everyone';
+
+        // Check for always_allow / never_allow exceptions
+        const exceptionRes = await db.query(
+            'SELECT exception_type FROM user_privacy_exceptions WHERE user_id = $1 AND excluded_user_id = $2 AND privacy_type = $3',
+            [targetUserId, req.user.id, 'group_add']
+        );
+        const exception = exceptionRes.rows[0]?.exception_type;
+
+        let canAddDirectly = true;
+
+        if (exception === 'never_allow') {
+            return res.status(403).json({ error: 'This user does not allow you to add them to groups' });
+        } else if (exception === 'always_allow') {
+            canAddDirectly = true;
+        } else if (groupAddPrivacy === 'nobody') {
+            canAddDirectly = false;
+        } else if (groupAddPrivacy === 'contacts') {
+            // Check if they share a group (are contacts)
+            const contactCheck = await db.query(`
+                SELECT 1 FROM room_members rm1
+                JOIN room_members rm2 ON rm1.room_id = rm2.room_id
+                JOIN rooms r ON rm1.room_id = r.id
+                WHERE rm1.user_id = $1 AND rm2.user_id = $2 AND r.type = 'group'
+                LIMIT 1
+            `, [req.user.id, targetUserId]);
+            canAddDirectly = contactCheck.rows.length > 0;
+        }
+        // 'everyone' → canAddDirectly stays true
+
+        // [NEW] If blocked by privacy, send a DM invite instead
+        if (!canAddDirectly) {
+            const io = req.app.get('io');
+            const actorInfo = await db.query('SELECT display_name, username, avatar_thumb_url FROM users WHERE id=$1', [req.user.id]);
+            const actor = actorInfo.rows[0];
+
+            // Get the group info (name + code)
+            const groupRes = await db.query('SELECT name, code FROM rooms WHERE id = $1', [roomId]);
+            const group = groupRes.rows[0];
+            if (!group) return res.status(404).json({ error: 'Group not found' });
+
+            // Find or create a DM room between actor and target
+            let dmRoomId;
+            const existingDm = await db.query(`
+                SELECT r.id FROM rooms r
+                JOIN room_members rm1 ON r.id = rm1.room_id
+                JOIN room_members rm2 ON r.id = rm2.room_id
+                WHERE r.type = 'direct'
+                AND rm1.user_id = $1 AND rm2.user_id = $2
+            `, [req.user.id, targetUserId]);
+
+            if (existingDm.rows.length > 0) {
+                dmRoomId = existingDm.rows[0].id;
+                // Ensure not hidden for actor
+                await db.query('UPDATE room_members SET is_hidden = false WHERE room_id = $1 AND user_id = $2', [dmRoomId, req.user.id]);
+                // Ensure not hidden for target  
+                await db.query('UPDATE room_members SET is_hidden = false WHERE room_id = $1 AND user_id = $2', [dmRoomId, targetUserId]);
+            } else {
+                // Create new DM
+                const newDmRes = await db.query('INSERT INTO rooms (type, created_by) VALUES ($1, $2) RETURNING id', ['direct', req.user.id]);
+                dmRoomId = newDmRes.rows[0].id;
+                await db.query('INSERT INTO room_members (room_id, user_id, role, is_hidden, is_accepted) VALUES ($1, $2, $3, $4, $5)', [dmRoomId, req.user.id, 'owner', false, true]);
+                await db.query('INSERT INTO room_members (room_id, user_id, role, is_hidden, is_accepted) VALUES ($1, $2, $3, $4, $5)', [dmRoomId, targetUserId, 'member', false, true]);
+            }
+
+            // Send a group_invite message in the DM
+            const inviteContent = JSON.stringify({
+                group_id: parseInt(roomId),
+                group_name: group.name,
+                group_code: group.code,
+                inviter_name: actor.display_name,
+                inviter_username: actor.username
+            });
+
+            const inviteMsgRes = await db.query(
+                'INSERT INTO messages (room_id, user_id, content, type) VALUES ($1, $2, $3, $4) RETURNING id, created_at',
+                [dmRoomId, req.user.id, inviteContent, 'group_invite']
+            );
+
+            // Update room last_message_at
+            await db.query('UPDATE rooms SET last_message_at = $1 WHERE id = $2', [inviteMsgRes.rows[0].created_at, dmRoomId]);
+
+            const inviteMsg = {
+                id: inviteMsgRes.rows[0].id,
+                room_id: dmRoomId,
+                user_id: req.user.id,
+                content: inviteContent,
+                type: 'group_invite',
+                created_at: inviteMsgRes.rows[0].created_at,
+                display_name: actor.display_name,
+                username: actor.username,
+                avatar_thumb_url: actor.avatar_thumb_url
+            };
+
+            io.to(`room:${dmRoomId}`).emit('new_message', inviteMsg);
+
+            // Also emit room_added to target if DM was newly created or hidden
+            const dmRoomData = await db.query('SELECT * FROM rooms WHERE id = $1', [dmRoomId]);
+            const roomForTarget = {
+                ...dmRoomData.rows[0],
+                name: actor.display_name,
+                username: actor.username,
+                other_user_id: req.user.id,
+                avatar_thumb_url: actor.avatar_thumb_url,
+                role: 'member',
+                unread_count: 1,
+                last_message_content: inviteContent,
+                last_message_type: 'group_invite',
+                last_message_sender_id: req.user.id,
+                last_message_id: inviteMsgRes.rows[0].id,
+                last_message_at: inviteMsgRes.rows[0].created_at
+            };
+            io.to(`user:${targetUserId}`).emit('room_added', roomForTarget);
+
+            return res.json({ success: true, invited: true, message: 'Group invitation sent via DM' });
+        }
 
         await db.query('INSERT INTO room_members (room_id, user_id, role) VALUES ($1, $2, $3)', [roomId, targetUserId, 'member']);
 
@@ -429,13 +626,14 @@ router.post('/:id/members', async (req, res) => {
 router.get('/', async (req, res) => {
     try {
         const roomsRes = await db.query(`
-            SELECT r.*, rm.role, rm.last_read_at, rm.is_archived, rm.is_pinned, rm.pinned_at,
+            SELECT r.*, rm.role, rm.last_read_at, rm.is_archived, rm.is_pinned, rm.pinned_at, rm.is_accepted,
             (SELECT COUNT(*) FROM room_members rm3 WHERE rm3.room_id = r.id) as member_count,
             (SELECT u.display_name FROM room_members rm2 JOIN users u ON rm2.user_id = u.id WHERE rm2.room_id = r.id AND rm2.user_id != $1::integer LIMIT 1) as other_user_name,
             (SELECT u.username FROM room_members rm2 JOIN users u ON rm2.user_id = u.id WHERE rm2.room_id = r.id AND rm2.user_id != $1::integer LIMIT 1) as other_user_username,
             (SELECT u.avatar_thumb_url FROM room_members rm2 JOIN users u ON rm2.user_id = u.id WHERE rm2.room_id = r.id AND rm2.user_id != $1::integer LIMIT 1) as other_user_avatar_thumb,
             (SELECT u.avatar_url FROM room_members rm2 JOIN users u ON rm2.user_id = u.id WHERE rm2.room_id = r.id AND rm2.user_id != $1::integer LIMIT 1) as other_user_avatar_url,
             (SELECT u.id FROM room_members rm2 JOIN users u ON rm2.user_id = u.id WHERE rm2.room_id = r.id AND rm2.user_id != $1::integer LIMIT 1) as other_user_id,
+            (SELECT rm2.is_accepted FROM room_members rm2 WHERE rm2.room_id = r.id AND rm2.user_id != $1::integer LIMIT 1) as other_member_is_accepted,
             (SELECT u.display_name FROM users u WHERE u.id = r.created_by) as creator_name,
             (SELECT u.username FROM users u WHERE u.id = r.created_by) as creator_username,
             (SELECT u.username FROM users u WHERE u.id = r.created_by) as creator_username,
@@ -525,6 +723,7 @@ router.get('/', async (req, res) => {
         
         const mappedRooms = rooms.map(r => ({
             ...r,
+            is_accepted: r.is_accepted,
             member_count: parseInt(r.member_count) || 0,
             name: r.type === 'direct' ? (r.other_user_name || 'Unknown User') : r.name,
             username: r.type === 'direct' ? r.other_user_username : null,
@@ -1189,11 +1388,19 @@ router.delete('/:id/messages', async (req, res) => {
 // Delete Chat (Hide for user)
 router.delete('/:id', async (req, res) => {
     try {
-        await db.query('UPDATE room_members SET is_hidden = TRUE WHERE room_id = $1 AND user_id = $2', [req.params.id, req.user.id]);
+        await db.query(`
+            UPDATE room_members 
+            SET is_hidden = TRUE, 
+                cleared_at = NOW(),
+                media_cleared_at = NOW()
+            WHERE room_id = $1 AND user_id = $2
+        `, [req.params.id, req.user.id]);
+        
         const io = req.app.get('io');
         io.to(`user:${req.user.id}`).emit('chat:deleted', { roomId: req.params.id, userId: req.user.id });
         res.json({ ok: true });
     } catch (error) {
+        console.error(error);
         res.status(500).json({ error: 'Server error' });
     }
 });
@@ -1966,6 +2173,82 @@ router.get('/:id/keys/exists', async (req, res) => {
             latestVersion: result.rows[0].key_version,
             holderDeviceId: result.rows[0].device_id
         });
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: 'Server error' });
+    }
+});
+
+// [NEW] Accept Message Request
+router.put('/:id/accept', async (req, res) => {
+    const roomId = req.params.id;
+    try {
+        await db.query('UPDATE room_members SET is_accepted = TRUE WHERE room_id = $1 AND user_id = $2', [roomId, req.user.id]);
+        
+        // Notify sender that their request was accepted
+        const io = req.app.get('io');
+        const otherMemberRes = await db.query('SELECT user_id FROM room_members WHERE room_id = $1 AND user_id != $2', [roomId, req.user.id]);
+        const otherUserId = otherMemberRes.rows[0]?.user_id;
+        if (otherUserId) {
+            io.to(`user:${otherUserId}`).emit('room:request:accepted', { roomId });
+        }
+
+        // [NEW] Reveal suppressed read receipts and seen status updates
+        const readMessagesRes = await db.query(`
+            SELECT id, status FROM messages 
+            WHERE room_id = $1 
+              AND user_id != $2 
+              AND $2 = ANY(read_by)
+        `, [roomId, req.user.id]);
+        
+        if (readMessagesRes.rows.length > 0) {
+            const allReadIds = readMessagesRes.rows.map(m => m.id);
+            const fullySeenIds = readMessagesRes.rows.filter(m => m.status === 'seen').map(m => m.id);
+
+            // 1. Broadcast seen status if fully read
+            if (fullySeenIds.length > 0) {
+                io.to(`room:${roomId}`).emit('messages_status_update', { 
+                    messageIds: fullySeenIds, 
+                    status: 'seen', 
+                    roomId 
+                });
+            }
+
+            // 2. Broadcast read receipt
+            io.to(`room:${roomId}`).emit('message:read_receipt', { 
+                roomId, 
+                messageIds: allReadIds, 
+                userId: req.user.id,
+                readAt: new Date().toISOString()
+            });
+        }
+
+        res.json({ success: true });
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: 'Server error' });
+    }
+});
+
+// [NEW] Reject Message Request (Delete Room)
+router.delete('/:id/reject', async (req, res) => {
+    const roomId = req.params.id;
+    try {
+        // Only allow rejection if not yet accepted
+        const check = await db.query('SELECT is_accepted FROM room_members WHERE room_id = $1 AND user_id = $2', [roomId, req.user.id]);
+        if (check.rows.length === 0) return res.status(404).json({ error: 'Not a member' });
+
+        // Rejecting a DM request effectively deletes the room for both users
+        const roomTypeRes = await db.query('SELECT type FROM rooms WHERE id = $1', [roomId]);
+        if (roomTypeRes.rows[0]?.type === 'direct') {
+            await db.query('DELETE FROM rooms WHERE id = $1', [roomId]);
+            const io = req.app.get('io');
+            io.to(`room:${roomId}`).emit('room_deleted', { roomId });
+        } else {
+            await db.query('DELETE FROM room_members WHERE room_id = $1 AND user_id = $2', [roomId, req.user.id]);
+        }
+
+        res.json({ success: true });
     } catch (err) {
         console.error(err);
         res.status(500).json({ error: 'Server error' });
