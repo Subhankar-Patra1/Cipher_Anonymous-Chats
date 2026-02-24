@@ -36,6 +36,7 @@ router.get('/search', async (req, res) => {
             FROM users 
             WHERE (username ILIKE $1 OR display_name ILIKE $1)
             AND id != $2
+            AND search_privacy != 'nobody'
         `;
         const params = [`%${q}%`, req.user.id];
 
@@ -326,25 +327,59 @@ router.put('/me/username', async (req, res) => {
 // 4. Get User Profile with Groups in Common
 router.get('/:id/profile', async (req, res) => {
     const targetUserId = req.params.id;
+    const requesterId = req.user.id;
     
     try {
         // Fetch User Details
         const userRes = await db.query(
-            'SELECT id, display_name, username, avatar_url, avatar_thumb_url, bio, last_seen, share_presence FROM users WHERE id = $1',
+            'SELECT id, display_name, username, avatar_url, avatar_thumb_url, bio, last_seen, share_presence, profile_pic_privacy, new_chat_privacy, search_privacy, calls_privacy, group_add_privacy FROM users WHERE id = $1',
             [targetUserId]
         );
         const user = userRes.rows[0];
 
         if (!user) return res.status(404).json({ error: 'User not found' });
 
-        // Privacy Check for Last Seen / Presence (Basic check, real-time is Redis)
+        // Privacy Check for Last Seen / Presence
         let last_seen = user.last_seen;
         if (user.share_presence === 'nobody') {
             last_seen = null;
         }
 
+        // Privacy Check for Profile Picture
+        let avatar_url = user.avatar_url;
+        let avatar_thumb_url = user.avatar_thumb_url;
+
+        // 1. Check main privacy setting
+        if (user.profile_pic_privacy === 'nobody') {
+            avatar_url = null;
+            avatar_thumb_url = null;
+        } else {
+            // 2. Check exception list
+            const exceptionRes = await db.query(
+                'SELECT 1 FROM user_privacy_exceptions WHERE user_id = $1 AND excluded_user_id = $2 AND privacy_type = $3',
+                [targetUserId, requesterId, 'profile_pic']
+            );
+            
+            if (exceptionRes.rows.length > 0) {
+                avatar_url = null;
+                avatar_thumb_url = null;
+            } else if (user.profile_pic_privacy === 'contacts') {
+                // 3. Check if contacts (In this app, contacts = have a direct chat or groups in common)
+                const isContactRes = await db.query(`
+                    SELECT 1 FROM room_members rm1
+                    JOIN room_members rm2 ON rm1.room_id = rm2.room_id
+                    WHERE rm1.user_id = $1 AND rm2.user_id = $2
+                    LIMIT 1
+                `, [targetUserId, requesterId]);
+
+                if (isContactRes.rows.length === 0) {
+                    avatar_url = null;
+                    avatar_thumb_url = null;
+                }
+            }
+        }
+
         // Fetch Groups in Common
-        // Find group rooms (type='group') where both req.user.id and targetUserId are members
         const groupsRes = await db.query(`
             SELECT r.id, r.name, r.code,
             (SELECT COUNT(*) FROM room_members rm_count WHERE rm_count.room_id = r.id) as member_count
@@ -354,18 +389,18 @@ router.get('/:id/profile', async (req, res) => {
             WHERE r.type = 'group'
             AND rm1.user_id = $1
             AND rm2.user_id = $2
-        `, [req.user.id, targetUserId]);
+        `, [requesterId, targetUserId]);
 
         // Check if I blocked this user
         const blockRes = await db.query(
             'SELECT 1 FROM blocked_users WHERE blocker_id = $1 AND blocked_id = $2', 
-            [req.user.id, targetUserId]
+            [requesterId, targetUserId]
         );
         const isBlockedByMe = blockRes.rows.length > 0;
 
         const blockedByThemRes = await db.query(
             'SELECT 1 FROM blocked_users WHERE blocker_id = $1 AND blocked_id = $2',
-            [targetUserId, req.user.id]
+            [targetUserId, requesterId]
         );
         const isBlockedByThem = blockedByThemRes.rows.length > 0;
 
@@ -373,13 +408,20 @@ router.get('/:id/profile', async (req, res) => {
             id: user.id,
             display_name: user.display_name,
             username: user.username,
-            avatar_url: user.avatar_url,
-            avatar_thumb_url: user.avatar_thumb_url,
+            avatar_url: avatar_url,
+            avatar_thumb_url: avatar_thumb_url,
             bio: user.bio || '',
             last_seen,
             groups_in_common: groupsRes.rows,
             is_blocked_by_me: isBlockedByMe,
-            is_blocked_by_them: isBlockedByThem
+            is_blocked_by_them: isBlockedByThem,
+            share_presence: user.share_presence,
+            profile_pic_privacy: user.profile_pic_privacy,
+            new_chat_privacy: user.new_chat_privacy,
+            new_chat_privacy: user.new_chat_privacy,
+            search_privacy: user.search_privacy,
+            calls_privacy: user.calls_privacy,
+            group_add_privacy: user.group_add_privacy
         });
 
     } catch (err) {
@@ -452,6 +494,67 @@ router.get('/me/blocked', async (req, res) => {
     } catch (err) {
         console.error("Get blocked users error:", err);
         res.status(500).json({ error: "Failed to fetch blocked users" });
+    }
+});
+
+// --- Privacy Exceptions ---
+
+// Get Privacy Exceptions
+router.get('/me/privacy/exceptions', async (req, res) => {
+    const { type } = req.query; // e.g. 'profile_pic'
+    if (!type) return res.status(400).json({ error: 'Privacy type required' });
+
+    try {
+        const result = await db.query(`
+            SELECT u.id, u.username, u.display_name, u.avatar_thumb_url, e.exception_type
+            FROM user_privacy_exceptions e
+            JOIN users u ON e.excluded_user_id = u.id
+            WHERE e.user_id = $1 AND e.privacy_type = $2
+        `, [req.user.id, type]);
+        
+        res.json(result.rows);
+    } catch (err) {
+        console.error("Get exceptions error:", err);
+        res.status(500).json({ error: "Failed to fetch exceptions" });
+    }
+});
+
+// Add Privacy Exception
+router.post('/me/privacy/exceptions', async (req, res) => {
+    const { excludedUserId, type, exceptionType } = req.body;
+    if (!excludedUserId || !type) return res.status(400).json({ error: 'Excluded user ID and type required' });
+
+    try {
+        await db.query(`
+            INSERT INTO user_privacy_exceptions (user_id, excluded_user_id, privacy_type, exception_type, scope)
+            VALUES ($1, $2, $3, $4, $3)
+            ON CONFLICT (user_id, excluded_user_id, privacy_type) 
+            DO UPDATE SET exception_type = $4, scope = $3
+        `, [req.user.id, excludedUserId, type, exceptionType || 'never_allow']);
+        
+        res.json({ success: true });
+    } catch (err) {
+        console.error("Add exception error:", err);
+        res.status(500).json({ error: "Failed to add exception" });
+    }
+});
+
+// Remove Privacy Exception
+router.delete('/me/privacy/exceptions/:excludedUserId', async (req, res) => {
+    const { excludedUserId } = req.params;
+    const { type } = req.query;
+    if (!excludedUserId || !type) return res.status(400).json({ error: 'Excluded user ID and type required' });
+
+    try {
+        await db.query(`
+            DELETE FROM user_privacy_exceptions 
+            WHERE user_id = $1 AND excluded_user_id = $2 AND privacy_type = $3
+        `, [req.user.id, excludedUserId, type]);
+        
+        res.json({ success: true });
+    } catch (err) {
+        console.error("Remove exception error:", err);
+        res.status(500).json({ error: "Failed to remove exception" });
     }
 });
 

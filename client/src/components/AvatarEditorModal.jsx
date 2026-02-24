@@ -197,6 +197,35 @@ export default function AvatarEditorModal({ isOpen, onClose, ...props }) {
         }
     };
 
+    // [NEW] Handle paste events
+    React.useEffect(() => {
+        const handlePaste = async (e) => {
+            if (!isOpen) return;
+
+            if (e.clipboardData && e.clipboardData.items) {
+                const items = e.clipboardData.items;
+                for (let i = 0; i < items.length; i++) {
+                    if (items[i].type.indexOf('image') !== -1) {
+                        const blob = items[i].getAsFile();
+                        // Validate size ( < 8MB)
+                        if (blob.size > 8 * 1024 * 1024) {
+                             setError("File is too large (max 8MB)");
+                             return;
+                        }
+                        
+                        setError(null);
+                        let imageDataUrl = await readFile(blob);
+                        setImageSrc(imageDataUrl);
+                        break;
+                    }
+                }
+            }
+        };
+
+        window.addEventListener('paste', handlePaste);
+        return () => window.removeEventListener('paste', handlePaste);
+    }, [isOpen]);
+
     const readFile = (file) => {
         return new Promise((resolve) => {
             const reader = new FileReader();
@@ -338,8 +367,8 @@ export default function AvatarEditorModal({ isOpen, onClose, ...props }) {
             <div className="bg-white dark:bg-slate-900 rounded-2xl w-full max-w-md overflow-hidden shadow-2xl flex flex-col max-h-[90vh] transition-colors">
                 <div className="p-4 border-b border-slate-200 dark:border-slate-800 flex justify-between items-center transition-colors">
                     <h3 className="text-lg font-bold text-slate-800 dark:text-white">Edit Profile Photo</h3>
-                    <button onClick={onClose} className="text-slate-400 hover:text-slate-600 dark:hover:text-white transition-colors">
-                        <span className="material-symbols-outlined">close</span>
+                    <button onClick={onClose} className="w-8 h-8 rounded-full flex items-center justify-center text-slate-400 hover:text-slate-600 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors">
+                        <span className="material-symbols-outlined text-xl">close</span>
                     </button>
                 </div>
 
