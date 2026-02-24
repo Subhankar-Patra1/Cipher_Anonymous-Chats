@@ -19,7 +19,7 @@ function WelcomeView({ onPromptClick }) {
     return (
         <div className="flex-1 flex flex-col items-center justify-start p-8 z-10 animate-in fade-in slide-in-from-bottom-4 duration-500 overflow-y-auto min-h-0 w-full">
             <div className="my-auto flex flex-col items-center">
-                <div className="w-24 h-24 rounded-full bg-gradient-to-tr from-fuchsia-100 to-purple-100 dark:from-fuchsia-900/20 dark:to-purple-900/20 flex items-center justify-center mb-6 shadow-xl shadow-fuchsia-500/10 shrink-0">
+                <div className="w-24 h-24 rounded-full bg-gradient-to-tr from-fuchsia-100 to-purple-100 dark:from-fuchsia-500/20 dark:to-purple-500/20 flex items-center justify-center mb-6 shadow-xl shadow-fuchsia-500/10 dark:shadow-none shrink-0">
                     <SparkleLogo className="w-12 h-12" />
                 </div>
                 <h1 className="text-3xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-slate-900 to-slate-700 dark:from-white dark:to-slate-300 mb-3 text-center shrink-0">
@@ -34,7 +34,7 @@ function WelcomeView({ onPromptClick }) {
                         <button
                             key={i}
                             onClick={() => onPromptClick(text)}
-                            className="p-4 text-sm text-left bg-white dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700/50 rounded-xl hover:bg-fuchsia-50 dark:hover:bg-fuchsia-900/20 hover:border-fuchsia-200 dark:hover:border-fuchsia-700/50 transition-all duration-200 shadow-sm hover:shadow-md group"
+                            className="p-4 text-sm text-left bg-white dark:bg-[#232326] border border-slate-200 dark:border-[#2A2A2D] rounded-xl hover:bg-fuchsia-50 dark:hover:bg-[#2A2A2D] hover:border-fuchsia-200 dark:hover:border-fuchsia-700/50 transition-all duration-200 shadow-sm hover:shadow-md group"
                         >
                             <span className="text-slate-700 dark:text-slate-200 group-hover:text-fuchsia-700 dark:group-hover:text-fuchsia-300 font-medium">{text}</span>
                         </button>
@@ -51,8 +51,8 @@ function SetupPrompt({ onStart, onCloudStart, onBack, initialStep = 'choice' }) 
 
     if (step === 'local-details') {
         return (
-            <div className="flex flex-col h-[100dvh] bg-slate-50 dark:bg-slate-950 items-center justify-center p-8 text-center animate-in slide-in-from-right duration-500">
-                <div className="w-24 h-24 rounded-full bg-fuchsia-100 dark:bg-fuchsia-900/20 flex items-center justify-center mb-6 shadow-xl shadow-fuchsia-500/10">
+            <div className="flex flex-col h-[100dvh] bg-slate-50 dark:bg-[#1D1D21] items-center justify-center p-8 text-center animate-in slide-in-from-right duration-500">
+                <div className="w-24 h-24 rounded-full bg-fuchsia-100 dark:bg-fuchsia-500/20 flex items-center justify-center mb-6 shadow-xl shadow-fuchsia-500/10 dark:shadow-none">
                     <SparkleLogo className="w-12 h-12 text-fuchsia-500" />
                 </div>
                 <h2 className="text-3xl font-bold text-slate-900 dark:text-white mb-3">Local AI Setup</h2>
@@ -100,8 +100,8 @@ function SetupPrompt({ onStart, onCloudStart, onBack, initialStep = 'choice' }) 
     }
 
     return (
-        <div className="flex flex-col h-[100dvh] bg-slate-50 dark:bg-slate-950 items-center justify-center p-8 text-center animate-in fade-in duration-500">
-            <div className="w-24 h-24 rounded-full bg-fuchsia-100 dark:bg-fuchsia-900/20 flex items-center justify-center mb-6 shadow-xl shadow-fuchsia-500/10">
+        <div className="flex flex-col h-[100dvh] bg-slate-50 dark:bg-[#1D1D21] items-center justify-center p-8 text-center animate-in fade-in duration-500">
+            <div className="w-24 h-24 rounded-full bg-fuchsia-100 dark:bg-fuchsia-500/20 flex items-center justify-center mb-6 shadow-xl shadow-fuchsia-500/10 dark:shadow-none">
                 <SparkleLogo className="w-12 h-12 text-fuchsia-500" />
             </div>
             <h2 className="text-3xl font-bold text-slate-900 dark:text-white mb-3">Enable Sparkle AI</h2>
@@ -113,7 +113,7 @@ function SetupPrompt({ onStart, onCloudStart, onBack, initialStep = 'choice' }) 
                 {/* Groq Cloud Option */}
                 <button 
                     onClick={onCloudStart}
-                    className="flex items-center gap-4 p-4 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl text-left hover:border-sky-500 dark:hover:border-sky-500 hover:shadow-lg hover:shadow-sky-500/5 transition-all group"
+                    className="flex items-center gap-4 p-4 bg-white dark:bg-[#232326] border border-slate-200 dark:border-[#2A2A2D] rounded-2xl text-left hover:border-sky-500 dark:hover:border-sky-500 hover:shadow-lg hover:shadow-sky-500/5 transition-all group"
                 >
                     <div className="w-12 h-12 rounded-xl bg-sky-50 dark:bg-sky-900/20 flex items-center justify-center text-sky-500 group-hover:scale-110 transition-transform">
                         <span className="material-symbols-outlined text-2xl">bolt</span>
@@ -130,7 +130,7 @@ function SetupPrompt({ onStart, onCloudStart, onBack, initialStep = 'choice' }) 
                 {/* Local WASM Option */}
                 <button 
                     onClick={() => setStep('local-details')}
-                    className="flex items-center gap-4 p-4 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl text-left hover:border-fuchsia-500 dark:hover:border-fuchsia-500 hover:shadow-lg hover:shadow-fuchsia-500/5 transition-all group"
+                    className="flex items-center gap-4 p-4 bg-white dark:bg-[#232326] border border-slate-200 dark:border-[#2A2A2D] rounded-2xl text-left hover:border-fuchsia-500 dark:hover:border-fuchsia-500 hover:shadow-lg hover:shadow-fuchsia-500/5 transition-all group"
                 >
                     <div className="w-12 h-12 rounded-xl bg-fuchsia-50 dark:bg-fuchsia-900/20 flex items-center justify-center text-fuchsia-500 group-hover:scale-110 transition-transform">
                         <span className="material-symbols-outlined text-2xl">terminal</span>
@@ -256,7 +256,7 @@ export default function AIChatWindow({ socket, room, user, onBack, isLoading }) 
     // [NEW] Paused State UI
     if (isPaused) {
         return (
-            <div className="flex flex-col h-[100dvh] bg-slate-50 dark:bg-slate-950 items-center justify-center p-8 text-center animate-in fade-in duration-500">
+            <div className="flex flex-col h-[100dvh] bg-slate-50 dark:bg-[#1D1D21] items-center justify-center p-8 text-center animate-in fade-in duration-500">
                 <div className="w-20 h-20 rounded-full bg-amber-100 dark:bg-amber-900/20 flex items-center justify-center mb-6">
                     <span className="material-symbols-outlined text-4xl text-amber-500">pause_circle</span>
                 </div>
@@ -289,7 +289,7 @@ export default function AIChatWindow({ socket, room, user, onBack, isLoading }) 
     // [NEW] Download Progress UI - ONLY for Local AI
     if (aiProvider === 'local' && (isModelLoading || (modelProgress?.status === 'error'))) {
         return (
-            <div className="flex flex-col h-[100dvh] bg-slate-50 dark:bg-slate-950 items-center justify-center p-8 text-center space-y-6 animate-in fade-in duration-300">
+            <div className="flex flex-col h-[100dvh] bg-slate-50 dark:bg-[#1D1D21] items-center justify-center p-8 text-center space-y-6 animate-in fade-in duration-300">
                 <div className="w-24 h-24 relative flex items-center justify-center">
                     {modelProgress?.status === 'error' ? (
                         <div className="w-20 h-20 rounded-full bg-red-100 dark:bg-red-900/20 flex items-center justify-center">
@@ -543,12 +543,12 @@ export default function AIChatWindow({ socket, room, user, onBack, isLoading }) 
 
 
     return (
-        <div className="flex flex-col h-[100dvh] bg-slate-50 dark:bg-slate-950 relative overflow-hidden transition-colors animate-in fade-in zoom-in-95 duration-500">
+        <div className="flex flex-col h-[100dvh] bg-slate-50 dark:bg-[#1D1D21] relative overflow-hidden transition-colors animate-in fade-in zoom-in-95 duration-500">
             {/* Distinct Background for AI */}
-            <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,_var(--tw-gradient-stops))] from-fuchsia-100/40 via-slate-50 to-slate-50 dark:from-fuchsia-900/10 dark:via-slate-950 dark:to-slate-950 pointer-events-none transition-colors" />
+            <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,_var(--tw-gradient-stops))] from-fuchsia-100/40 via-slate-50 to-slate-50 dark:from-fuchsia-900/5 dark:via-[#1D1D21] dark:to-[#1D1D21] pointer-events-none transition-colors" />
 
             {/* AI Header */}
-             <div className="p-4 border-b border-fuchsia-100 dark:border-slate-800/50 bg-white/60 dark:bg-slate-900/60 backdrop-blur-md flex items-center gap-4 shadow-sm z-10 transition-colors shrink-0">
+             <div className="p-4 border-b border-fuchsia-100 dark:border-slate-800/50 bg-white/60 dark:bg-[#1D1D21]/90 backdrop-blur-md flex items-center gap-4 shadow-sm z-10 transition-colors shrink-0">
                 <button 
                     onClick={onBack}
                     className="p-2 -ml-2 text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white transition-colors"
@@ -557,7 +557,7 @@ export default function AIChatWindow({ socket, room, user, onBack, isLoading }) 
                 </button>
 
                 <div className="flex-1 flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-full flex items-center justify-center bg-fuchsia-50 dark:bg-fuchsia-900/10 border border-fuchsia-100 dark:border-fuchsia-800/30 shadow-lg shadow-fuchsia-500/10">
+                    <div className="w-10 h-10 rounded-full flex items-center justify-center bg-fuchsia-50 dark:bg-fuchsia-900/10 border border-fuchsia-100 dark:border-fuchsia-800/30 shadow-lg shadow-fuchsia-500/10 dark:shadow-none dark:bg-fuchsia-500/10">
                         <SparkleLogo className="w-6 h-6" />
                     </div>
                     <div>
@@ -625,7 +625,7 @@ export default function AIChatWindow({ socket, room, user, onBack, isLoading }) 
                                         handleClearChat();
                                         setShowMenu(false);
                                     }}
-                                    className="w-full text-left px-4 py-3 text-sm text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 flex items-center gap-3 transition-colors"
+                                    className="w-full text-left px-4 py-3 text-sm text-red-500 hover:bg-red-50 dark:hover:bg-red-500/10 flex items-center gap-3 transition-colors"
                                 >
                                      <span className="material-symbols-outlined text-[18px]">delete</span>
                                      Clear History

@@ -1,6 +1,7 @@
 const express = require('express');
 const db = require('./db');
 const router = express.Router();
+const { checkMessageLimit } = require('./utils/messageLimits');
 
 // Middleware to check auth
 const authenticate = (req, res, next) => {
@@ -27,6 +28,19 @@ router.post('/', async (req, res) => {
     const { room_id, question, options, is_multiple_choice = false, is_anonymous = false } = req.body;
     
     try {
+        // [NEW] Enforce Instagram-style limit
+        try {
+            await checkMessageLimit(room_id, req.user.id, 'poll');
+        } catch (e) {
+            if (e.message === 'LIMIT_REACHED') {
+                return res.status(403).json({ error: 'Invite sent. Wait for acceptance to send more messages.' });
+            }
+            if (e.message === 'FORBIDDEN_TYPE') {
+                return res.status(403).json({ error: 'Text messages only until request is accepted.' });
+            }
+            throw e;
+        }
+
         // Verify room membership
         const memberRes = await db.query(
             'SELECT * FROM room_members WHERE room_id = $1 AND user_id = $2',
