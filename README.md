@@ -18,6 +18,11 @@
     - **Unlimited Bandwidth**: No artificial capping; scales to your connection speed.
     - **Smart Fallbacks**: Automatically adjusts quality if your device is busy or connection is weak.
 - **🔗 Smart Invites**: Share rooms via unique codes or direct links (QR codes included!).
+- **📱 QR Login**: Seamless, passwordless login by scanning a QR code with a logged-in device.
+- **☁️ Cloud Backup & Restore**: Securely backup your chat history and keys to the cloud and restore them on any device.
+- **📞 Direct Chat Calls**: Initiate crystal-clear audio and video calls directly from any private chat.
+- **📩 Message Requests**: Control your privacy with a dedicated requests queue for messages from unknown users.
+- **📲 Linked Devices**: Manage and monitor all active sessions across your devices in real-time.
 
 ### AI Integration
 - **🤖 Sparkle AI**: Integrated context-aware AI assistant (powered by Gemini) for coding help, general knowledge, and conversational support. Includes persistent history and code block formatting.
@@ -47,15 +52,18 @@
 - **🔐 End-to-End Encryption**: Robust E2EE for all messages.
     - **Mandatory Backups**: Secure your keys with a mandatory backup password during signup.
     - **Device Sync**: Securely sync your keys across devices with real-time approval modals.
+    - **Non-Destructive Restore**: Restore your history without losing current local messages.
 - **🔐 App Lock**: Global app-level passcode protection.
 - **🔒 Secret Chats**: Lock individual chats with unique 4-digit PINs.
+- **🛡️ Session Security**: Real-time monitoring of linked devices with remote logout capabilities.
 
 ### User Experience
 - **� Online Presence**: See who's online and when they were last active.
 - **� Typing Indicators**: See when others are typing in real-time.
 - **📌 Pin Chats**: Pin important conversations to the top of your chat list.
 - **� Archive Chats**: Archive less important chats to keep your inbox clean.
-- **🎨 Morphing UI**: Highly interactive "Morphing Send Button" that animates as you type.
+- **🎨 Premium Animations**: Fluid, state-of-the-art UI transitions and micro-animations powered by **Framer Motion**.
+- **📋 Consolidated Call Logs**: Smart call history that updates existing logs with duration and status instead of cluttering the chat.
 - **📱 Native-Like Mobile Experience**: Highly polished responsive design with smooth transitions and touch-friendly controls.
 - **📏 Compact Headers**: Optimized UI for maximum screen real estate.
 
