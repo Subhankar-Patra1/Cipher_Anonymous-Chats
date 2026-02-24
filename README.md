@@ -1,4 +1,8 @@
-# ⚡ Cipher (Anonymous Chats)
+<p align="center">
+  <img src="client/public/logo.png" width="120" alt="Cipher Logo">
+</p>
+
+<h1 align="center">Cipher (Anonymous Chats)</h1>
 
 ![License](https://img.shields.io/badge/license-MIT-blue.svg) ![Node](https://img.shields.io/badge/node->=18.0.0-green.svg) ![React](https://img.shields.io/badge/react-18.0.0-blue.svg)
 

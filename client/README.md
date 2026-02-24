@@ -1,4 +1,8 @@
-# ⚡ Cipher Client
+<p align="center">
+  <img src="public/logo.png" width="100" alt="Cipher Logo">
+</p>
+
+<h1 align="center">Cipher Client</h1>
 
 The frontend for Cipher, built with React and Vite.
 

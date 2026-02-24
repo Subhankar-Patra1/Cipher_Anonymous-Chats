@@ -1,4 +1,8 @@
-# ⚡ Cipher Server
+<p align="center">
+  <img src="../client/public/logo.png" width="100" alt="Cipher Logo">
+</p>
+
+<h1 align="center">Cipher Server</h1>
 
 The backend for Cipher, providing real-time messaging, authentication, and data persistence.
 
