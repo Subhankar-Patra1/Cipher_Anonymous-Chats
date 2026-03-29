@@ -9,12 +9,21 @@ require('dotenv').config();
 
 const pool = new Pool({
     connectionString: process.env.DATABASE_URL,
-    ssl: { rejectUnauthorized: false }
+    ssl: { rejectUnauthorized: false },
+    // [FIX] Connection pool resilience for Supabase pooler
+    max: 10,
+    idleTimeoutMillis: 30000,
+    connectionTimeoutMillis: 10000,
 });
 
 
 
 pool.on('error', (err, client) => {
+    // [FIX] Don't crash on "Tenant or user not found" — it's a transient Supabase pooler error
+    if (err.message && err.message.includes('Tenant or user not found')) {
+        console.error('[DB] Supabase pooler error: Tenant or user not found. Check your DATABASE_URL credentials and ensure the Supabase project is active.');
+        return; // Don't exit — allow the app to retry on next request
+    }
     console.error('Unexpected error on idle client', err);
     process.exit(-1);
 });

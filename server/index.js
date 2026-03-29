@@ -41,6 +41,10 @@ const { configureBucketCors } = require('./s3');
 configureBucketCors();
 
 const app = express();
+
+// [FIX] Trust first proxy (Render) so express-rate-limit reads real client IPs
+app.set('trust proxy', 1);
+
 const server = http.createServer(app);
 
 // CORS Config
