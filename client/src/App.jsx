@@ -16,10 +16,15 @@ import CompleteProfile from './pages/CompleteProfile'; // [NEW]
 
 
 const PrivateRoute = ({ children }) => {
-    const { user, loading, token } = useAuth();
+    const { user, loading, token, needsOnboarding } = useAuth();
     // [FIX] If loading or have token (validating), don't redirect yet
     if (loading || (!user && token)) return null;
-    return user ? children : <Navigate to="/auth" />;
+    if (!user) return <Navigate to="/auth" />;
+    // [FIX] Redirect to onboarding if profile not completed (prevents race condition)
+    if (needsOnboarding && window.location.pathname !== '/complete-profile') {
+        return <Navigate to="/complete-profile" replace />;
+    }
+    return children;
 };
 
 const PublicRoute = ({ children }) => {

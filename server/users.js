@@ -323,6 +323,17 @@ router.put('/me/username', async (req, res) => {
     }
 });
 
+// [FIX] Mark profile as completed (for OAuth onboarding)
+router.post('/me/profile-completed', async (req, res) => {
+    try {
+        await db.query('UPDATE users SET profile_completed = TRUE WHERE id = $1', [req.user.id]);
+        res.json({ success: true });
+    } catch (err) {
+        console.error("Profile completion error:", err);
+        res.status(500).json({ error: "Failed to mark profile as completed" });
+    }
+});
+
 
 // 4. Get User Profile with Groups in Common
 router.get('/:id/profile', async (req, res) => {

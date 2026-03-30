@@ -52,6 +52,9 @@ export const AuthProvider = ({ children }) => {
         }
     };
 
+    // [FIX] Server-authoritative onboarding flag — survives re-fetches and page refreshes
+    const [needsOnboarding, setNeedsOnboarding] = useState(false);
+
     useEffect(() => {
         // [OPTIMIZATION] Skip fetch if user is already populated (happens immediately after login)
         if (token && !user) {
@@ -74,6 +77,10 @@ export const AuthProvider = ({ children }) => {
             })
             .then(async data => {
                 setUser(data.user);
+                // [FIX] Check server-side profile_completed flag
+                if (data.user.profile_completed === false) {
+                    setNeedsOnboarding(true);
+                }
                 // Initialize crypto in background after user load
                 initializeCrypto(token).catch(e => console.warn('[Auth] Crypto init warning:', e));
                 setLoading(false);
@@ -171,7 +178,7 @@ export const AuthProvider = ({ children }) => {
     }
 
     return (
-        <AuthContext.Provider value={{ user, token, login, logout, updateUser, loading }}>
+        <AuthContext.Provider value={{ user, token, login, logout, updateUser, loading, needsOnboarding, setNeedsOnboarding }}>
             {children}
         </AuthContext.Provider>
     );

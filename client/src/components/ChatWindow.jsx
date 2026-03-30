@@ -577,6 +577,27 @@ export default function ChatWindow({
         let isStale = false;
 
         const hydrateAndDecrypt = async () => {
+            // [FIX] Fetch missing room keys for pending/new requests BEFORE hydration
+            try {
+                let keyObj = await cryptoManager.getRoomKey(room.id);
+                if (!keyObj && token) {
+                    const myDeviceId = await cryptoManager.init().then(i => i?.deviceId || cryptoManager.deviceId);
+                    const res = await fetch(`${import.meta.env.VITE_API_URL}/api/rooms/${room.id}/keys/my?deviceId=${myDeviceId}`, {
+                        headers: { Authorization: `Bearer ${token}` }
+                    });
+                    if (res.ok) {
+                        const keyData = await res.json();
+                        if (keyData && keyData.encrypted_key) {
+                            const decryptedKey = await cryptoManager.decryptRoomKey(keyData.encrypted_key);
+                            await cryptoManager.saveRoomKey(room.id, decryptedKey, keyData.key_version);
+                            console.log('[E2EE] Downloaded room key during hydration');
+                        }
+                    }
+                }
+            } catch (err) {
+                console.warn('[E2EE] Failed to pre-fetch key during hydration:', err);
+            }
+
             // 1. Initial Hydration (if needed)
             if (room.initialMessages) {
                 try {
@@ -2395,6 +2416,27 @@ export default function ChatWindow({
         try {
             const msg = messages.find(m => String(m.id) === String(msgId));
             if (!msg) return;
+
+            // [FIX] Try to fetch key from server before retrying if we don't have it
+            let keyObj = await cryptoManager.getRoomKey(room.id);
+            if (!keyObj && token) {
+                try {
+                    const myDeviceId = await cryptoManager.init().then(i => i?.deviceId || cryptoManager.deviceId);
+                    const res = await fetch(`${import.meta.env.VITE_API_URL}/api/rooms/${room.id}/keys/my?deviceId=${myDeviceId}`, {
+                        headers: { Authorization: `Bearer ${token}` }
+                    });
+                    if (res.ok) {
+                        const keyData = await res.json();
+                        if (keyData && keyData.encrypted_key) {
+                            const decryptedKey = await cryptoManager.decryptRoomKey(keyData.encrypted_key);
+                            await cryptoManager.saveRoomKey(room.id, decryptedKey, keyData.key_version);
+                            console.log('[E2EE] Downloaded room key during manual retry');
+                        }
+                    }
+                } catch (err) {
+                    console.warn('[E2EE] Failed to fetch key during retry:', err);
+                }
+            }
 
             const decrypted = await decryptPayload(msg);
             

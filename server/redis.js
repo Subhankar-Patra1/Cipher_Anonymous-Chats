@@ -1,18 +1,42 @@
 const { createClient } = require('redis');
 
 const client = createClient({
-    url: process.env.REDIS_URL || 'redis://localhost:6379'
+    url: process.env.REDIS_URL || 'redis://localhost:6379',
+    socket: {
+        reconnectStrategy: (retries) => {
+            if (retries > 3) {
+                console.warn('[Redis] Max retries reached. Running without Redis (presence features disabled).');
+                return false; // Stop retrying
+            }
+            return Math.min(retries * 500, 3000);
+        }
+    }
 });
 
-client.on('error', (err) => console.error('Redis Client Error', err));
+client.on('error', (err) => {
+    if (!isConnected && err.code === 'ECONNREFUSED') {
+        // Only log once on initial failure, not on every retry
+        if (!client._loggedRefused) {
+            console.warn('[Redis] Connection refused — running without Redis. Presence features will be unavailable.');
+            client._loggedRefused = true;
+        }
+    } else if (isConnected) {
+        console.error('Redis Client Error', err);
+    }
+});
 
 let isConnected = false;
 
 const connectRedis = async () => {
     if (!isConnected) {
-        await client.connect();
-        isConnected = true;
-        console.log('Redis connected');
+        try {
+            await client.connect();
+            isConnected = true;
+            console.log('Redis connected');
+        } catch (err) {
+            console.warn('[Redis] Could not connect:', err.message, '— continuing without Redis.');
+            isConnected = false;
+        }
     }
 };
 

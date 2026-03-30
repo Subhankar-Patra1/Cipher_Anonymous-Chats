@@ -285,10 +285,17 @@ router.get('/me', async (req, res) => {
         // [FIX] Removed the strict sessionId requirement - allow legacy tokens to work
         // This prevents logout-on-refresh for users with older tokens
 
-        const { rows } = await db.query('SELECT id, username, display_name, share_presence, read_receipts, profile_pic_privacy, search_privacy, avatar_url, avatar_thumb_url, auth_method FROM users WHERE id = $1', [decoded.id]);
+        const { rows } = await db.query('SELECT id, username, display_name, share_presence, read_receipts, profile_pic_privacy, search_privacy, avatar_url, avatar_thumb_url, auth_method, profile_completed FROM users WHERE id = $1', [decoded.id]);
         const user = rows[0];
         
         if (!user) return res.status(404).json({ error: 'User not found' });
+
+        // [FIX] Detect OAuth users with auto-generated usernames who never completed onboarding
+        // Auto-generated pattern: @<digits only> (e.g. @116777811864459 from Google, @github_id from GitHub)
+        if (user.auth_method === 'oauth' && /^@\d+$/.test(user.username)) {
+            user.profile_completed = false;
+        }
+
         res.json({ user });
     } catch (error) {
         console.error('[Auth] /me error:', error.message);

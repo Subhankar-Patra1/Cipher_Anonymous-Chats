@@ -89,7 +89,7 @@ passport.use(new GoogleStrategy({
             const recoveryCodeHash = await bcrypt.hash(recoveryCode, 10);
 
             const { rows: newUsers } = await db.query(
-                'INSERT INTO users (username, display_name, email, auth_method, avatar_url, recovery_code_hash) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *',
+                'INSERT INTO users (username, display_name, email, auth_method, avatar_url, recovery_code_hash, profile_completed) VALUES ($1, $2, $3, $4, $5, $6, FALSE) RETURNING *',
                 [username, displayName, email, 'oauth', avatarUrl, recoveryCodeHash]
             );
             user = newUsers[0];
@@ -174,7 +174,7 @@ passport.use(new GitHubStrategy({
             const recoveryCodeHash = await bcrypt.hash(recoveryCode, 10);
 
             const { rows: newUsers } = await db.query(
-                'INSERT INTO users (username, display_name, email, auth_method, avatar_url, recovery_code_hash) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *',
+                'INSERT INTO users (username, display_name, email, auth_method, avatar_url, recovery_code_hash, profile_completed) VALUES ($1, $2, $3, $4, $5, $6, FALSE) RETURNING *',
                 [username, displayName, email, 'oauth', avatarUrl, recoveryCodeHash]
             );
             user = newUsers[0];
@@ -229,18 +229,24 @@ router.get('/google/callback',
                 VALUES ($1, $2, $3, $4, $5, $6, $7)
             `, [sessionId, req.user.id, deviceName, deviceType, os.name || 'Unknown', browser.name || 'Unknown', ip]);
             
+            // [FIX] Detect existing users with auto-generated usernames who never completed onboarding
+            const needsOnboarding = req.user.isNewUser || /^@\d+$/.test(req.user.username);
+
             // Generate JWT
             const token = jwt.sign({ 
                 id: req.user.id, 
                 username: req.user.username, 
                 display_name: req.user.display_name, 
-                isNewUser: req.user.isNewUser, // [NEW] Pass onboarding flag
+                isNewUser: needsOnboarding, // [FIX] Also catches existing users with incomplete profiles
                 sessionId 
             }, JWT_SECRET);
 
             // Redirect to frontend with token
             const clientUrl = process.env.CLIENT_URL || 'http://localhost:5173';
             let redirectUrl = `${clientUrl}/auth/callback?token=${token}&provider=google`;
+            if (needsOnboarding) {
+                 redirectUrl += `&isNewUser=true`;
+            }
             if (req.user.generatedRecoveryCode) {
                  redirectUrl += `&recoveryCode=${req.user.generatedRecoveryCode}`;
             }
@@ -277,17 +283,24 @@ router.get('/github/callback',
                 VALUES ($1, $2, $3, $4, $5, $6, $7)
             `, [sessionId, req.user.id, deviceName, deviceType, os.name || 'Unknown', browser.name || 'Unknown', ip]);
             
+            // [FIX] Detect existing users with auto-generated usernames who never completed onboarding
+            const needsOnboarding = req.user.isNewUser || /^@\d+$/.test(req.user.username);
+
             // Generate JWT
             const token = jwt.sign({ 
                 id: req.user.id, 
                 username: req.user.username, 
                 display_name: req.user.display_name, 
+                isNewUser: needsOnboarding, // [FIX] Also catches existing users with incomplete profiles
                 sessionId 
             }, JWT_SECRET);
 
             // Redirect to frontend with token
             const clientUrl = process.env.CLIENT_URL || 'http://localhost:5173';
             let redirectUrl = `${clientUrl}/auth/callback?token=${token}&provider=github`;
+            if (needsOnboarding) {
+                 redirectUrl += `&isNewUser=true`;
+            }
             if (req.user.generatedRecoveryCode) {
                  redirectUrl += `&recoveryCode=${req.user.generatedRecoveryCode}`;
             }

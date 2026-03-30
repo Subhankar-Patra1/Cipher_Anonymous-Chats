@@ -266,6 +266,10 @@ const createTables = async () => {
             -- [OAuth] Add email column to users table
             ALTER TABLE users ADD COLUMN IF NOT EXISTS email VARCHAR(255) UNIQUE;
             ALTER TABLE users ADD COLUMN IF NOT EXISTS auth_method VARCHAR(50) DEFAULT 'password';
+
+            -- [FIX] Profile completion flag for OAuth onboarding race condition
+            -- Defaults to TRUE so existing users are unaffected
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS profile_completed BOOLEAN DEFAULT TRUE;
             -- Make password_hash nullable for OAuth-only users
             DO $$
             BEGIN

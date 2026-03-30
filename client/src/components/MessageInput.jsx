@@ -1142,7 +1142,7 @@ export default function MessageInput({
                                 </button>
                                 <button 
                                     onClick={handleSendRecording}
-                                    className="w-10 h-10 rounded-full bg-violet-600 hover:bg-violet-500 flex items-center justify-center text-white shadow-lg shadow-violet-500/20 transition-all hover:scale-105 active:scale-95"
+                                    className="w-10 h-10 rounded-full bg-violet-600 hover:bg-violet-500 flex items-center justify-center text-white shadow-lg shadow-violet-500/20 transition-all"
                                 >
                                     <span className="material-symbols-outlined text-[20px]">send</span>
                                 </button>
@@ -1673,7 +1673,7 @@ export default function MessageInput({
                                     ? 'bg-slate-200 dark:bg-slate-700 text-red-500 hover:bg-slate-300 dark:hover:bg-slate-600 shadow-sm border border-red-200 dark:border-red-900/30'
                                 : !hasContent
                                     ? 'bg-violet-600/50 text-white/50 cursor-default shadow-none' 
-                                    : 'bg-violet-600 hover:bg-violet-500 text-white shadow-lg shadow-violet-500/20 hover:scale-105 active:scale-95'
+                                    : 'bg-violet-600 hover:bg-violet-500 text-white shadow-lg shadow-violet-500/20'
                             }
                         `}
                         disabled={disabled && !isGenerating}
@@ -1695,7 +1695,7 @@ export default function MessageInput({
                             p-3 rounded-xl flex items-center justify-center transition-all duration-200 shrink-0
                             ${disabled 
                                 ? 'bg-slate-100 dark:bg-slate-800 text-slate-400 dark:text-slate-500 cursor-not-allowed' 
-                                : 'bg-violet-600 hover:bg-violet-500 text-white shadow-lg shadow-violet-500/20 hover:scale-105 active:scale-95'
+                                : 'bg-violet-600 hover:bg-violet-500 text-white shadow-lg shadow-violet-500/20'
                             }
                         `}
                         disabled={disabled}

@@ -5,7 +5,7 @@ import SpinLoading from '../components/SpinLoading';
 import { cryptoManager } from '../lib/crypto/CryptoManager';
 
 export default function CompleteProfile() {
-    const { user, updateUser, token, login } = useAuth(); // login needed to refresh token if we regenerate keys? Actually token is same.
+    const { user, updateUser, token, login, setNeedsOnboarding } = useAuth();
     const navigate = useNavigate();
     const [step, setStep] = useState(1); // 1: Profile, 2: Backup
     
@@ -151,6 +151,15 @@ export default function CompleteProfile() {
 
             // 5. Enable auto-backup
             await cryptoManager.enableAutoBackup(backupPassword, backup.salt, token);
+
+            // [FIX] Mark profile as completed on the server
+            await fetch(`${import.meta.env.VITE_API_URL}/api/users/me/profile-completed`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }
+            });
+
+            // [FIX] Clear needsOnboarding so PrivateRoute allows dashboard access
+            setNeedsOnboarding(false);
 
             // Done -> Show unique transition
             setIsSubmitting(false); // Stop spinner on button
