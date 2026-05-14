@@ -13,7 +13,7 @@ const PROGRESS_STEPS = [
 
 const FUN_FACTS = [
     "Did you know? Your messages are encrypted even from us.",
-    "Breezing through the digital void...",
+    "Please do not close this tab or shut down your device.",
     "Reassembling your digital existence star by star.",
     "The keys are in the lock. Just a few more gears to turn.",
     "Security is not a product, but a process.",
@@ -124,13 +124,19 @@ export default function RestoreModal({ isOpen, onClose, onSkip, onRestoreSuccess
             const hasHistory = bundle.version >= 2.0 && bundle.messages;
 
             setCurrentStep('importing');
-            await new Promise(r => setTimeout(r, 1000));
+            setProgress(0); // Start importing text at 0%
+            await new Promise(r => setTimeout(r, 400)); // Brief pause to let UI show 'Importing... 0%'
 
             // Legacy support: if bundle is just the keys json string, bundle.keys will be undefined
-            // If it's V2 (hasHistory), we pass the WHOLE bundle to importKeysSync, 
-            // and let the robust parser inside handle extraction.
             const keyData = hasHistory ? JSON.stringify(bundle) : rawBundle;
+            
+            setProgress(15); // Keys decryption phase started
+            await new Promise(r => setTimeout(r, 100));
+
             await cryptoManager.importKeysSync(keyData);
+
+            setProgress(30); // Keys imported successfully
+            await new Promise(r => setTimeout(r, 200));
 
             if (hasHistory) {
                 console.log(`[Restore] Importing history: ${bundle.messages.length} messages, ${bundle.rooms.length} rooms, ${bundle.users.length} users`);
@@ -141,8 +147,9 @@ export default function RestoreModal({ isOpen, onClose, onSkip, onRestoreSuccess
 
                 const updateProgress = (count) => {
                     processedItems += count;
-                    const percent = Math.min(Math.round((processedItems / totalItems) * 100), 100);
-                    setProgress(percent);
+                    // Map remaining 70% of the importing phase (from 30 to 100%)
+                    const subPercent = Math.min(Math.round((processedItems / Math.max(1, totalItems)) * 70), 70);
+                    setProgress(30 + subPercent);
                 };
 
                 // Use bulkPut to safely merge data and overwrite existing if necessary
@@ -152,26 +159,38 @@ export default function RestoreModal({ isOpen, onClose, onSkip, onRestoreSuccess
                 }
                 
                 // Artificial delay for UI feel if fast
-                await new Promise(r => setTimeout(r, 400));
+                await new Promise(r => setTimeout(r, 250));
 
                 if (bundle.users?.length > 0) {
                     await db.users.bulkPut(bundle.users);
                     updateProgress(bundle.users.length);
                 }
 
-                await new Promise(r => setTimeout(r, 400));
+                await new Promise(r => setTimeout(r, 250));
 
                 if (bundle.messages?.length > 0) {
                     // Import messages in chunks to show progress if large
-                    const chunkSize = 100;
+                    const chunkSize = 25; // Smaller chunks = more frequent UI updates 
                     for (let i = 0; i < bundle.messages.length; i += chunkSize) {
                         const chunk = bundle.messages.slice(i, i + chunkSize);
+                        
+                        // Await both the Dexie transaction AND flush the microtask queue
                         await db.messages.bulkPut(chunk);
+                        
                         updateProgress(chunk.length);
-                        // Brief yield to keep UI responsive
-                        await new Promise(r => setTimeout(r, 10));
+                        
+                        // Brief yield to guarantee React has time to paint the progress bar
+                        // Slower wait to make the progress bar feel actual and smooth to human eyes
+                        await new Promise(r => setTimeout(r, 150));
                     }
                 }
+                
+                // Guarantee it reaches 100% when history import finishes
+                setProgress(100);
+            } else {
+                // If it's a legacy backup without messages, quickly tween to 100%
+                setProgress(100);
+                await new Promise(r => setTimeout(r, 600));
             }
 
             // Enable auto-backup so future room keys are automatically backed up
@@ -183,14 +202,20 @@ export default function RestoreModal({ isOpen, onClose, onSkip, onRestoreSuccess
 
             setCurrentStep('finalizing');
             setProgress(100);
-            await new Promise(r => setTimeout(r, 1000));
+
+            // Call parent's success handler which will do the background heavy-lifting (decryption)
+            // It will hold on the "Synchronizing history..." text appropriately while doing so.
+            await onRestoreSuccess();
 
             setCurrentStep('completed');
             restoreCompletedRef.current = true;
             setLoading(false);
             
-            // Call parent's success handler which will wait for decryption and close us
-            await onRestoreSuccess();
+            // Show the success text for a short while before vanishing
+            await new Promise(r => setTimeout(r, 1500));
+            
+            // Smoothly animate the modal out
+            handleClose();
         } catch (err) {
             console.error('[Restore] Error:', err);
             const isPasswordError = err.name === 'OperationError';
@@ -217,26 +242,18 @@ export default function RestoreModal({ isOpen, onClose, onSkip, onRestoreSuccess
 
     const stepInfo = PROGRESS_STEPS.find(s => s.id === currentStep);
     
-    // Dynamic progress calculation:
-    // idle/fetching/decrypting/importing get fixed slices, 
-    // but the 'importing' phase also uses the granular 'progress' state.
+    // Dynamic progress calculation for overall bar at top:
     const getOverallProgress = () => {
         if (currentStep === 'completed') return 100;
         if (currentStep === 'idle') return 0;
         
-        const stepIdx = PROGRESS_STEPS.findIndex(s => s.id === currentStep);
-        if (stepIdx === -1) return 0;
-        
-        // Let's divide 100% into roughly equal parts for the first 3 steps (0, 20, 40)
-        // The 4th step 'importing' will map its granular 0-100% into the 40-80% range
-        // The 5th step 'finalizing' will be 80-100%
-        
-        if (currentStep === 'fetching') return 15;
-        if (currentStep === 'decrypting') return 35;
-        if (currentStep === 'importing') return 40 + (progress * 0.45); // Maps 0-100 to 40-85
-        if (currentStep === 'finalizing') return 85 + (progress === 100 ? 15 : 5);
-        
-        return (stepIdx + 1) / PROGRESS_STEPS.length * 100;
+        switch (currentStep) {
+            case 'fetching': return 15;
+            case 'decrypting': return 35;
+            case 'importing': return 35 + (progress * 0.50); // Maps 0-100 (from 'importing' step) to 35-85% overall
+            case 'finalizing': return 85 + (progress === 100 ? 10 : 5);
+            default: return 0;
+        }
     };
 
     const progressPercent = getOverallProgress();
@@ -293,16 +310,12 @@ export default function RestoreModal({ isOpen, onClose, onSkip, onRestoreSuccess
                             />
                         </div>
 
-                        <div className="min-h-[60px] flex items-center justify-center text-center px-4">
-                            <p className="text-gray-600 dark:text-slate-400 text-sm animate-fade-in" key={factIndex}>
-                                {FUN_FACTS[factIndex]}
-                            </p>
-                        </div>
-                        
-                        {currentStep === 'completed' && (
-                            <p className="mt-4 text-xs text-gray-500 dark:text-slate-500 animate-pulse">
-                                Optimization complete. All systems nominal.
-                            </p>
+                        {currentStep !== 'completed' && (
+                            <div className="min-h-[60px] flex items-center justify-center text-center px-4">
+                                <p className="text-gray-600 dark:text-slate-400 text-sm animate-fade-in" key={factIndex}>
+                                    {FUN_FACTS[factIndex]}
+                                </p>
+                            </div>
                         )}
 
                         {loading && currentStep === 'importing' && (
@@ -352,7 +365,7 @@ export default function RestoreModal({ isOpen, onClose, onSkip, onRestoreSuccess
                         <div className="flex flex-col gap-3 pt-3">
                             <button
                                 type="submit"
-                                disabled={!password || isThrottled}
+                                disabled={password.length < 8 || isThrottled}
                                 className="w-full py-3.5 rounded-xl bg-gradient-to-r from-violet-600 to-indigo-600 text-white font-bold text-sm tracking-wide hover:from-violet-500 hover:to-indigo-500 disabled:opacity-40 disabled:grayscale disabled:cursor-not-allowed transition-all shadow-lg hover:shadow-violet-500/25 active:scale-[0.98]"
                             >
                                 Restore History

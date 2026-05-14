@@ -3185,7 +3185,7 @@ export default function ProfilePanel({ isOpen = true, userId, roomId, onClose, o
                                     disabled={!hasMessages}
                                     className={`w-full flex items-center gap-4 p-3 rounded-lg transition-colors text-left ${
                                         hasMessages 
-                                            ? 'hover:bg-red-50 dark:hover:bg-slate-800/50 text-red-500 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-500/10' 
+                                            ? 'hover:bg-red-50 dark:hover:bg-red-500/10 text-red-500 dark:text-red-400' 
                                             : 'text-slate-300 dark:text-slate-600 cursor-not-allowed'
                                     }`}
                                 >
@@ -3201,7 +3201,7 @@ export default function ProfilePanel({ isOpen = true, userId, roomId, onClose, o
                                         actionReq: handleDeleteChat,
                                         destructive: true
                                     })}
-                                    className="w-full flex items-center gap-4 p-3 hover:bg-red-50 dark:hover:bg-slate-800/50 rounded-lg text-red-600 dark:text-red-500 hover:bg-red-50 dark:hover:bg-red-500/10 transition-colors text-left"
+                                    className="w-full flex items-center gap-4 p-3 hover:bg-red-50 dark:hover:bg-red-500/10 rounded-lg text-red-600 dark:text-red-500 transition-colors text-left"
                                 >
                                     <span className="material-symbols-outlined !leading-none">delete_forever</span>
                                     <span className="text-sm font-bold">Delete chat</span>
@@ -3259,7 +3259,7 @@ export default function ProfilePanel({ isOpen = true, userId, roomId, onClose, o
                                         actionReq: handleDeleteAccount,
                                         destructive: true
                                     })}
-                                    className="w-full flex items-center gap-4 p-3 hover:bg-red-50 dark:hover:bg-slate-800/50 rounded-lg text-red-600 dark:text-red-500 hover:bg-red-50 dark:hover:bg-red-500/10 transition-colors text-left"
+                                    className="w-full flex items-center gap-4 p-3 hover:bg-red-50 dark:hover:bg-red-500/10 rounded-lg text-red-600 dark:text-red-500 transition-colors text-left"
                                 >
                                     <span className="material-symbols-outlined !leading-none">no_accounts</span>
                                     <span className="text-sm font-bold">Delete Account</span>

@@ -1,43 +1,53 @@
 import db from './db';
-import { cryptoManager } from '../lib/crypto/CryptoManager';
+import { signalManager } from '../services/SignalManager'; // [NEW] Using Signal Engine
 
 /**
  * Shared message processing logic for both Dashboard (background) and ChatWindow (foreground).
  * Handles:
- * 1. Decryption (E2EE)
- * 2. Signature Verification (Coming soon)
+ * 1. Decryption (E2EE via Signal Protocol)
+ * 2. Signature Verification (Implicit in Signal)
  * 3. Reply Normalization
  */
 
 /**
- * Decrypts a message payload if it's encrypted.
- * Uses messageId (id or tempId) for deterministic salt derivation.
+ * Decrypts a message payload using Signal Protocol.
  */
 export const decryptPayload = async (msg) => {
     try {
         // [OPTIMIZATION] Skip if already decrypted OR not encrypted
         if (msg.isDecrypted || (msg.is_encrypted === false && msg.content)) return msg;
-        if (!msg.ciphertext || !msg.iv) return msg;
+        if (!msg.ciphertext) return msg;
+
+        // [SIGNAL] For Signal, we only need the sender's user ID and their ciphertext object
+        const senderId = String(msg.user_id || msg.sender_id || msg.senderId);
         
-        // Use tempId (socket), temp_id (DB), or message id for salt derivation
-        const messageId = msg.tempId || msg.temp_id || msg.id;
-        const roomId = msg.roomId || msg.room_id;
-        const keyVersion = msg.key_version || msg.keyVersion;
+        // Signal ciphertext expects an object with type and body. 
+        // We stored it as a JSON string in the database.
+        let signalCiphertext;
+        try {
+            if (typeof msg.ciphertext === 'string') {
+                if (msg.ciphertext.startsWith('{')) {
+                    signalCiphertext = JSON.parse(msg.ciphertext);
+                } else {
+                    // Fallback plaintext (base64)
+                    const fallbackContent = decodeURIComponent(escape(atob(msg.ciphertext)));
+                    return {
+                        ...msg,
+                        content: fallbackContent,
+                        plaintext_content: fallbackContent,
+                        isDecrypted: true
+                    };
+                }
+            } else {
+                signalCiphertext = msg.ciphertext;
+            }
+        } catch (e) {
+            console.error('[Hydrator] Error processing ciphertext format:', e);
+            return msg;
+        }
 
-        // Try to get key from cache/DB
-        let roomKeyObj = await cryptoManager.getRoomKey(roomId, keyVersion);
-        const roomKey = roomKeyObj?.key || roomKeyObj; // Handle both object and raw key
-
-        // Actually decrypt
-        const decryptedContent = await cryptoManager.decryptMessage(
-            msg.ciphertext,
-            msg.iv,
-            messageId,
-            roomKey,
-            msg.distribution_headers,
-            roomId,
-            keyVersion
-        );
+        // Actually decrypt using the Signal Manager
+        const decryptedContent = await signalManager.decryptMessage(senderId, signalCiphertext);
 
         if (decryptedContent) {
             return {
@@ -47,11 +57,11 @@ export const decryptPayload = async (msg) => {
                 is_encrypted: false // Marker for UI
             };
         }
-        
-        return msg; // Return as-is if decryption failed (waiting for key etc)
+
+        return msg; // Return as-is if decryption failed (waiting for session, etc.)
     } catch (err) {
-        console.error('[Hydrator] Decryption failed:', err);
-        return msg;
+        console.error('[Hydrator] Signal Decryption failed:', err);
+        return msg; // [FIX] Ensure we always return the message even on error
     }
 };
 
@@ -130,29 +140,38 @@ export const processIncomingMessage = async (msg) => {
     // [NEW] If replyTo is already provided by server, use it directly
     if (processed.replyTo) {
         // Check if replyTo is encrypted and needs decryption
-        if (processed.replyTo.ciphertext && processed.replyTo.iv) {
+        if (processed.replyTo.ciphertext) {
             try {
-                const replyMsgId = processed.replyTo.temp_id || processed.replyTo.id;
-                const roomId = processed.room_id;
-                const keyVersion = processed.replyTo.key_version;
+                const replySenderId = String(processed.replyTo.user_id || processed.replyTo.sender_id || processed.replyTo.senderId);
                 
-                let roomKeyObj = await cryptoManager.getRoomKey(roomId, keyVersion);
-                const roomKey = roomKeyObj?.key || roomKeyObj;
-                
-                if (roomKey) {
-                    const decryptedReplyContent = await cryptoManager.decryptMessage(
-                        processed.replyTo.ciphertext,
-                        processed.replyTo.iv,
-                        replyMsgId,
-                        roomKey,
-                        null,
-                        roomId,
-                        keyVersion
-                    );
-                    
+                let replyCiphertext;
+                try {
+                    if (typeof processed.replyTo.ciphertext === 'string') {
+                        if (processed.replyTo.ciphertext.startsWith('{')) {
+                            replyCiphertext = JSON.parse(processed.replyTo.ciphertext);
+                        } else {
+                            replyCiphertext = null;
+                            const fallbackContent = decodeURIComponent(escape(atob(processed.replyTo.ciphertext)));
+                            const preview = fallbackContent.length > 80       
+                                ? fallbackContent.slice(0, 80) + '...'        
+                                : fallbackContent;
+                            processed.replyTo.text = preview;
+                            processed.replyTo.content = fallbackContent;      
+                            processed.replyTo.plaintext_content = fallbackContent;
+                        }
+                    } else {
+                        replyCiphertext = processed.replyTo.ciphertext;
+                    }
+                } catch (e) {
+                    console.error('[Hydrator] Invalid Signal reply ciphertext format');
+                }
+
+                if (replyCiphertext) {
+                    const decryptedReplyContent = await signalManager.decryptMessage(replySenderId, replyCiphertext);
+
                     if (decryptedReplyContent) {
-                        const preview = decryptedReplyContent.length > 80 
-                            ? decryptedReplyContent.slice(0, 80) + '...' 
+                        const preview = decryptedReplyContent.length > 80
+                            ? decryptedReplyContent.slice(0, 80) + '...'
                             : decryptedReplyContent;
                         processed.replyTo.text = preview;
                         processed.replyTo.content = decryptedReplyContent;
@@ -164,7 +183,7 @@ export const processIncomingMessage = async (msg) => {
                 console.error('[Hydrator] Failed to decrypt reply:', err);
             }
         }
-        
+
         // Use content as text fallback if text is still empty
         if (!processed.replyTo.text && processed.replyTo.content) {
             processed.replyTo.text = processed.replyTo.content.length > 80 
@@ -205,3 +224,4 @@ export const processIncomingMessage = async (msg) => {
     }
     return processed;
 };
+

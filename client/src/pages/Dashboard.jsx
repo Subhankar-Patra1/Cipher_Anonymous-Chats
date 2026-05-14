@@ -33,6 +33,7 @@ import { AiChatProvider } from '../context/AiChatContext';
 import notificationSound from '../assets/notification.ogg';
 import sentSound from '../assets/sent.ogg';
 import { cryptoManager } from '../lib/crypto/CryptoManager';
+import { signalManager } from '../services/SignalManager'; // [NEW] Added SignalManager
 import { CallProvider } from '../context/CallContext';
 import CallModal from '../components/CallModal';
 
@@ -670,19 +671,33 @@ export default function Dashboard() {
             transports: ['websocket', 'polling'] 
         });
 
-        newSocket.on('connect', () => {
+        newSocket.on('connect', async () => {
             console.log(`[Dashboard] Socket connected! ID=${newSocket.id} DeviceID=${deviceId}`);
             if (!deviceId) {
                 console.error('[Dashboard] Socket connected WITHOUT DeviceID! Sync will fail.');
             }
+
+            // [SIGNAL] Initialize local keys and upload them to the server
+            try {
+                const bundle = await signalManager.initializeStore();
+                console.log('[Signal] Keys successfully generated locally. Uploading to server...');
+                
+                await fetch(`${import.meta.env.VITE_API_URL}/api/keys/upload`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${token}`
+                    },
+                    body: JSON.stringify({
+                        deviceId: deviceId,
+                        bundle: bundle
+                    })
+                });
+                console.log('[Signal] Public keys successfully uploaded to server!');
+            } catch (err) {
+                console.error('[Signal] Failed to initialize and upload keys:', err);
+            }
         });
-
-        newSocket.on('connect_error', (err) => {
-            console.error('[DEBUG] Socket connection error:', err.message);
-        });
-
-        // Helper moved to component scope
-
 
         newSocket.on('room_added', (newRoom) => {
             console.log('[DEBUG-CLIENT] room_added received:', newRoom);
@@ -921,14 +936,14 @@ export default function Dashboard() {
                            room.last_message_status === 'sending');
                       
                       // [FIX] Prevent older messages from overwriting newer optimistic updates
-                      // Use server timestamps (created_at) for comparison to avoid client/server time drift
-                      const incomingMsgTime = new Date(msg.created_at).getTime();
-                      const currentMsgTime = room.last_message_created_at ? new Date(room.last_message_created_at).getTime() : 0;
-                      const isOlderMessage = incomingMsgTime < currentMsgTime && !isSameMessage && !isOwnMessageEcho;
+                      // Instead of timestamp comparison which is flaky, check message ID
+                      const isNewer = !room.last_message_id || 
+                          String(msg.id) !== String(room.last_message_id);
+                          
+                      const isOlderMessage = room.last_message_status !== 'sending' && !isNewer && !isSameMessage && !isOwnMessageEcho;
                       
                       if (isOlderMessage) {
                           // This is an older message arriving late, don't update sidebar preview
-                          // But still update official_last_message for reference if needed
                           updatedRooms[roomIndex] = room;
                           return updatedRooms;
                       }
@@ -2175,7 +2190,7 @@ export default function Dashboard() {
                 room.last_message_sender_id = user.id;
                 room.last_message_status = 'sending'; 
                 room.last_message_at = new Date().toISOString(); 
-                room.last_message_created_at = message.created_at || new Date().toISOString(); // [FIX] Set created_at for reaction comparison
+                room.last_message_created_at = message.created_at || new Date().toISOString(); // [FIX] Set created_at correctly
                 room.last_message_id = message.tempId || message.id;
                 room.last_message_file_name = message.file_name || null; // [FIX] Include file name
                 
@@ -2557,7 +2572,7 @@ export default function Dashboard() {
                                 </button>
                                 <button 
                                     onClick={() => setShowJoinModal(true)}
-                                    className="px-6 py-3 rounded-xl bg-white dark:bg-slate-800 hover:bg-gray-50 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 font-medium border border-slate-200 dark:border-slate-700 shadow-sm transition-all flex items-center gap-2"
+                                    className="px-6 py-3 rounded-xl bg-white dark:bg-[#2A2A35] hover:bg-gray-50 dark:hover:bg-[#3F3F4A] text-slate-700 dark:text-slate-200 font-medium border border-slate-200 dark:border-[#404049] shadow-sm hover:shadow-md dark:shadow-black/20 dark:hover:shadow-black/60 hover:border-slate-300 dark:hover:border-[#5C5C66] transition-all transform hover:-translate-y-0.5 flex items-center gap-2"
                                 >
                                     <span className="material-symbols-outlined text-xl">login</span>
                                     Join Room
@@ -2895,9 +2910,9 @@ export default function Dashboard() {
                                     >
                                         Approve and Sync
                                     </button>
-                                    <button 
+                                    <button
                                         onClick={handleDenySyncRequest}
-                                        className="w-full py-3 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 font-bold hover:bg-slate-200 dark:hover:bg-slate-700 transition-all font-bold"
+                                        className="w-full py-3 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 font-bold hover:bg-slate-200 dark:hover:bg-slate-700 transition-all"
                                     >
                                         Deny Request
                                     </button>
@@ -2937,7 +2952,7 @@ export default function Dashboard() {
                 const freshRooms = await fetchRooms(true);
                 
                 // Wait a tick for React to re-render with new rooms AND for IndexedDB writes to complete
-                await new Promise(r => setTimeout(r, 200));
+                await new Promise(r => setTimeout(r, 600));
                 
                 // [FIX] NOW dispatch keys-updated so ChatWindow can re-decrypt from IndexedDB
                 // This must happen AFTER fetchRooms because ChatWindow reads from IndexedDB
@@ -2953,8 +2968,6 @@ export default function Dashboard() {
                 setHasSkippedSync(false);
                 setJustRestored(true); // Trigger background animation
                 
-                // Close modal AFTER decryption is complete
-                setShowRestoreModal(false);
                 setHistorySynced(true);
                 localStorage.setItem('history_synced', 'true');
                 showNotification('Chat history restored!', 'success');

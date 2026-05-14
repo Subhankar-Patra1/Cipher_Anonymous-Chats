@@ -377,7 +377,7 @@ export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone,
         : (msg.viewed_by?.includes(user?.id));
 
     // [NEW] Retry Decryption UI
-    if (msg.content === '🔒 Waiting for key...' || msg.content === '🔒 Decryption Failed') {
+    if (msg.content === '🔒 Waiting for this message...' || msg.content === '🔒 Decryption Failed') {
         // [NEW] Hide messages if user skipped sync (user doesn't want to see "Waiting for key" all over)
         if (hasSkippedSync) return null;
 
@@ -403,7 +403,7 @@ export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone,
                            Encrypted Message
                         </span>
                         <span className="text-xs opacity-75">
-                            {msg.content === '🔒 Decryption Failed' ? 'Decryption failed' : 'Waiting for key...'}
+                            {msg.content === '🔒 Decryption Failed' ? 'Decryption failed' : 'Waiting for this message...'}
                         </span>
                     </div>
                     
@@ -563,10 +563,8 @@ export const MessageItem = ({ msg, isMe, onReply, onDelete, onDeleteForEveryone,
                     style={(isMe && bubbleColor && !(((linkToBigEmoji(msg.content) || isSingleEmoji(msg.content) || isSpoilerOnlyEmojis(msg.content)) && !msg.replyTo) || msg.type === 'group_invite')) ? { backgroundColor: bubbleColor, borderColor: 'transparent' } : {}}
                     >
                         {(msg.isSkeleton || (!msg.isDecrypted && msg.ciphertext && !msg.content && msg.type !== 'system')) ? (
-                            <div className="flex gap-1 py-1">
-                                <span className="w-2 h-2 rounded-full bg-slate-400 dark:bg-slate-500 animate-[bounce_1.4s_infinite_0ms]"></span>
-                                <span className="w-2 h-2 rounded-full bg-slate-400 dark:bg-slate-500 animate-[bounce_1.4s_infinite_200ms]"></span>
-                                <span className="w-2 h-2 rounded-full bg-slate-400 dark:bg-slate-500 animate-[bounce_1.4s_infinite_400ms]"></span>
+                            <div className="py-1 flex items-center gap-2 opacity-80">
+                                <span className="text-sm italic">Waiting for this message...</span>
                             </div>
                         ) : (
                             <>
@@ -2614,7 +2612,7 @@ export default function MessageList({
                              if (!isSafe) return null; // Hide if not safe
 
                              // Double check for legacy placeholder text just in case flags are missing
-                             if (!msg.content || msg.content === '🔒 Waiting for key...' || msg.content === '🔒 Decryption Failed') return null;
+                             if (!msg.content || msg.content === '🔒 Waiting for this message...' || msg.content === '🔒 Decryption Failed') return null;
                         }
                     }
                     const isSystem = msg.type === 'system';

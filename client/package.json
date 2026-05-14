@@ -12,6 +12,7 @@
   "dependencies": {
     "@huggingface/transformers": "^3.8.1",
     "@lottiefiles/dotlottie-react": "^0.17.12",
+    "@privacyresearch/libsignal-protocol-typescript": "^0.0.16",
     "date-fns": "^4.1.0",
     "dexie": "^4.2.1",
     "dexie-react-hooks": "^4.2.0",
@@ -21,8 +22,10 @@
     "html5-qrcode": "^2.3.8",
     "idb": "^8.0.3",
     "katex": "^0.16.27",
+    "localforage": "^1.10.0",
     "lottie-react": "^2.4.1",
     "lucide-react": "^0.562.0",
+    "qr-code-styling": "^1.9.2",
     "qrcode": "^1.5.4",
     "qrcode.react": "^4.2.0",
     "react": "^18.3.1",

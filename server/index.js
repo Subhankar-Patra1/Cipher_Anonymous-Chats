@@ -155,8 +155,8 @@ app.use('/api/messages', messageRoutes);
 const tenorRoutes = require('./tenor');
 app.use('/api/gifs', tenorRoutes);
 
-const pollsRoutes = require('./polls');
-app.use('/api/polls', pollsRoutes);
+  const keysRoutes = require('./routes/keys');
+  app.use('/api/keys', keysRoutes);
 
 const todosRoutes = require('./todos');
 app.use('/api/todos', todosRoutes);
@@ -757,7 +757,7 @@ io.on('connection', async (socket) => {
         try {
             // [NEW] Enforce Instagram-style limit
             try {
-                await checkMessageLimit(roomId, socket.user.id);
+                await checkMessageLimit(roomId, socket.user.id, meta ? meta.type : 'text');
             } catch (e) {
                 if (e.message === 'LIMIT_REACHED') {
                     safeCallback({ status: 'error', error: 'Invite sent. Wait for acceptance to send more messages.' });
@@ -838,7 +838,7 @@ io.on('connection', async (socket) => {
                             tempId || null,
                             signature || null,
                             signatureVersion || 1,
-                            senderDeviceId || null,
+                            senderDeviceId === 'unknown' ? null : senderDeviceId || null,
                             distribution_headers || null,
                             mention_user_ids || null,
                             created_at || null
@@ -1714,3 +1714,4 @@ const PORT = 5000;
 server.listen(PORT, () => {
     console.log(`Server running on port ${PORT}`);
 });
+

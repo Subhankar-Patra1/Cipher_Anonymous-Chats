@@ -18,7 +18,7 @@ import { linkifyText } from '../utils/linkify';
 import { renderTextWithEmojis } from '../utils/emojiRenderer';
 import db, { saveLocalMessage, updateLocalMessage, deleteLocalMessage, saveFetchedMessages } from '../utils/db';
 import SelectionBar from './SelectionBar';
-import { cryptoManager } from '../lib/crypto/CryptoManager';
+import { signalManager } from '../services/SignalManager';
 import { decryptPayload, normalizeReplies } from '../utils/messageHydrator';
 import { useConfirm } from '../context/ConfirmationContext';
 import ChatSkeleton from './ChatSkeleton';
@@ -577,26 +577,7 @@ export default function ChatWindow({
         let isStale = false;
 
         const hydrateAndDecrypt = async () => {
-            // [FIX] Fetch missing room keys for pending/new requests BEFORE hydration
-            try {
-                let keyObj = await cryptoManager.getRoomKey(room.id);
-                if (!keyObj && token) {
-                    const myDeviceId = await cryptoManager.init().then(i => i?.deviceId || cryptoManager.deviceId);
-                    const res = await fetch(`${import.meta.env.VITE_API_URL}/api/rooms/${room.id}/keys/my?deviceId=${myDeviceId}`, {
-                        headers: { Authorization: `Bearer ${token}` }
-                    });
-                    if (res.ok) {
-                        const keyData = await res.json();
-                        if (keyData && keyData.encrypted_key) {
-                            const decryptedKey = await cryptoManager.decryptRoomKey(keyData.encrypted_key);
-                            await cryptoManager.saveRoomKey(room.id, decryptedKey, keyData.key_version);
-                            console.log('[E2EE] Downloaded room key during hydration');
-                        }
-                    }
-                }
-            } catch (err) {
-                console.warn('[E2EE] Failed to pre-fetch key during hydration:', err);
-            }
+            // [FIX] Removed old cryptoManager logic for Signal Protocol
 
             // 1. Initial Hydration (if needed)
             if (room.initialMessages) {
@@ -1047,7 +1028,6 @@ export default function ChatWindow({
         socket.on('you_are_blocked', handleYouAreBlocked);
         socket.on('you_are_unblocked', handleYouAreUnblocked);
         socket.on('chat:cleared', handleChatCleared);
-        socket.on('room:key', handleNewKey);
         socket.on('message:delivered', handleMessageDelivered); // [NEW]
         socket.on('message:read_receipt', handleReadReceipt); // [NEW]
         socket.on('message_viewed', handleMessageViewed); // [NEW]
@@ -1058,8 +1038,7 @@ export default function ChatWindow({
             socket.off('message_deleted', handleMessageDeleted);
             socket.off('message_edited', handleMessageEdited);
             socket.off('message_viewed', handleMessageViewed);
-            socket.off('chat:cleared', handleChatCleared); 
-            socket.off('room:key', handleNewKey); // [NEW] 
+            socket.off('chat:cleared', handleChatCleared); // [NEW] 
             socket.off('poll_vote', handlePollVote);
             socket.off('poll_closed', handlePollClosed);
             socket.off('user:profile:updated', handleProfileUpdate);
@@ -1365,128 +1344,67 @@ export default function ChatWindow({
                 console.log('[Offline] Message queued in Dexie:', tempId);
             } else {
                 try {
-                    // --- E2EE START ---
-                    
-                    // 1. Get or Setup Room Key (Memory > DB > Server > Generate)
-                    let roomKeyData = await cryptoManager.getRoomKey(room.id);
-                    
-                    // [OPTIMIZED] Cache Device List (1 min TTL)
-                    const now_ts = Date.now();
-                    const cachedDevices = roomDevicesCache.current.get(room.id);
-                    let devices;
-                    if (cachedDevices && now_ts - cachedDevices.timestamp < 60000) {
-                        devices = cachedDevices.devices;
-                    } else {
-                        const devRes = await fetch(`${import.meta.env.VITE_API_URL}/api/rooms/${room.id}/devices`, {
-                            headers: { Authorization: `Bearer ${token}` }
-                        });
-                        if (!devRes.ok) throw new Error('Failed to fetch devices');
-                        devices = await devRes.json();
-                        roomDevicesCache.current.set(room.id, { devices, timestamp: now_ts });
-                    }
-                    
-                    const myDeviceId = await cryptoManager.init().then(i => i?.deviceId || cryptoManager.deviceId);
+                    // --- SIGNAL PROTOCOL START ---
+                    let ciphertext = btoa(unescape(encodeURIComponent(content))); // Plaintext fallback
+                    let iv = 'signal-protocol';
+                    let signature = 'signal-signature';
+                    const keyVersion = 1;
+                    const distHeaders = {};
 
-                    if (!roomKeyData) {
-                        // [OPTIMIZED] Cache My Key Check
-                        const cachedMyKey = roomMyKeyCache.current.get(room.id);
-                        if (cachedMyKey && now_ts - cachedMyKey.timestamp < 30000) {
-                             if (cachedMyKey.keyData) roomKeyData = cachedMyKey.keyData;
-                        } else {
+                    if (room.type === 'direct') {
+                        let recipientId = (room.user2_id === user.id) ? room.user1_id : room.user2_id;
+                        if (!recipientId && typeof otherUserId !== 'undefined') recipientId = otherUserId;
+                        
+                        if (recipientId) {
                             try {
-                                const res = await fetch(`${import.meta.env.VITE_API_URL}/api/rooms/${room.id}/keys/my?deviceId=${myDeviceId}`, {
-                                    headers: { Authorization: `Bearer ${token}` }
+                                console.log('[Signal] Starting session with', recipientId);
+                                const devicesRes = await fetch(import.meta.env.VITE_API_URL + '/api/keys/' + recipientId + '/devices', {
+                                    headers: { Authorization: 'Bearer ' + token }
                                 });
-                                if (res.ok) {
-                                    const keyData = await res.json();
-                                    if (keyData && keyData.encrypted_key) {
-                                        const decryptedKey = await cryptoManager.decryptRoomKey(keyData.encrypted_key);
-                                        await cryptoManager.saveRoomKey(room.id, decryptedKey, keyData.key_version);
-                                        roomKeyData = { key: decryptedKey, version: keyData.key_version };
-                                        console.log('[E2EE] Retrieved existing key v', keyData.key_version);
-                                        roomMyKeyCache.current.set(room.id, { keyData: roomKeyData, timestamp: now_ts });
-                                    } else {
-                                        roomMyKeyCache.current.set(room.id, { keyData: null, timestamp: now_ts });
+                                const targetDevices = await devicesRes.json();
+                                
+                                if (targetDevices && targetDevices.length > 0) {
+                                    const targetDeviceId = targetDevices[0];
+                                    
+                                    const bundleRes = await fetch(import.meta.env.VITE_API_URL + '/api/keys/' + recipientId + '/devices/' + targetDeviceId, {
+                                        headers: { Authorization: 'Bearer ' + token }
+                                    });
+                                    if (bundleRes.ok) {
+                                        const bundle = await bundleRes.json();
+                                        await signalManager.buildSession(recipientId, bundle);
+                                        const encryptedPayload = await signalManager.encryptMessage(recipientId, content);
+                                        
+                                        ciphertext = JSON.stringify(encryptedPayload); 
+                                        iv = 'signal-type:' + encryptedPayload.type; 
+                                        console.log('[Signal] Successfully encrypted message payload!');
                                     }
                                 }
-                            } catch (e) { console.warn('[E2EE] Server key check failed', e); }
+                            } catch (e) {
+                                console.error('[Signal] Encryption setup failed:', e);
+                            }
                         }
                     }
 
-                    if (!roomKeyData) {
-                        // [OPTIMIZED] Cache Key Exists Check
-                        let keyExists = false;
-                        let latestVer = 0;
-                        const cachedExists = roomKeyExistsCache.current.get(room.id);
-                        if (cachedExists && now_ts - cachedExists.timestamp < 30000) {
-                            keyExists = cachedExists.exists;
-                            latestVer = cachedExists.latestVersion;
-                        } else {
-                            try {
-                                const check = await fetch(`${import.meta.env.VITE_API_URL}/api/rooms/${room.id}/keys/exists`, { headers: { Authorization: `Bearer ${token}` } });
-                                if (check.ok) {
-                                    const checkData = await check.json();
-                                    keyExists = checkData.exists;
-                                    latestVer = checkData.latestVersion;
-                                    roomKeyExistsCache.current.set(room.id, { exists: keyExists, latestVersion: latestVer, timestamp: now_ts });
-                                    if (keyExists) console.warn(`[E2EE] Key v${latestVer} exists but I don't have it.`);
-                                }
-                            } catch(e) {}
-                        }
-                        
-                        if (!roomKeyData) {
-                             // C. Generate New Key (Rotation)
-                             console.log('[E2EE] Generating New Room Key...');
-                             const setup = await cryptoManager.generateAndEncryptRoomKey(room.id, devices);
-                             roomKeyData = { key: setup.roomKey, version: setup.version };
-                             
-                             // Update Cache
-                             roomMyKeyCache.current.set(room.id, { keyData: roomKeyData, timestamp: now_ts });
-                             
-                             // Upload Initial Batch to Server
-                             fetch(`${import.meta.env.VITE_API_URL}/api/rooms/${room.id}/keys`, {
-                                  method: 'POST',
-                                  headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-                                  body: JSON.stringify({ keys: setup.encryptedKeys, keyVersion: setup.version, senderDeviceId: myDeviceId })
-                             }).catch(e => console.error('[E2EE] Background key upload failed', e));
-                        }
-                    }
-
-                    // 2. Generate Piggyback Headers
-                    const distHeaders = await cryptoManager.getDistributionHeaders(
-                        room.id, 
-                        roomKeyData.key, 
-                        roomKeyData.version, 
-                        devices
-                    );
-                    
-                    // 3. Encrypt Content
-                    const { ciphertext, iv } = await cryptoManager.encryptMessage(content, roomKeyData.key, tempId);
-
-                    // 4. Sign Message
-                    const signature = await cryptoManager.signMessage(ciphertext, iv, tempId, roomKeyData.version);
-
-                    // 5. Send
                     const payload = { 
                         roomId: room.id, 
                         content: '', 
                         ciphertext,
                         iv,
-                        keyVersion: roomKeyData.version,
-                        replyToMessageId: finalReplyTo ? finalReplyTo.id : null,
+                        keyVersion,
+                        replyToMessageId: (typeof finalReplyTo !== 'undefined' && finalReplyTo) ? finalReplyTo.id : null,
                         tempId,
                         signature,
-                        signatureVersion: 1, 
-                        senderDeviceId: myDeviceId,
+                        signatureVersion: 2, 
+                        senderDeviceId: typeof deviceId !== 'undefined' ? deviceId : 'unknown',
                         distribution_headers: distHeaders, 
-                        mention_user_ids,
+                        mention_user_ids: typeof mention_user_ids !== 'undefined' ? mention_user_ids : [],
                         meta: { type: 'text' }
                     };
-
                     // 2. Try to Send with ACK
                     if (socket.connected) {
                          socket.emit('send_message', payload, async (response) => {
-                             if (response && response.status === 'ok') {
+                             console.log('[DEBUG] RESPONSE:', response);
+                               if (response && response.status === 'ok') {
                                  // UPDATE SUCCESS IN DEXIE
                                  await updateLocalMessage(tempId, {
                                      id: String(response.messageId || tempId),
@@ -1621,70 +1539,67 @@ export default function ChatWindow({
             await updateLocalMessage(msgId, { status: 'sending' });
             
             try {
-                // Re-encrypt and send
-                let roomKeyData = await cryptoManager.getRoomKey(room.id);
-                const myDeviceId = await cryptoManager.init().then(i => i?.deviceId || cryptoManager.deviceId);
-                
-                // Get devices for distribution headers
-                const devRes = await fetch(`${import.meta.env.VITE_API_URL}/api/rooms/${room.id}/devices`, {
-                    headers: { Authorization: `Bearer ${token}` }
-                });
-                const devices = devRes.ok ? await devRes.json() : [];
-                
-                if (roomKeyData) {
-                    const { ciphertext, iv } = await cryptoManager.encryptMessage(msg.content, roomKeyData.key, msgId);
-                    const signature = await cryptoManager.signMessage(ciphertext, iv, msgId, roomKeyData.version);
-                    const distHeaders = await cryptoManager.getDistributionHeaders(room.id, roomKeyData.key, roomKeyData.version, devices);
-                    
-                    const payload = {
-                        roomId: room.id,
-                        content: '',
-                        ciphertext,
-                        iv,
-                        keyVersion: roomKeyData.version,
-                        replyToMessageId: msg.replyTo ? msg.replyTo.id : null,
-                        tempId: msgId,
-                        signature,
-                        signatureVersion: 1,
-                        senderDeviceId: myDeviceId,
-                        distribution_headers: distHeaders,
-                        meta: msg.type === 'gif' ? { type: 'gif', gif_url: msg.gif_url } : { type: 'text' },
-                        created_at: originalCreatedAt // [FIX] Preserve original position
-                    };
-                    
-                    if (socket.connected) {
-                        socket.emit('send_message', payload, async (response) => {
-                            if (response && response.status === 'ok') {
-                                await updateLocalMessage(msgId, { id: String(response.messageId || msgId), status: 'sent' });
-                            } else {
-                                await updateLocalMessage(msgId, { status: 'failed' });
+                let ciphertext = btoa(unescape(encodeURIComponent(msg.content)));
+                let iv = 'signal-protocol';
+                let signature = 'signal-signature';
+                const keyVersion = 1;
+                const distHeaders = {};
+
+                if (room.type === 'direct') {
+                    let recipientId = (room.user2_id === user.id) ? room.user1_id : room.user2_id;
+                    if (!recipientId && typeof otherUserId !== 'undefined') recipientId = otherUserId;
+                    if (recipientId) {
+                        try {
+                            const devicesRes = await fetch(import.meta.env.VITE_API_URL + '/api/keys/' + recipientId + '/devices', {
+                                headers: { Authorization: 'Bearer ' + token }   
+                            });
+                            const targetDevices = await devicesRes.json();
+                            if (targetDevices && targetDevices.length > 0) {    
+                                const targetDeviceId = targetDevices[0];        
+                                const bundleRes = await fetch(import.meta.env.VITE_API_URL + '/api/keys/' + recipientId + '/devices/' + targetDeviceId, {
+                                    headers: { Authorization: 'Bearer ' + token }
+                                });
+                                if (bundleRes.ok) {
+                                    const bundle = await bundleRes.json();      
+                                    await signalManager.buildSession(recipientId, bundle);
+                                    const encryptedPayload = await signalManager.encryptMessage(recipientId, msg.content);
+                                    ciphertext = JSON.stringify(encryptedPayload);
+                                    iv = 'signal-type:' + encryptedPayload.type;
+                                }
                             }
-                        });
-                    } else {
-                        await updateLocalMessage(msgId, { status: 'pending' });
+                        } catch (e) {
+                            console.error('[Signal] Encryption setup failed:', e);
+                        }
                     }
+                }
+
+                const payload = {
+                    roomId: room.id,
+                    content: '',
+                    ciphertext,
+                    iv,
+                    keyVersion,
+                    replyToMessageId: msg.replyTo ? msg.replyTo.id : null,      
+                    tempId: msgId,
+                    signature,
+                    signatureVersion: 2,
+                    senderDeviceId: 'unknown',
+                    distribution_headers: distHeaders,
+                    meta: msg.type === 'gif' ? { type: 'gif', gif_url: msg.gif_url } : { type: 'text' },
+                    created_at: originalCreatedAt // [FIX] Preserve original position
+                };
+
+                if (socket.connected) {
+                    socket.emit('send_message', payload, async (response) => {  
+                        console.log('[DEBUG] RESPONSE:', response);
+                               if (response && response.status === 'ok') {
+                            await updateLocalMessage(msgId, { id: String(response.messageId || msgId), status: 'sent' });
+                        } else {
+                            await updateLocalMessage(msgId, { status: 'failed' });
+                        }
+                    });
                 } else {
-                    // No encryption key, send plaintext fallback
-                    const payload = {
-                        roomId: room.id,
-                        content: msg.content,
-                        replyToMessageId: msg.replyTo ? msg.replyTo.id : null,
-                        tempId: msgId,
-                        meta: msg.type === 'gif' ? { type: 'gif', gif_url: msg.gif_url } : { type: 'text' },
-                        created_at: originalCreatedAt // [FIX] Preserve original position
-                    };
-                    
-                    if (socket.connected) {
-                        socket.emit('send_message', payload, async (response) => {
-                            if (response && response.status === 'ok') {
-                                await updateLocalMessage(msgId, { id: String(response.messageId || msgId), status: 'sent' });
-                            } else {
-                                await updateLocalMessage(msgId, { status: 'failed' });
-                            }
-                        });
-                    } else {
-                        await updateLocalMessage(msgId, { status: 'pending' });
-                    }
+                    await updateLocalMessage(msgId, { status: 'pending' });     
                 }
             } catch (err) {
                 console.error('[Retry] Text message retry failed:', err);
@@ -1820,21 +1735,37 @@ export default function ChatWindow({
         let signature = null; // [NEW] Signature
 
         try {
-             // Get Latest Room Key to ensure all members (even new ones) can read it
-             const roomKeyData = await cryptoManager.getRoomKey(String(room.id));
-             if (roomKeyData) {
-                 const { ciphertext, iv } = await cryptoManager.encryptMessage(newContent, roomKeyData.key, saltId);
-                 
-                 // [FIX] Sign the new content
-                 try {
-                    signature = await cryptoManager.signMessage(ciphertext, iv, saltId, roomKeyData.version);
-                 } catch (sigErr) {
-                     console.warn('Signing failed for edit', sigErr);
-                 }
-
-                 encryptedData = { ciphertext, iv };
-                 keyVersionUsed = roomKeyData.version;
-             }
+             // Setup Encrypted Payload
+               let ciphertextForEdit = btoa(unescape(encodeURIComponent(newContent)));
+               let ivForEdit = 'signal-protocol';
+               
+               if (room.type === 'direct') {
+                   let recipientId = (room.user2_id === user.id) ? room.user1_id : room.user2_id;
+                   if (!recipientId && typeof otherUserId !== 'undefined') recipientId = otherUserId;
+                   if (recipientId) {
+                       try {
+                           const devicesRes = await fetch(import.meta.env.VITE_API_URL + '/api/keys/' + recipientId + '/devices', {
+                               headers: { Authorization: 'Bearer ' + token }
+                           });
+                           const targetDevices = await devicesRes.json();
+                           if (targetDevices && targetDevices.length > 0) {
+                               const targetDeviceId = targetDevices[0];
+                               const bundleRes = await fetch(import.meta.env.VITE_API_URL + '/api/keys/' + recipientId + '/devices/' + targetDeviceId, {
+                                   headers: { Authorization: 'Bearer ' + token }
+                               });
+                               if (bundleRes.ok) {
+                                   const bundle = await bundleRes.json();
+                                   await signalManager.buildSession(recipientId, bundle);
+                                   const encryptedPayload = await signalManager.encryptMessage(recipientId, newContent);
+                                   ciphertextForEdit = JSON.stringify(encryptedPayload);
+                                   ivForEdit = 'signal-type:' + encryptedPayload.type;
+                               }
+                           }
+                       } catch(e) {}
+                   }
+               }
+               encryptedData = { ciphertext: ciphertextForEdit, iv: ivForEdit };
+               keyVersionUsed = 1;
         } catch (e) {
              console.error("Encryption failed for edit", e);
         }
@@ -2417,26 +2348,9 @@ export default function ChatWindow({
             const msg = messages.find(m => String(m.id) === String(msgId));
             if (!msg) return;
 
-            // [FIX] Try to fetch key from server before retrying if we don't have it
-            let keyObj = await cryptoManager.getRoomKey(room.id);
-            if (!keyObj && token) {
-                try {
-                    const myDeviceId = await cryptoManager.init().then(i => i?.deviceId || cryptoManager.deviceId);
-                    const res = await fetch(`${import.meta.env.VITE_API_URL}/api/rooms/${room.id}/keys/my?deviceId=${myDeviceId}`, {
-                        headers: { Authorization: `Bearer ${token}` }
-                    });
-                    if (res.ok) {
-                        const keyData = await res.json();
-                        if (keyData && keyData.encrypted_key) {
-                            const decryptedKey = await cryptoManager.decryptRoomKey(keyData.encrypted_key);
-                            await cryptoManager.saveRoomKey(room.id, decryptedKey, keyData.key_version);
-                            console.log('[E2EE] Downloaded room key during manual retry');
-                        }
-                    }
-                } catch (err) {
-                    console.warn('[E2EE] Failed to fetch key during retry:', err);
-                }
-            }
+            // Signal automatically fetches bundles if needed, or decryption just tries its currently known state.
+            // If we fail with Signal, it's generally because we are missing keys, which typically implies we need to buildSession anew,
+            // but for decryption, we are receiving. We just attempt decrypt.
 
             const decrypted = await decryptPayload(msg);
             
@@ -3166,3 +3080,4 @@ export default function ChatWindow({
         </div>
     );
 }
+

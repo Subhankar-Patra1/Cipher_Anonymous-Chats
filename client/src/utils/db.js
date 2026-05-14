@@ -88,11 +88,19 @@ export const saveLocalMessage = async (message) => {
                 // Keep existing status if it's higher priority (more "advanced")
                 const finalStatus = existingPriority >= incomingPriority ? existing.status : message.status;
                 
+                // [FIX] Prevent overwriting decrypted content with un-hydrated server payloads
+                // ONLY keep existing plaintext if the ciphertext hasn't changed.
+                const isCiphertextMatching = !message.ciphertext || message.ciphertext === existing.ciphertext;
+                const mergedContent = (isCiphertextMatching && !message.content) ? existing.content : message.content;
+                const mergedPlaintext = (isCiphertextMatching && !message.plaintext_content) ? existing.plaintext_content : message.plaintext_content;
+                const mergedIsDecrypted = (isCiphertextMatching && typeof message.isDecrypted === 'undefined') ? existing.isDecrypted : message.isDecrypted;
+
                 await db.messages.update(existing.localId, { 
                     ...message, 
                     status: finalStatus,
-                    // Also preserve plaintext_content if already cached
-                    plaintext_content: message.plaintext_content || existing.plaintext_content
+                    content: mergedContent,
+                    plaintext_content: mergedPlaintext,
+                    isDecrypted: mergedIsDecrypted
                 });
                 return existing.localId;
             }
@@ -104,9 +112,17 @@ export const saveLocalMessage = async (message) => {
             const existing = await db.messages.where('tempId').equals(String(tempId)).first();
             if (existing) {
                 // Merge new data into existing (confirming Real ID, content updates, etc)
+                const isCiphertextMatching = !message.ciphertext || message.ciphertext === existing.ciphertext;
+                const mergedContent = (isCiphertextMatching && !message.content) ? existing.content : message.content;
+                const mergedPlaintext = (isCiphertextMatching && !message.plaintext_content) ? existing.plaintext_content : message.plaintext_content;
+                const mergedIsDecrypted = (isCiphertextMatching && typeof message.isDecrypted === 'undefined') ? existing.isDecrypted : message.isDecrypted;
+                
                 await db.messages.update(existing.localId, {
                     ...message,
-                    id: message.id ? String(message.id) : existing.id
+                    id: message.id ? String(message.id) : existing.id,
+                    content: mergedContent,
+                    plaintext_content: mergedPlaintext,
+                    isDecrypted: mergedIsDecrypted
                 });
                 return existing.localId;
             }

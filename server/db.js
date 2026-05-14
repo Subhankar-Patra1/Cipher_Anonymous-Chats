@@ -80,6 +80,8 @@ const createTables = async () => {
             ALTER TABLE users ADD COLUMN IF NOT EXISTS share_presence TEXT DEFAULT 'everyone'; -- 'everyone'|'contacts'|'nobody'
             ALTER TABLE users ADD COLUMN IF NOT EXISTS bio TEXT DEFAULT '';
 
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS group_add_privacy TEXT DEFAULT 'everyone';
+
             -- Migration for messages table
             ALTER TABLE messages ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'sent'; -- sent, delivered, seen
             ALTER TABLE messages ADD COLUMN IF NOT EXISTS delivered_to INTEGER[] DEFAULT '{}'; -- [NEW]
@@ -94,6 +96,49 @@ const createTables = async () => {
             
             -- [NEW] Block persistence: messages sent while blocked should never be shown to blocker
             ALTER TABLE messages ADD COLUMN IF NOT EXISTS blocked_for_user_id INTEGER REFERENCES users(id);
+            ALTER TABLE messages ADD COLUMN IF NOT EXISTS is_view_once BOOLEAN DEFAULT FALSE;
+            ALTER TABLE messages ADD COLUMN IF NOT EXISTS viewed_by INTEGER[] DEFAULT '{}';
+            ALTER TABLE messages ADD COLUMN IF NOT EXISTS mention_user_ids INTEGER[] DEFAULT '{}';
+            ALTER TABLE messages ADD COLUMN IF NOT EXISTS attachments JSONB;
+
+            -- [NEW] Missing Message Columns (Media, Files, E2EE, Location, AI)
+            ALTER TABLE messages ADD COLUMN IF NOT EXISTS image_url TEXT;
+            ALTER TABLE messages ADD COLUMN IF NOT EXISTS image_width INTEGER;
+            ALTER TABLE messages ADD COLUMN IF NOT EXISTS image_height INTEGER;
+            ALTER TABLE messages ADD COLUMN IF NOT EXISTS image_size INTEGER;
+            ALTER TABLE messages ADD COLUMN IF NOT EXISTS caption TEXT;
+            ALTER TABLE messages ADD COLUMN IF NOT EXISTS file_url TEXT;
+            ALTER TABLE messages ADD COLUMN IF NOT EXISTS file_name TEXT;
+            ALTER TABLE messages ADD COLUMN IF NOT EXISTS file_size INTEGER;
+            ALTER TABLE messages ADD COLUMN IF NOT EXISTS file_type TEXT;
+            ALTER TABLE messages ADD COLUMN IF NOT EXISTS file_extension TEXT;
+            ALTER TABLE messages ADD COLUMN IF NOT EXISTS gif_url TEXT;
+            ALTER TABLE messages ADD COLUMN IF NOT EXISTS preview_url TEXT;
+            ALTER TABLE messages ADD COLUMN IF NOT EXISTS width INTEGER;
+            ALTER TABLE messages ADD COLUMN IF NOT EXISTS height INTEGER;
+            ALTER TABLE messages ADD COLUMN IF NOT EXISTS latitude DOUBLE PRECISION;
+            ALTER TABLE messages ADD COLUMN IF NOT EXISTS longitude DOUBLE PRECISION;
+            ALTER TABLE messages ADD COLUMN IF NOT EXISTS address TEXT;
+            ALTER TABLE messages ADD COLUMN IF NOT EXISTS temp_id TEXT;
+            ALTER TABLE messages ADD COLUMN IF NOT EXISTS ciphertext TEXT;
+            ALTER TABLE messages ADD COLUMN IF NOT EXISTS iv TEXT;
+            ALTER TABLE messages ADD COLUMN IF NOT EXISTS salt TEXT;
+            ALTER TABLE messages ADD COLUMN IF NOT EXISTS key_version INTEGER;
+            ALTER TABLE messages ADD COLUMN IF NOT EXISTS meta_type TEXT;
+            ALTER TABLE messages ADD COLUMN IF NOT EXISTS signature TEXT;
+            ALTER TABLE messages ADD COLUMN IF NOT EXISTS signature_version INTEGER;
+            ALTER TABLE messages ADD COLUMN IF NOT EXISTS sender_device_id TEXT;
+            ALTER TABLE messages ADD COLUMN IF NOT EXISTS distribution_headers TEXT;
+            ALTER TABLE messages ADD COLUMN IF NOT EXISTS meta JSONB;
+            ALTER TABLE messages ADD COLUMN IF NOT EXISTS author_name TEXT;
+            ALTER TABLE messages ADD COLUMN IF NOT EXISTS is_pinned BOOLEAN DEFAULT FALSE;
+            ALTER TABLE messages ADD COLUMN IF NOT EXISTS pinned_by INTEGER REFERENCES users(id);
+            ALTER TABLE messages ADD COLUMN IF NOT EXISTS pinned_at TIMESTAMP;
+            ALTER TABLE messages ADD COLUMN IF NOT EXISTS pin_expires_at TIMESTAMP;
+
+            ALTER TABLE messages ADD COLUMN IF NOT EXISTS edited_at TIMESTAMP;
+            ALTER TABLE messages ADD COLUMN IF NOT EXISTS edit_version INTEGER DEFAULT 0;
+            ALTER TABLE messages ADD COLUMN IF NOT EXISTS poll_id INTEGER;
 
             -- Migration for users table (Avatars)
             ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_url TEXT;
@@ -116,10 +161,15 @@ const createTables = async () => {
                 UNIQUE(message_id, user_id)
             );
 
-            -- Migration for room_members (Chat Visibility)
+            -- Migration for room_members (Chat Visibility and Pinning)
             ALTER TABLE room_members ADD COLUMN IF NOT EXISTS cleared_at TIMESTAMP DEFAULT NULL;
             ALTER TABLE room_members ADD COLUMN IF NOT EXISTS is_hidden BOOLEAN DEFAULT FALSE;
             ALTER TABLE room_members ADD COLUMN IF NOT EXISTS is_archived BOOLEAN DEFAULT FALSE;
+            ALTER TABLE room_members ADD COLUMN IF NOT EXISTS is_pinned BOOLEAN DEFAULT FALSE;
+            ALTER TABLE room_members ADD COLUMN IF NOT EXISTS pinned_at TIMESTAMP;
+            ALTER TABLE room_members ADD COLUMN IF NOT EXISTS is_accepted BOOLEAN DEFAULT TRUE;
+            ALTER TABLE room_members ADD COLUMN IF NOT EXISTS media_cleared_at TIMESTAMP;
+            ALTER TABLE room_members ADD COLUMN IF NOT EXISTS last_read_message_id INTEGER;
 
             -- [NEW] Migration for rooms (Ordering)
             ALTER TABLE rooms ADD COLUMN IF NOT EXISTS last_message_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;
@@ -228,6 +278,7 @@ const createTables = async () => {
             ALTER TABLE users ADD COLUMN IF NOT EXISTS search_privacy TEXT DEFAULT 'everyone'; -- everyone, nobody
             ALTER TABLE users ADD COLUMN IF NOT EXISTS calls_privacy TEXT DEFAULT 'everyone'; -- everyone, contacts, nobody
             ALTER TABLE users ADD COLUMN IF NOT EXISTS group_add_privacy TEXT DEFAULT 'everyone'; -- everyone, contacts, nobody
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS read_receipts BOOLEAN DEFAULT TRUE;
             
             ALTER TABLE room_members ADD COLUMN IF NOT EXISTS is_accepted BOOLEAN DEFAULT TRUE;
             
@@ -363,12 +414,141 @@ const createTables = async () => {
             );
             CREATE INDEX IF NOT EXISTS idx_qr_login_sessions_token ON qr_login_sessions(token);
 
+            -- [NEW] User Devices
+            CREATE TABLE IF NOT EXISTS user_devices (
+                id TEXT PRIMARY KEY,
+                user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+                public_key TEXT NOT NULL,
+                signing_public_key TEXT,
+                label TEXT,
+                last_active_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+
+            -- [NEW] AI Sessions
+            CREATE TABLE IF NOT EXISTS ai_sessions (
+                user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+                room_id INTEGER REFERENCES rooms(id) ON DELETE CASCADE,
+                ai_name TEXT DEFAULT 'Sparkle AI',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (user_id, room_id)
+            );
+
+            -- [NEW] Message Deliveries
+            CREATE TABLE IF NOT EXISTS message_deliveries (
+                message_id INTEGER REFERENCES messages(id) ON DELETE CASCADE,
+                user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+                delivered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY(message_id, user_id)
+            );
+            
+            -- [NEW] Polls
+            CREATE TABLE IF NOT EXISTS polls (
+                id SERIAL PRIMARY KEY,
+                message_id INTEGER REFERENCES messages(id) ON DELETE CASCADE,
+                room_id INTEGER REFERENCES rooms(id) ON DELETE CASCADE,
+                question TEXT NOT NULL,
+                created_by INTEGER REFERENCES users(id) ON DELETE CASCADE,
+                is_multiple_choice BOOLEAN DEFAULT FALSE,
+                is_anonymous BOOLEAN DEFAULT FALSE,
+                is_closed BOOLEAN DEFAULT FALSE,
+                closed_at TIMESTAMP,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            
+            CREATE TABLE IF NOT EXISTS poll_options (
+                id SERIAL PRIMARY KEY,
+                poll_id INTEGER REFERENCES polls(id) ON DELETE CASCADE,
+                option_text TEXT NOT NULL,
+                option_order INTEGER DEFAULT 0
+            );
+            
+            CREATE TABLE IF NOT EXISTS poll_votes (
+                id SERIAL PRIMARY KEY,
+                poll_id INTEGER REFERENCES polls(id) ON DELETE CASCADE,
+                option_id INTEGER REFERENCES poll_options(id) ON DELETE CASCADE,
+                user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(poll_id, user_id, option_id)
+            );
+            
+            ALTER TABLE messages ADD COLUMN IF NOT EXISTS poll_id INTEGER REFERENCES polls(id);
+
+            -- [FIX] Allow 'ai' as a room type
+            ALTER TABLE rooms DROP CONSTRAINT IF EXISTS rooms_type_check;
+            ALTER TABLE rooms ADD CONSTRAINT rooms_type_check CHECK(type IN ('group', 'direct', 'ai'));
+
             -- [PERFORMANCE] Indexes for faster room list and unread counts
             CREATE INDEX IF NOT EXISTS idx_messages_room_id_created_at ON messages(room_id, created_at DESC);
             CREATE INDEX IF NOT EXISTS idx_room_members_user_id ON room_members(user_id);
             
             -- [PERFORMANCE] Index for faster login username lookup
             CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
+
+            -- [NEW] Missing Tables (Privacy, Preferences, E2EE, Permissions)
+            CREATE TABLE IF NOT EXISTS blocked_users (
+                blocker_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+                blocked_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (blocker_id, blocked_id)
+            );
+
+            CREATE TABLE IF NOT EXISTS user_privacy_exceptions (
+                user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+                excluded_user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+                privacy_type TEXT NOT NULL,
+                exception_type TEXT NOT NULL,
+                scope TEXT,
+                PRIMARY KEY (user_id, excluded_user_id, privacy_type)
+            );
+
+            CREATE TABLE IF NOT EXISTS group_permissions (
+                group_id INTEGER REFERENCES rooms(id) ON DELETE CASCADE PRIMARY KEY,
+                allow_name_change BOOLEAN DEFAULT TRUE,
+                allow_description_change BOOLEAN DEFAULT TRUE,
+                allow_add_members BOOLEAN DEFAULT TRUE,
+                allow_remove_members BOOLEAN DEFAULT TRUE,
+                send_mode TEXT DEFAULT 'everyone'
+            );
+
+            CREATE TABLE IF NOT EXISTS starred_messages (
+                message_id INTEGER REFERENCES messages(id) ON DELETE CASCADE,
+                user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (message_id, user_id)
+            );
+
+            CREATE TABLE IF NOT EXISTS chat_locks (
+                room_id INTEGER REFERENCES rooms(id) ON DELETE CASCADE,
+                user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+                passcode_hash TEXT NOT NULL,
+                PRIMARY KEY (room_id, user_id)
+            );
+
+            CREATE TABLE IF NOT EXISTS user_chat_preferences (
+                user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+                room_id INTEGER REFERENCES rooms(id) ON DELETE CASCADE,
+                bubble_color TEXT,
+                wallpaper TEXT,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (user_id, room_id)
+            );
+
+            CREATE TABLE IF NOT EXISTS room_key_versions (
+                room_id INTEGER REFERENCES rooms(id) ON DELETE CASCADE,
+                version INTEGER,
+                created_by_device_id TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (room_id, version)
+            );
+
+            CREATE TABLE IF NOT EXISTS room_keys (
+                room_id INTEGER REFERENCES rooms(id) ON DELETE CASCADE,
+                device_id TEXT,
+                encrypted_key TEXT NOT NULL,
+                key_version INTEGER,
+                PRIMARY KEY (room_id, device_id, key_version)
+            );
         `);
         console.log("Tables created successfully");
     } catch (err) {

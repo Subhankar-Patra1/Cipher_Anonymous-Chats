@@ -3,8 +3,11 @@ import { useAuth } from '../context/AuthContext';
 import { useNavigate, useLocation } from 'react-router-dom';
 import SpinLoading from '../components/SpinLoading';
 import OAuthButtons from '../components/OAuthButtons';
+import { QRCodeSVG } from 'qrcode.react';
+import CipherQRCode from '../components/CipherQR';
 import { cryptoManager } from '../lib/crypto/CryptoManager';
-import CipherQR from '../components/CipherQR';
+import db from '../utils/db';
+
 import { io as socketIO } from 'socket.io-client';
 
 // [NEW] QR Login Panel Component
@@ -74,7 +77,14 @@ const QRLoginPanel = ({ onSuccess }) => {
             pollRef.current = setInterval(async () => {
                 try {
                     const statusRes = await fetch(`${import.meta.env.VITE_API_URL}/api/auth/qr-session/${currentToken}/status`);
-                    if (!statusRes.ok) return;
+                    if (!statusRes.ok) {
+                        if (statusRes.status === 404 || statusRes.status === 410) {
+                            setQrStatus('expired');
+                            clearInterval(pollRef.current);
+                            if (timerRef.current) clearInterval(timerRef.current);
+                        }
+                        return;
+                    }
                     const statusData = await statusRes.json();
                     if (statusData.status === 'authenticated' && statusData.authToken) {
                         setQrStatus('authenticated');
@@ -156,7 +166,14 @@ const QRLoginPanel = ({ onSuccess }) => {
         pollRef.current = setInterval(async () => {
             try {
                 const statusRes = await fetch(`${import.meta.env.VITE_API_URL}/api/auth/qr-session/${newToken}/status`);
-                if (!statusRes.ok) return;
+                if (!statusRes.ok) {
+                    if (statusRes.status === 404 || statusRes.status === 410) {
+                        setQrStatus('expired');
+                        clearInterval(pollRef.current);
+                        if (timerRef.current) clearInterval(timerRef.current);
+                    }
+                    return;
+                }
                 const statusData = await statusRes.json();
                 if (statusData.status === 'authenticated' && statusData.authToken) {
                     setQrStatus('authenticated');
@@ -189,7 +206,7 @@ const QRLoginPanel = ({ onSuccess }) => {
                     }`}>
                         {qrStatus === 'loading' ? (
                             <div className="w-[280px] h-[280px] flex items-center justify-center bg-transparent">
-                                <span className="material-symbols-outlined text-slate-500 text-4xl animate-spin">progress_activity</span>
+                                <span className="material-symbols-outlined text-slate-600 dark:text-slate-500 text-4xl animate-spin">progress_activity</span>
                             </div>
                         ) : qrStatus === 'error' ? (
                             <div className="w-[280px] h-[280px] flex flex-col items-center justify-center gap-3 bg-transparent">
@@ -197,7 +214,14 @@ const QRLoginPanel = ({ onSuccess }) => {
                                 <p className="text-xs text-red-400 text-center">{qrError}</p>
                             </div>
                         ) : (
-                            <CipherQR value={qrValue} size={280} />
+                            <div className="bg-[#1c1c1e] p-4 rounded-3xl shadow-2xl shadow-black/50 flex items-center justify-center border border-white/5">
+                                <CipherQRCode 
+                                    value={qrValue} 
+                                    size={256} 
+                                    bgColor="transparent"
+                                    fgColor="#ffffff"
+                                />
+                            </div>
                         )}
                     </div>
 
@@ -286,12 +310,7 @@ export default function Auth() {
     const navigate = useNavigate();
     const location = useLocation(); // [NEW]
 
-    // [OPTIMIZATION] Pre-warm crypto keys immediately
-    useEffect(() => {
-        // This ensures keys are ready before the user even types their password.
-        // It runs once on mount.
-        cryptoManager.init().catch(err => console.error('[Auth] Pre-warm failed:', err));
-    }, []);
+    
 
     // [Refined] Initialize directly from location state to prevent flash
     const isOAuthSuccess = location.state && location.state.view === 'oauth_success' && location.state.recoveryCode;
@@ -490,9 +509,9 @@ export default function Auth() {
                     (async () => {
                         try {
                             return {
-                                deviceId: cryptoManager.deviceId,
-                                publicKey: await cryptoManager.getPublicKey(),
-                                signingPublicKey: await cryptoManager.getSigningPublicKey()
+                                deviceId: 'fallback-device',
+                                publicKey: null,
+                                signingPublicKey: null
                             };
                         } catch (e) {
                             console.warn('[Login] Crypto keys not ready:', e);
@@ -621,13 +640,33 @@ export default function Auth() {
             // 1. Ensure keys exist (Generate if new user)
             await cryptoManager.init();
 
-            // 2. Export all keys
-            const bundle = await cryptoManager.exportAllKeysSync();
+            // 2. Create complete backup (v2.0 format with message history)
+            const keyBundle = await cryptoManager.exportAllKeysSync();
+            const [messages, rooms, users] = await Promise.all([
+                db.messages.toArray(),
+                db.rooms.toArray(),
+                db.users.toArray()
+            ]);
 
-            // 3. Encrypt bundle
-            const backup = await cryptoManager.encryptBackup(bundle, backupPassword);
+            const filteredMessages = messages.map(msg => {
+                const filtered = { ...msg };
+                delete filtered.fileBlob;
+                delete filtered.localFilePath;
+                return filtered;
+            });
+
+            const fullBundle = JSON.stringify({
+                keys: JSON.parse(keyBundle),
+                messages: filteredMessages,
+                rooms: rooms,
+                users: users,
+                exportedAt: new Date().toISOString(),
+                version: 2.0
+            });
             
-            // 4. Upload to server
+            const backup = await cryptoManager.encryptBackup(fullBundle, backupPassword);
+            
+            // 3. Upload to server
             // Use pendingLogin.token since we aren't "logged in" in context yet
             const res = await fetch(`${import.meta.env.VITE_API_URL}/api/auth/backup`, {
                 method: 'POST',
@@ -638,12 +677,15 @@ export default function Auth() {
                 body: JSON.stringify({ ...backup, passwordHint: backupPasswordHint.trim() || null })
             });
 
-            if (!res.ok) throw new Error('Failed to upload backup');
+            if (!res.ok) {
+                const errorData = await res.json().catch(() => ({}));
+                throw new Error(errorData.error || 'Failed to upload backup');
+            }
 
-            // 5. Enable auto-backup
+            // 4. Enable auto-backup
             await cryptoManager.enableAutoBackup(backupPassword, backup.salt, pendingLogin.token);
 
-            // 6. Transition to Dashboard
+            // 5. Transition to Dashboard
             setView('entering_dashboard');
             
             setTimeout(() => {

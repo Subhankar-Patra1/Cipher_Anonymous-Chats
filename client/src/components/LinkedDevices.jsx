@@ -184,13 +184,15 @@ export default function LinkedDevices({ onClose }) {
                         aspectRatio: 1.0
                     },
                     (decodedText) => {
+                        console.log("[QR Scanner] Decoded:", decodedText);
                         try {
                             const parsed = JSON.parse(decodedText);
                             if (parsed.type === 'cipher_qr_login' && parsed.token) {
+                                console.log("[QR Scanner] Valid QR Token found!");
                                 setScannedData(parsed);
                                 setScanStatus('confirming');
                                 html5QrCode.stop().catch(() => {});
-                                
+
                                 // Fetch requesting device info
                                 fetch(`${import.meta.env.VITE_API_URL}/api/auth/qr-session/${parsed.token}/status`)
                                     .then(res => res.json())

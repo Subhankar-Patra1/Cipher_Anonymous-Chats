@@ -17,8 +17,10 @@ import { ChatListSkeleton } from './SkeletonLoaders';
 import PollIcon from './icons/PollIcon';
 import ViewOnceIcon from './icons/ViewOnceIcon';
 import Tooltip from './Tooltip'; // [NEW] Import Tooltip component
+import LinkedDevices from './LinkedDevices';
 
 import { cryptoManager } from '../lib/crypto/CryptoManager';
+import { decryptPayload } from '../utils/messageHydrator';
 import db from '../utils/db';
 
 // [NEW] E2EE Preview Component - Uses cached plaintext (WhatsApp-style)
@@ -29,22 +31,29 @@ const LastMessagePreview = ({ room, user, hasSkippedSync }) => {
     const lastSeenIdRef = useRef(room.last_message_id);
     // [FIX] Robust retry trigger using counter
     const [retryCount, setRetryCount] = useState(0);
+    // [FIX] Track if we already tried decryption to prevent infinite loops
+    const decryptAttemptedRef = useRef(false);
 
     useEffect(() => {
-        // [FIX] If room has no last message (cleared), reset local state
+        console.log(`[Sidebar] evaluating room effect for room ${room.id}`, {
+            room_last_id: room.last_message_id,
+            room_last_content: room.last_message_content,
+            room_status: room.last_message_status,
+            seen_id: lastSeenIdRef.current,
+            localPlaintext
+        });
+
         if (!room.last_message_id) {
             setLocalPlaintext(null);
             lastSeenIdRef.current = null;
             return;
         }
         
-        // [FIX] When message ID changes (new message), clear local state to prevent stale data
+        // ✅ New message arrived — always clear stale plaintext
         if (room.last_message_id !== lastSeenIdRef.current) {
             lastSeenIdRef.current = room.last_message_id;
-            // Don't clear if we already have matching plaintext
-            if (localPlaintext !== room.last_message_content && localPlaintext !== room.last_message_plaintext) {
-                setLocalPlaintext(null);
-            }
+            setLocalPlaintext(null); // Always reset, no conditions
+            decryptAttemptedRef.current = false;
         }
         
         // [FIX] When status is 'sending', prioritize room.last_message_content (optimistic update)
@@ -56,8 +65,15 @@ const LastMessagePreview = ({ room, user, hasSkippedSync }) => {
         
         // [FIX] If we have room.last_message_content and it's our message (sender_id matches),
         // use it directly - don't fetch from Dexie which might have old data
-        if (room.last_message_content && String(room.last_message_sender_id) === String(user.id)) {
-            if (!localPlaintext || localPlaintext === '__NO_KEY__' || localPlaintext === '__DECRYPT_FAILED__') {
+        if (room.last_message_content && 
+            room.last_message_content !== '🔒 Encrypted Message' &&
+            String(room.last_message_sender_id) === String(user.id)) {
+            
+            // ✅ Only use this if it matches the CURRENT message
+            // For encrypted messages, last_message_content will be null
+            // so this block correctly skips and falls through to decryption
+            if (!localPlaintext || localPlaintext === '__NO_KEY__' || 
+                localPlaintext === '__DECRYPT_FAILED__') {
                 setLocalPlaintext(room.last_message_content);
             }
             return;
@@ -76,38 +92,40 @@ const LastMessagePreview = ({ room, user, hasSkippedSync }) => {
         
         // [FIX] Check Dexie rooms cache first (instant load on second visit)
         db.rooms.get(room.id).then(cached => {
-            if (cached?.last_message_plaintext) {
+            // ✅ Only use cached plaintext if it belongs to the CURRENT message!
+            if (cached?.last_message_plaintext && String(cached?.last_message_id) === String(room.last_message_id)) {
                 setLocalPlaintext(cached.last_message_plaintext);
                 return;
             }
-            
-            // Fallback: Check messages table for plaintext_content
-            if (room.last_message_id) {
-                db.messages.where('id').equals(String(room.last_message_id)).first().then(msg => {
-                    if (msg?.plaintext_content) {
-                        setLocalPlaintext(msg.plaintext_content);
-                    }
-                });
-            }
-        }).catch(() => {
-            // Dexie not ready, fallback to messages table
-            if (room.last_message_id) {
-                db.messages.where('id').equals(String(room.last_message_id)).first().then(msg => {
-                    if (msg?.plaintext_content) {
-                        setLocalPlaintext(msg.plaintext_content);
-                    }
-                });
-            }
-        });
+            // If it doesn't match or is missing, explicitly skip Dexie cache for localPlaintext
+        }).catch(() => { /* Ignore errors */ });
+
+        // Fallback: Check messages table for plaintext_content regardless of whether rooms cache returned
+        if (room.last_message_id) {
+            db.messages.where('id').equals(String(room.last_message_id)).first().then(msg => {
+                if (msg?.plaintext_content && room.last_message_id === lastSeenIdRef.current) {
+                    setLocalPlaintext(msg.plaintext_content);
+                }
+            }).catch(() => { /* ignore */ });
+        }
     }, [room.id, room.last_message_id, room.last_message_plaintext, room.last_message_status, room.last_message_content, room.last_message_sender_id, user.id]);
 
     // [FIX] Compute content - prioritize room props for own messages to prevent flicker
     const isOwnMessage = String(room.last_message_sender_id) === String(user.id);
-    let rawContent = (room.last_message_status === 'sending' && room.last_message_content) 
-        ? room.last_message_content 
-        : (isOwnMessage && room.last_message_content && room.last_message_content !== '🔒 Encrypted Message')
-            ? room.last_message_content
-            : (localPlaintext || room.last_message_plaintext || room.last_message_content || '');
+    let rawContent;
+
+    if (room.last_message_status === 'sending' && room.last_message_content) {
+        rawContent = room.last_message_content;
+    } else if (localPlaintext && 
+               localPlaintext !== '__NO_KEY__' && 
+               localPlaintext !== '__DECRYPT_FAILED__') {
+        rawContent = localPlaintext;
+    } else if (isOwnMessage && room.last_message_content && 
+               room.last_message_content !== '🔒 Encrypted Message') {
+        rawContent = room.last_message_content;
+    } else {
+        rawContent = room.last_message_plaintext || room.last_message_content || '';
+    }
     
     // [FIX] For file messages, show the filename instead of "File"
     if (room.last_message_type === 'file' && (rawContent === 'File' || !rawContent) && room.last_message_file_name) {
@@ -120,10 +138,10 @@ const LastMessagePreview = ({ room, user, hasSkippedSync }) => {
     // [NEW] Helper to render preview with mentions highlighted
     const renderPreviewRaw = (rawContent) => {
         // [FIX] Handle retry delay state explicitly
-        if (rawContent === '__RETRY_DELAY__') return 'Waiting for keys...';
+        if (rawContent === '__RETRY_DELAY__') return 'Waiting for this message...';
 
         // [FIX] Handle special markers and empty content
-        if (!rawContent || rawContent === 'Waiting for key...' || rawContent === 'Decryption Error' || rawContent === '[Decryption Error]' || isDecryptionFailed) {
+        if (!rawContent || rawContent === 'Waiting for this message...' || rawContent === 'Decryption Error' || rawContent === '[Decryption Error]' || isDecryptionFailed) {
             // [FIX] Only show "History hidden" if:
             // 1. User skipped sync AND
             // 2. There's actually encrypted content we couldn't decrypt
@@ -179,9 +197,6 @@ const LastMessagePreview = ({ room, user, hasSkippedSync }) => {
             return renderTextWithEmojis(stripped);
         });
     };
-
-    // [FIX] Track if we already tried decryption to prevent infinite loops
-    const decryptAttemptedRef = useRef(false);
 
     // [NEW] Direct decryption from room data (bypasses IndexedDB) with caching
     useEffect(() => {
@@ -255,7 +270,8 @@ const LastMessagePreview = ({ room, user, hasSkippedSync }) => {
             if (localPlaintext && 
                 localPlaintext !== '__RETRY__' && 
                 localPlaintext !== '__DECRYPT_FAILED__' && 
-                localPlaintext !== '__NO_KEY__') {
+                localPlaintext !== '__NO_KEY__' &&
+                lastSeenIdRef.current === room.last_message_id) {
                 
                 // [NEW] If already decrypted, notify anyway (idempotent)
                 window.dispatchEvent(new CustomEvent('cipher:room-decrypted', { 
@@ -277,41 +293,16 @@ const LastMessagePreview = ({ room, user, hasSkippedSync }) => {
             decryptAttemptedRef.current = true; // Mark as attempted
             
             try {
-                const roomId = String(room.id);
-                const keyVersion = room.last_message_key_version;
-                const salt = room.last_message_temp_id || room.last_message_id;
-                
-                // Get key from CryptoManager
-                console.log(`[Sidebar] Room ${room.id}: Fetching key v${keyVersion}...`);
-                const keyData = await cryptoManager.getRoomKey(roomId, keyVersion);
-                
-                if (!keyData?.key) {
-                    console.log(`[Sidebar] Room ${room.id}: KEY STILL MISSING after restore!`);
-                    // [MODIFIED] If key is missing, allow retry later (don't mark as permanently failed)
-                    decryptAttemptedRef.current = false;
-                    // Trigger a retry after a short delay (e.g. keys might be loading)
-                    setTimeout(() => {
-                         if (lastSeenIdRef.current === room.last_message_id && (!localPlaintext || localPlaintext === '__RETRY__')) {
-                             // Force update to retry
-                             setLocalPlaintext(prev => prev === '__RETRY_DELAY__' ? null : '__RETRY_DELAY__'); 
-                         }
-                    }, 2000);
-                    return;
-                }
-                
-                console.log(`[Sidebar] Room ${room.id}: Got key v${keyData.version}, decrypting...`);
-                
-                // Decrypt directly from room data
-                const decrypted = await cryptoManager.decryptMessage(
-                    room.last_message_ciphertext,
-                    room.last_message_iv,
-                    salt,
-                    keyData.key,
-                    null,
-                    roomId,
-                    keyVersion
-                );
-                
+                const mockMsg = {
+                    id: room.last_message_id || room.last_message_temp_id || String(Date.now()),
+                    ciphertext: room.last_message_ciphertext,
+                    user_id: room.last_message_sender_id || room.sender_id || 'unknown',
+                    is_encrypted: true
+                };
+
+                const hydrated = await decryptPayload(mockMsg);
+                const decrypted = hydrated?.content || hydrated?.plaintext_content || null;
+
                 // [FIX] Only set if decrypted has actual content (not empty string)
                 if (decrypted && decrypted.trim()) {
                     console.log(`[Sidebar] Room ${room.id}: Decryption SUCCESS - "${decrypted.substring(0, 30)}..."`);
@@ -324,7 +315,14 @@ const LastMessagePreview = ({ room, user, hasSkippedSync }) => {
                     
                     // [OPTIMIZATION] Cache to Dexie - prevents re-decryption on reload
                     try {
-                        db.rooms.put({ id: room.id, last_message_plaintext: decrypted });
+                        db.rooms.update(room.id, { 
+                            last_message_plaintext: decrypted, 
+                            last_message_id: room.last_message_id 
+                        }).then(updated => {
+                            if (!updated) {
+                                db.rooms.put({ id: room.id, last_message_plaintext: decrypted, last_message_id: room.last_message_id });
+                            }
+                        });
                     } catch (e) { /* Ignore write errors */ }
                 } else {
                     console.log(`[Sidebar] Room ${room.id}: Decryption returned empty/null`);
@@ -408,17 +406,15 @@ const LastMessagePreview = ({ room, user, hasSkippedSync }) => {
         if (lr.message_ciphertext && lr.message_iv) {
             (async () => {
                 try {
-                    const keyData = await cryptoManager.getRoomKey(String(room.id), lr.message_key_version);
-                    const salt = lr.message_temp_id || lr.message_id;
-                    const decryptedText = await cryptoManager.decryptMessage(
-                        lr.message_ciphertext,
-                        lr.message_iv,
-                        salt,
-                        keyData?.key || null,
-                        null,
-                        String(room.id),
-                        lr.message_key_version
-                    );
+                      const mockReactMsg = {
+                          id: lr.message_id || lr.message_temp_id || String(Date.now()),
+                          ciphertext: lr.message_ciphertext,
+                          user_id: room.user_id || 'unknown',
+                          is_encrypted: true
+                      };
+                      const hydratedReact = await decryptPayload(mockReactMsg);
+                      const decryptedText = hydratedReact?.content || hydratedReact?.plaintext_content || null;
+
                     if (decryptedText) {
                         const text = decryptedText.replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim();
                         setReactionPreview(text.length > 30 ? `"${text.slice(0, 30)}..."` : `"${text}"`);
@@ -592,6 +588,7 @@ export default function Sidebar({ rooms, activeRoom, onSelectRoom, loadingRoomId
     const [shareTriggerRect, setShareTriggerRect] = useState(null); // [NEW] Store trigger position
     const [showChatLockModal, setShowChatLockModal] = useState(null); // room to lock/unlock
     const [showActionMenu, setShowActionMenu] = useState(false); // [NEW] Toggle for header action menu
+    const [showLinkedDevices, setShowLinkedDevices] = useState(false);
 
     // [NEW] Archived & Request States
     const [viewArchived, setViewArchived] = useState(false);
@@ -905,6 +902,18 @@ export default function Sidebar({ rooms, activeRoom, onSelectRoom, loadingRoomId
                                                 <span className="material-symbols-outlined text-[18px]">group_add</span>
                                             </div>
                                             <span>Join Room</span>
+                                        </button>
+                                        <button
+                                            onClick={() => {
+                                                setShowActionMenu(false);
+                                                setShowLinkedDevices(true);
+                                            }}
+                                            className="group md:hidden flex items-center gap-3 px-3 py-2.5 text-sm font-medium text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700/50 transition-colors text-left w-full border-t border-slate-100 dark:border-slate-800"
+                                        >
+                                            <div className="w-8 h-8 rounded-full bg-indigo-100 dark:bg-indigo-500/20 text-indigo-600 dark:text-indigo-400 flex items-center justify-center">
+                                                <span className="material-symbols-outlined text-[18px]">qr_code_scanner</span>
+                                            </div>
+                                            <span>Scan QR Code</span>
                                         </button>
                                     </div>
                                 </motion.div>
@@ -1803,6 +1812,28 @@ export default function Sidebar({ rooms, activeRoom, onSelectRoom, loadingRoomId
                     }}
                 />
             )}
+
+            {/* Linked Devices Fullscreen Overlay (Mobile) */}
+            {showLinkedDevices && (
+                <div className="fixed inset-0 z-[1001] bg-white dark:bg-[#121212]">
+                    <div className="flex bg-slate-900/5 dark:bg-black/20 p-4 border-b border-slate-200 dark:border-slate-800 items-center justify-between">
+                        <button
+                            onClick={() => setShowLinkedDevices(false)}
+                            className="p-2 rounded-full hover:bg-black/10 transition-colors"
+                        >
+                            <span className="material-symbols-outlined text-black dark:text-white">close</span>
+                        </button>
+                        <h2 className="text-lg font-bold">Linked Devices</h2>
+                        <div className="w-10"></div>
+                    </div>
+                    <div className="h-[calc(100vh-65px)] overflow-y-auto w-full max-w-lg mx-auto">
+                        <LinkedDevices onClose={() => setShowLinkedDevices(false)} />
+                    </div>
+                </div>
+            )}
         </div>
     );
 }
+
+
+
