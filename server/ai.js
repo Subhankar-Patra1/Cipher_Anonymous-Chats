@@ -215,7 +215,7 @@ async function handleSaveAiMessage(req, res) {
 
 
 
-        res.json({ ok: true, id: msg.id });
+        res.json({ ok: true, id: msg.id, created_at: msg.created_at });
 
 
     } catch (e) {

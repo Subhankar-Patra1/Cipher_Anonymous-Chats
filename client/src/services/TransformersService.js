@@ -1,189 +1,262 @@
-import { pipeline, env, TextStreamer } from '@huggingface/transformers';
-
-// [STABILITY] Maximum compatibility mode for Brave and older hardware
-env.allowLocalModels = false;
-env.useBrowserCache = true;
-env.backends.onnx.wasm.numThreads = 1; 
-env.backends.onnx.wasm.simd = false;  
-env.backends.onnx.wasm.proxy = false; // [STABILITY] Keep false, true causes "window is not defined" error in workers
-env.backends.onnx.gpu = true;         
-
-// [NOTE] Switched to Qwen2.5-0.5B-Instruct for ultra-stability.
-// 0.5B is significantly lighter than 1B/3B models, preventing OOM crashes in Brave.
-const MODEL_NAME = 'onnx-community/Qwen2.5-0.5B-Instruct'; 
+/**
+ * TransformersService.js
+ * Main-thread wrapper around transformers.worker.js
+ * All heavy ML work runs in the worker — this file just routes messages.
+ */
 
 class TransformersService {
     constructor() {
-        this.generator = null;
-        this.modelId = MODEL_NAME; 
+        this.worker = null;
         this.ready = false;
-        this.loadingPromise = null;
+
+        // Pending callbacks keyed by operation type
+        this._progressCb = null;
+        this._onToken = null;
+        this._onDone = null;
+        this._onError = null;
+        this._initResolve = null;
+        this._initReject = null;
+        this._cacheResolve = null;
+        this._resetResolve = null;
     }
 
+    // ── Ensure worker is created ──────────────────────────────────────────────
+    _ensureWorker() {
+        if (this.worker) return;
+
+        // Vite/modern bundler syntax for worker modules
+        this.worker = new Worker(
+            new URL('./transformers.worker.js', import.meta.url),
+            { type: 'module' }
+        );
+
+        this.worker.onmessage = ({ data }) => this._handleMessage(data);
+        this.worker.onerror = (e) => {
+            console.error('[TransformersService] Worker error:', e);
+            if (this._initReject) {
+                this._initReject(new Error(e.message || 'Worker crashed'));
+                this._initReject = null;
+                this._initResolve = null;
+            }
+            if (this._onError) {
+                this._onError(e.message || 'Worker crashed');
+            }
+        };
+    }
+
+    // ── Handle messages from worker ───────────────────────────────────────────
+    _handleMessage(data) {
+        switch (data.type) {
+            case 'PROGRESS':
+                if (this._progressCb) this._progressCb(data);
+                break;
+
+            case 'DOWNLOADING':
+                // surfaced via PROGRESS data.status — no extra handling needed
+                break;
+
+            case 'CACHE_FOUND':
+                // worker found existing cache — context handles flag updates via READY
+                break;
+
+            case 'READY':
+                this.ready = true;
+                if (this._initResolve) {
+                    this._initResolve();
+                    this._initResolve = null;
+                    this._initReject = null;
+                }
+                break;
+
+            case 'INIT_ERROR': {
+                this.ready = false;
+                const err = new Error(data.error || 'Model init failed');
+                if (this._initReject) {
+                    this._initReject(err);
+                    this._initResolve = null;
+                    this._initReject = null;
+                }
+                break;
+            }
+
+            case 'ABORTED': {
+                this.ready = false;
+                const abortErr = new Error('Aborted');
+                abortErr.name = 'AbortError';
+                if (this._initReject) {
+                    this._initReject(abortErr);
+                    this._initResolve = null;
+                    this._initReject = null;
+                }
+                break;
+            }
+
+            case 'TOKEN':
+                if (this._onToken) this._onToken(data.token);
+                break;
+
+            case 'GEN_DONE':
+                if (this._onDone) {
+                    const cb = this._onDone;
+                    this._clearGenCallbacks();
+                    cb(data.text);
+                }
+                break;
+
+            case 'GEN_ABORTED':
+                if (this._onError) {
+                    const cb = this._onError;
+                    this._clearGenCallbacks();
+                    cb('Aborted');
+                }
+                break;
+
+            case 'GEN_ERROR':
+                if (this._onError) {
+                    const cb = this._onError;
+                    this._clearGenCallbacks();
+                    cb(data.error);
+                }
+                break;
+
+            case 'CACHE_STATUS':
+                if (this._cacheResolve) {
+                    this._cacheResolve(data.found);
+                    this._cacheResolve = null;
+                }
+                break;
+
+            case 'RESET_DONE':
+                this.ready = false;
+                if (this._resetResolve) {
+                    this._resetResolve(data.ok);
+                    this._resetResolve = null;
+                }
+                break;
+
+            default:
+                break;
+        }
+    }
+
+    _clearGenCallbacks() {
+        this._onToken = null;
+        this._onDone = null;
+        this._onError = null;
+    }
+
+    // ── Public API (identical contract to old TransformersService) ────────────
+
+    /**
+     * Initialize / download the model.
+     * @param {function} progressCallback
+     * @param {AbortSignal} signal
+     */
     async initialize(progressCallback, signal = null) {
         if (this.ready) return;
-        if (this.loadingPromise) return this.loadingPromise;
 
-        // [MEMORY] Cleanup old instances if any exist before re-loading
-        await this.dispose();
+        this._ensureWorker();
+        this._progressCb = progressCallback;
 
-        this.loadingPromise = (async () => {
-            try {
-                console.log('[TransformersService] Loading model:', this.modelId);
-                
-                // [FIX] Force q4f16 for balance of size/quality.
-                // device: 'webgpu' is essential.
-                this.generator = await pipeline('text-generation', this.modelId, {
-                    device: 'webgpu',
-                    dtype: 'q4', // [MEMORY] Use most efficient quantization
-                    progress_callback: progressCallback,
-                    // If your transformers.js version supports passing signal in options:
-                    ...(signal ? { signal } : {})
-                });
-
-                this.ready = true;
-                console.log('[TransformersService] Model loaded');
-            } catch (e) {
-                console.error('[TransformersService] Failed to load model:', e);
-                
-                // [FIX] Robust error handling for non-Error objects (WASM pointers, etc)
-                const errorMessage = (e && e.message) ? e.message : String(e);
-                
-                // Detect specific errors
-                if (errorMessage.includes('createBuffer') || 
-                    errorMessage.includes('memory copy') || 
-                    errorMessage.includes('Aborted') ||
-                    !isNaN(Number(errorMessage)) // If it's just a number (WASM error code)
-                ) {
-                    throw new Error("GPU Memory Error or Corrupted Cache. Please reset.");
-                }
-                throw e;
-            } finally {
-                this.loadingPromise = null;
-            }
-        })();
-
-        return this.loadingPromise;
-    }
-
-    async dispose() {
-        if (this.generator) {
-            try {
-                // Explicitly dispose of the generator and its sessions if the library supports it
-                if (this.generator.dispose) {
-                    await this.generator.dispose();
-                } else if (this.generator.model && this.generator.model.dispose) {
-                    await this.generator.model.dispose();
-                }
-            } catch (e) {
-                console.warn('[TransformersService] Dispose warning:', e);
-            }
-            this.generator = null;
+        if (signal) {
+            signal.addEventListener('abort', () => {
+                if (this.worker) this.worker.postMessage({ type: 'ABORT_INIT' });
+            }, { once: true });
         }
-        this.ready = false;
-        this.loadingPromise = null;
+
+        return new Promise((resolve, reject) => {
+            this._initResolve = resolve;
+            this._initReject = reject;
+            this.worker.postMessage({ type: 'INIT' });
+        });
     }
 
-    async reset() {
-        await this.dispose();
-        // Attempt to clear browser cache for transformers
-        try {
-            const cacheKeys = await caches.keys();
-            for (const key of cacheKeys) {
-                if (key.startsWith('transformers-cache')) {
-                    await caches.delete(key);
-                }
-            }
-            this.ready = false;
-            this.generator = null;
-            console.log('[TransformersService] Cache cleared');
-            return true;
-        } catch (e) {
-            console.error('Failed to clear cache:', e);
-            return false;
-        }
-    }
-
+    /**
+     * Check if model files are already in browser cache.
+     * @returns {Promise<boolean>}
+     */
     async checkCache() {
-        try {
-            const cacheKeys = await caches.keys();
-            if (cacheKeys.length === 0) return false;
-
-            // Prioritize transformers-cache
-            const sortedKeys = cacheKeys.sort((a,b) => {
-                if (a.startsWith('transformers-cache')) return -1;
-                if (b.startsWith('transformers-cache')) return 1;
-                return 0;
-            });
-
-            for (const cacheName of sortedKeys) {
-                const cache = await caches.open(cacheName);
-                const keys = await cache.keys();
-                
-                // Be very broad: look for modelId or technical file extensions like onnx_data
-                const hasModelFiles = keys.some(k => 
-                    k.url.includes(this.modelId) || 
-                    k.url.includes('onnx/model') ||
-                    k.url.includes('.onnx_data')
-                );
-                
-                if (hasModelFiles) {
-                    console.log(`[TransformersService] Cache hit in: ${cacheName}`);
-                    return true;
-                }
-            }
-            return false;
-        } catch (e) {
-            console.error('[TransformersService] checkCache error:', e);
-            return false;
-        }
+        this._ensureWorker();
+        return new Promise((resolve) => {
+            this._cacheResolve = resolve;
+            this.worker.postMessage({ type: 'CHECK_CACHE' });
+        });
     }
 
-    async generateStream(messages, onToken, onDone, onError, signal = null) {
+    /**
+     * Stream text generation.
+     * @param {string} prompt
+     * @param {function} onToken
+     * @param {function} onDone
+     * @param {function} onError
+     * @param {AbortSignal} signal
+     */
+    generateStream(prompt, onToken, onDone, onError, signal = null) {
         if (!this.ready) {
-            onError('Model not ready');
+            onError('Model not ready. Please wait for the AI to finish loading.');
             return;
         }
 
-        try {
-            // Create a custom streamer that callbacks
-            const streamer = new TextStreamer(this.generator.tokenizer, {
-                skip_prompt: true,
-                callback_function: (text) => {
-                    onToken(text);
-                }
-            });
+        this._onToken = onToken;
+        this._onDone = onDone;
+        this._onError = onError;
 
-            // [FIX] Ensure pure ChatML format. 
-            // If the message is already formatted, use it directly.
-            // If it's a raw string from elsewhere, wrap it.
-            let inputs = messages;
-            if (typeof messages === 'string' && !messages.includes('<|im_start|>')) {
-                inputs = `<|im_start|>system\nYou are a helpful assistant.<|im_end|>\n<|im_start|>user\n${messages}<|im_end|>\n<|im_start|>assistant\n`;
-            }
-            // If already formatted (multi-turn), use as-is
-
-
-            // Note: generate() keeps running. We need to await it.
-            const output = await this.generator(inputs, {
-                max_new_tokens: 512, // [MOD] Increased to user preference
-                temperature: 0.7,
-                do_sample: true,
-                top_k: 40,
-                top_p: 0.9,          // [NEW] Nucleus sampling for quality
-                repetition_penalty: 1.15, // [FIX] Prevent the "s s s" or repeating issues
-                streamer: streamer,
-                return_full_text: false,
-                signal: signal       // [NEW] Allow interruption
-            });
-            
-            onDone(output[0]?.generated_text || "");
-
-        } catch (e) {
-            console.error('[TransformersService] Generation error:', e);
-            onError(e.message);
+        if (signal) {
+            signal.addEventListener('abort', () => {
+                if (this.worker) this.worker.postMessage({ type: 'ABORT_GENERATION' });
+            }, { once: true });
         }
+
+        this.worker.postMessage({ type: 'GENERATE', prompt });
+    }
+
+    /**
+     * Clear cache and destroy worker.
+     * @returns {Promise<boolean>}
+     */
+    async reset() {
+        if (!this.worker) {
+            // No worker — clear directly on main thread
+            try {
+                const keys = await caches.keys();
+                for (const k of keys) {
+                    if (k.startsWith('transformers-cache') || k.includes('huggingface')) {
+                        await caches.delete(k);
+                    }
+                }
+            } catch (_) { /* ignore */ }
+            this.ready = false;
+            return true;
+        }
+
+        return new Promise((resolve) => {
+            this._resetResolve = (ok) => {
+                this.worker.terminate();
+                this.worker = null;
+                this.ready = false;
+                resolve(ok);
+            };
+            this.worker.postMessage({ type: 'RESET' });
+        });
+    }
+
+    /**
+     * Terminate the worker (call on app unmount if needed).
+     */
+    dispose() {
+        if (this.worker) {
+            this.worker.terminate();
+            this.worker = null;
+        }
+        this.ready = false;
+        this._clearGenCallbacks();
+        this._progressCb = null;
+        this._initResolve = null;
+        this._initReject = null;
+        this._cacheResolve = null;
+        this._resetResolve = null;
     }
 }
 
+// Singleton — same import as before
 export const transformersService = new TransformersService();

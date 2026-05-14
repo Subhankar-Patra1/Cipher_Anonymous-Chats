@@ -2269,7 +2269,14 @@ export default function MessageList({
     useEffect(() => {
         if (!socket || !messages.length) return;
         const unseenIds = messages
-            .filter(m => !m.isMe && m.status !== 'seen' && String(m.user_id) !== String(currentUser.id) && m.type !== 'system')
+            .filter(m => {
+                const isAi = m.user_id === 'ai-assistant' || m.meta?.ai;
+                return !m.isMe && 
+                       !isAi && 
+                       m.status !== 'seen' && 
+                       String(m.user_id) !== String(currentUser.id) && 
+                       m.type !== 'system';
+            })
             .map(m => m.id);
 
         if (unseenIds.length > 0) {

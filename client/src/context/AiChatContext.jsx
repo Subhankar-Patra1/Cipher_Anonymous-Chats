@@ -23,58 +23,80 @@ export function AiChatProvider({ children, socket }) {
 
     // Download/Init State
     const [isModelLoading, setIsModelLoading] = useState(false);
-    const [modelProgress, setModelProgress] = useState(null); // { status, file, progress }
+    const [modelProgress, setModelProgress] = useState(null);
     const [isDownloading, setIsDownloading] = useState(false);
+    const [isPaused, setIsPaused] = useState(false);
 
-    // [SMOOTHING] Refs for buffered streaming
-    const streamingQueue = useRef([]);
-    const smoothingInterval = useRef(null);
-    const isAiDone = useRef(false);
-    const [isPaused, setIsPaused] = useState(false); // [NEW]
-    const abortControllerRef = useRef(null); // [NEW]
-    const isSetupCompleteRef = useRef(null); // Local ref for instant check
+    // [FIX] Separate abort controllers: one for download, one for generation
+    const downloadAbortRef = useRef(null);
+    const generationAbortRef = useRef(null);
+
+    // [FIX] Refs for stale-closure-safe flags
+    const isLocalModelSetupCompleteRef = useRef(false);
+    const isSetupCompleteRef = useRef(false);
 
     // [NEW] Provider State
-    const [aiProvider, setAiProvider] = useState(() => localStorage.getItem('sparkle_ai_provider') || 'groq');
-    
+    const [aiProvider, setAiProvider] = useState(
+        () => localStorage.getItem('sparkle_ai_provider') || 'groq'
+    );
+
     // [NEW] One-time set of the provided Groq key
     useEffect(() => {
+        const envKey = import.meta.env.VITE_GROQ_API_KEY;
         const existingKey = localStorage.getItem('groq_api_key');
-        if (!existingKey || existingKey === 'undefined') {
-            groqService.setApiKey(import.meta.env.VITE_GROQ_API_KEY);
+        
+        // Priority 1: Use the secure key from .env if available
+        if (envKey && envKey.startsWith('gsk_')) {
+            groqService.setApiKey(envKey);
+            // Sync to localStorage so other parts of the app can see it
+            if (envKey !== existingKey) {
+                localStorage.setItem('groq_api_key', envKey);
+            }
+        } 
+        // Priority 2: Fallback to existing localStorage key
+        else if (existingKey && existingKey.startsWith('gsk_')) {
+            groqService.setApiKey(existingKey);
         }
     }, []);
 
-    // [SMOOTHING] Cleanup interval on unmount
-    useEffect(() => {
-        return () => {
-            if (smoothingInterval.current) {
-                clearInterval(smoothingInterval.current);
-            }
-        };
+    const [isSetupComplete, _setIsSetupComplete] = useState(() => {
+        const val = localStorage.getItem('sparkle_ai_setup_complete') === 'true';
+        isSetupCompleteRef.current = val;
+        return val;
+    });
+
+    const setIsSetupComplete = useCallback((val) => {
+        isSetupCompleteRef.current = val;
+        _setIsSetupComplete(val);
+        localStorage.setItem('sparkle_ai_setup_complete', val ? 'true' : 'false');
     }, []);
 
-    const [isSetupComplete, setIsSetupComplete] = useState(() => {
-        return localStorage.getItem('sparkle_ai_setup_complete') === 'true';
+    const [isLocalModelSetupComplete, _setIsLocalModelSetupComplete] = useState(() => {
+        const val = localStorage.getItem('sparkle_ai_local_setup_complete') === 'true';
+        isLocalModelSetupCompleteRef.current = val;
+        return val;
     });
 
-    const [isLocalModelSetupComplete, setIsLocalModelSetupComplete] = useState(() => {
-        return localStorage.getItem('sparkle_ai_local_setup_complete') === 'true';
-    });
+    const setIsLocalModelSetupComplete = useCallback((val) => {
+        isLocalModelSetupCompleteRef.current = val;
+        _setIsLocalModelSetupComplete(val);
+        localStorage.setItem('sparkle_ai_local_setup_complete', val ? 'true' : 'false');
+    }, []);
 
+    // Persist chats to localStorage (excluding ephemeral state)
     useEffect(() => {
         try {
             const serializableChats = Object.entries(chats).reduce((acc, [roomId, chat]) => {
                 acc[roomId] = {
                     ...chat,
-                    isAiThinking: false, 
-                    currentAiOp: null    
+                    isAiThinking: false,
+                    currentAiOp: null
                 };
                 return acc;
             }, {});
             localStorage.setItem('sparkle_ai_chats', JSON.stringify(serializableChats));
         } catch (e) {
-            console.error("Failed to save AI chats:", e);
+            console.error('Failed to save AI chats:', e);
         }
     }, [chats]);
 
@@ -84,7 +106,7 @@ export function AiChatProvider({ children, socket }) {
 
     const registerRoom = useCallback((roomId, initialMessages = []) => {
         setChats(prev => {
-            if (prev[roomId]) return prev; 
+            if (prev[roomId]) return prev;
             return {
                 ...prev,
                 [roomId]: {
@@ -97,9 +119,8 @@ export function AiChatProvider({ children, socket }) {
         });
     }, []);
 
-    // Initialize Engine
+    // ─── Initialize Local Engine ────────────────────────────────────────────────
     const initEngine = useCallback(async () => {
-        // [FIX] If already ready, skip everything
         if (transformersService.ready) {
             setIsModelLoading(false);
             setModelProgress(null);
@@ -108,87 +129,105 @@ export function AiChatProvider({ children, socket }) {
             return;
         }
 
+        // [FIX] Use separate downloadAbortRef
+        if (downloadAbortRef.current) {
+            downloadAbortRef.current.abort();
+        }
+        downloadAbortRef.current = new AbortController();
+
         setIsModelLoading(true);
         setIsPaused(false);
-        setIsDownloading(false); // Reset
-        abortControllerRef.current = new AbortController();
-        
+        setIsDownloading(false);
+
         let foundInCache = false;
 
-        // Always show "Searching" phase for visual feedback
         setModelProgress({ status: 'searching', file: 'Scanning local storage...', progress: 0 });
-        // Give UI a moment to show the searching state
         await new Promise(r => setTimeout(r, 800));
+
         try {
-            // First check if already in cache (even if localStorage says not setup)
-            // This handles the "second account on same browser" case
             foundInCache = await transformersService.checkCache();
-            if (foundInCache && !isLocalModelSetupComplete) {
+
+            // [FIX] Use ref instead of stale closure value
+            if (foundInCache && !isLocalModelSetupCompleteRef.current) {
                 setModelProgress({ status: 'searching', file: 'Found existing AI core!', progress: 100 });
-                // Small pause so user can see it found the core
                 await new Promise(r => setTimeout(r, 600));
                 setIsSetupComplete(true);
                 setIsLocalModelSetupComplete(true);
-                localStorage.setItem('sparkle_ai_setup_complete', 'true');
-                localStorage.setItem('sparkle_ai_local_setup_complete', 'true');
             }
 
             await transformersService.initialize((data) => {
-                // data: { status: 'progress', file: '...', progress: 45 }
-                
-                // If it's a real network download, mark it as such
-                if (!foundInCache && (data.status === 'download' || data.status === 'progress' || data.status === 'initiate')) {
+                if (!foundInCache && (
+                    data.status === 'download' ||
+                    data.status === 'progress' ||
+                    data.status === 'initiate'
+                )) {
                     setIsDownloading(true);
                 }
 
-                // Clean up the status for the UI
-                const displayStatus = foundInCache ? 'Loading' : (data.status === 'progress' || data.status === 'download' ? 'Downloading' : data.status);
-                
-                setModelProgress({
-                    ...data,
-                    status: displayStatus 
-                });
-            }, abortControllerRef.current.signal);
+                const displayStatus = foundInCache
+                    ? 'Loading'
+                    : (data.status === 'progress' || data.status === 'download'
+                        ? 'Downloading'
+                        : data.status);
 
-            // Final smoothing delay when finished
+                setModelProgress({ ...data, status: displayStatus });
+            }, downloadAbortRef.current.signal);
+
             setModelProgress({ status: 'Loading', file: 'Setup complete! Synchronizing...', progress: 100 });
-            await new Promise(r => setTimeout(r, 1000));
+            await new Promise(r => setTimeout(r, 800));
 
             setIsModelLoading(false);
             setModelProgress(null);
             setIsDownloading(false);
             setIsSetupComplete(true);
             setIsLocalModelSetupComplete(true);
-            localStorage.setItem('sparkle_ai_setup_complete', 'true');
-            localStorage.setItem('sparkle_ai_local_setup_complete', 'true');
         } catch (e) {
             if (e.name === 'AbortError') {
-                console.log("Download aborted by user");
+                console.log('[AiChatContext] Download aborted');
                 setIsModelLoading(false);
                 return;
             }
-            console.error("Failed to init local AI:", e);
+            console.error('Failed to init local AI:', e);
             setIsModelLoading(false);
             setModelProgress({ status: 'error', error: e.message });
         } finally {
-            abortControllerRef.current = null;
+            downloadAbortRef.current = null;
         }
-    }, [isSetupComplete]);
+    }, []); // No deps — uses refs for stale values
 
-    // Handle Local Generation
+    // ─── Send Query ─────────────────────────────────────────────────────────────
     const sendQuery = async (roomId, content, replyToMsg) => {
         if (!user) return;
-        
-        // Ensure engine is ready
-        if (!transformersService.ready && !isModelLoading) {
-            initEngine(); // Trigger lazy load
-            // We might want to show a "Booting UI" here.
+
+        // [FIX] Guard: if local mode and model not ready, don't proceed
+        if (aiProvider === 'local' && !transformersService.ready) {
+            if (!isModelLoading) {
+                initEngine();
+            }
+            // Show a system message instead of hanging silently
+            setChats(prev => ({
+                ...prev,
+                [roomId]: {
+                    ...prev[roomId],
+                    messages: [
+                        ...(prev[roomId]?.messages || []),
+                        {
+                            id: `sys-${Date.now()}`,
+                            room_id: roomId,
+                            type: 'system',
+                            content: 'Local AI is still loading. Please wait a moment and try again.',
+                            created_at: new Date().toISOString()
+                        }
+                    ]
+                }
+            }));
+            return;
         }
 
         const operationId = uuidv4();
         const tempId = `temp-${Date.now()}`;
-        
-        // 1. Add User Message Optimized
+
+        // 1. Add user message optimistically
         const tempMsg = {
             id: tempId,
             room_id: roomId,
@@ -210,97 +249,103 @@ export function AiChatProvider({ children, socket }) {
             }
         }));
 
-        // 2. Persist User Message to Database via AI endpoint
+        // 2. Persist user message to server
         try {
             const res = await fetch(`${import.meta.env.VITE_API_URL}/api/ai/save-user`, {
                 method: 'POST',
-                headers: { 
+                headers: {
                     'Content-Type': 'application/json',
-                    Authorization: `Bearer ${token}` 
+                    Authorization: `Bearer ${token}`
                 },
-                body: JSON.stringify({ 
-                    roomId,
-                    content,
-                    operationId,
-                    meta: { aiQuery: true }
-                })
+                body: JSON.stringify({ roomId, content, operationId, meta: { aiQuery: true } })
             });
 
-            
             if (res.ok) {
                 const serverMsg = await res.json();
-                // Update local message with server ID and status
                 setChats(prev => {
                     if (!prev[roomId]) return prev;
                     return {
                         ...prev,
                         [roomId]: {
                             ...prev[roomId],
-                            messages: prev[roomId].messages.map(m => 
-                                m.id === tempId 
-                                    ? { ...m, id: serverMsg.id, status: m.status === 'seen' ? 'seen' : 'sent' }
+                            messages: prev[roomId].messages.map(m =>
+                                m.id === tempId
+                                    ? { ...m, id: serverMsg.id, status: 'sent' }
                                     : m
                             )
                         }
                     };
                 });
             }
-        } catch(e) {
-            console.error("Failed to save user message:", e);
+        } catch (e) {
+            console.error('Failed to save user message:', e);
         }
 
-        // 3. Build conversation history for context
-        const chatState = chats[roomId];
-        const historyMessages = chatState?.messages || [];
-        
-        // Build Qwen/ChatML multi-turn conversation format
-        // Limit to last N messages to avoid token overflow
+        // 3. Build conversation history
+        // [FIX] Snapshot chats synchronously before setChats resolved
+        //       Use a stable snapshot via functional update peek
+        const chatSnapshot = chats[roomId];
+        const historyMessages = (chatSnapshot?.messages || []).filter(
+            m => m.id !== tempId // exclude the message we just added (not yet in state)
+        );
+
         const MAX_HISTORY = 20;
-
         const recentMessages = historyMessages.slice(-MAX_HISTORY);
-        
-        let conversationPrompt = `<|im_start|>system\nYou are Sparkle AI, a friendly and helpful AI assistant. Your name is Sparkle AI. You must NEVER identify as Claude or any other AI. Provide concise, clear, and professional responses. If asked for your name, always say "I am Sparkle AI".<|im_end|>\n`;
 
-        // Add previous messages as context
-        for (const msg of recentMessages) {
-            const isAi = msg.user_id === 'ai-assistant' || msg.meta?.ai;
-            const role = isAi ? 'assistant' : 'user';
-            conversationPrompt += `<|im_start|>${role}\n${msg.content}<|im_end|>\n`;
+        // 4. Abort any previous generation (NOT download)
+        if (generationAbortRef.current) {
+            generationAbortRef.current.abort();
         }
+        generationAbortRef.current = new AbortController();
 
-        // Add the current user message
-        conversationPrompt += `<|im_start|>user\n${content}<|im_end|>\n<|im_start|>assistant\n`;
-
-        // 4. Generate Response with full context
-        isAiDone.current = false;
-        
-        // [NEW] Use AbortController for real-time stopping
-        if (abortControllerRef.current) abortControllerRef.current.abort();
-        abortControllerRef.current = new AbortController();
-
+        // [FIX] Real streaming: update currentAiOp.content with each token
         const onToken = (token) => {
-            // Background buffering, but we don't update UI until done (Gemini-style reveal)
-            // We just keep the skeleton spinning.
+            setChats(prev => {
+                const chat = prev[roomId];
+                if (!chat || !chat.currentAiOp || chat.currentAiOp.id !== operationId) return prev;
+                return {
+                    ...prev,
+                    [roomId]: {
+                        ...chat,
+                        isAiThinking: false,
+                        currentAiOp: {
+                            ...chat.currentAiOp,
+                            content: (chat.currentAiOp.content || '') + token,
+                            isStreaming: true,
+                            finished: false
+                        }
+                    }
+                };
+            });
         };
 
         const onDone = async (fullText) => {
+            // Use functional update to get latest state
             setChats(prev => {
-                if (!prev[roomId]) return prev;
                 const chat = prev[roomId];
+                if (!chat) return prev;
                 const op = chat.currentAiOp;
-                
-                // If the operation is already finished or doesn't match, ignore
                 if (!op || op.id !== operationId || op.finished) return prev;
+
+                // Determine final text: for groq streaming, fullText may be empty
+                // because tokens already accumulated in content. Use whichever is longer.
+                const finalText = fullText && fullText.length > (op.content || '').length
+                    ? fullText
+                    : (op.content || fullText || '');
 
                 return {
                     ...prev,
                     [roomId]: {
                         ...chat,
-                        isAiThinking: false, 
-                        currentAiOp: { ...op, content: fullText, isStreaming: false, finished: true },
-                        // Mark user's message as 'seen'
-                        messages: chat.messages.map(m => 
-                            m.meta?.operationId === operationId && (m.user_id !== 'ai-assistant' && !m.meta?.ai)
+                        isAiThinking: false,
+                        currentAiOp: {
+                            ...op,
+                            content: finalText,
+                            isStreaming: false,
+                            finished: true
+                        },
+                        messages: chat.messages.map(m =>
+                            m.meta?.operationId === operationId && m.user_id !== 'ai-assistant' && !m.meta?.ai
                                 ? { ...m, status: 'seen' }
                                 : m
                         )
@@ -308,16 +353,43 @@ export function AiChatProvider({ children, socket }) {
                 };
             });
 
-            // Persist to Server
             await saveAiMessage(roomId, fullText, operationId);
         };
 
         const onError = (error) => {
-            if (error === 'Aborted' || error?.name === 'AbortError') {
-                console.log("[AiChatContext] AI Generation Aborted by user");
+            if (error === 'Aborted' || (typeof error === 'object' && error?.name === 'AbortError')) {
+                console.log('[AiChatContext] AI Generation Aborted');
+                // Clear streaming op cleanly
+                setChats(prev => {
+                    if (!prev[roomId]) return prev;
+                    const chat = prev[roomId];
+                    const op = chat.currentAiOp;
+                    if (!op || op.id !== operationId) return prev;
+                    // If we have partial content, save it; otherwise just clear
+                    if (op.content && op.content.trim()) {
+                        // Keep the partial message as-is but mark done
+                        return {
+                            ...prev,
+                            [roomId]: {
+                                ...chat,
+                                isAiThinking: false,
+                                currentAiOp: { ...op, isStreaming: false, finished: true }
+                            }
+                        };
+                    }
+                    return {
+                        ...prev,
+                        [roomId]: {
+                            ...chat,
+                            isAiThinking: false,
+                            currentAiOp: null
+                        }
+                    };
+                });
                 return;
             }
-            console.error(`${aiProvider} AI Error:`, error);
+
+            console.error(`[${aiProvider}] AI Error:`, error);
             setChats(prev => {
                 if (!prev[roomId]) return prev;
                 return {
@@ -326,19 +398,22 @@ export function AiChatProvider({ children, socket }) {
                         ...prev[roomId],
                         isAiThinking: false,
                         currentAiOp: null,
-                        messages: [...prev[roomId].messages, {
-                            id: `err-${Date.now()}`,
-                            room_id: roomId,
-                            type: 'system',
-                            content: `Error (${aiProvider}): ${error}`,
-                            created_at: new Date().toISOString()
-                        }]
+                        messages: [
+                            ...prev[roomId].messages,
+                            {
+                                id: `err-${Date.now()}`,
+                                room_id: roomId,
+                                type: 'system',
+                                content: `AI Error (${aiProvider}): ${error}`,
+                                created_at: new Date().toISOString()
+                            }
+                        ]
                     }
                 };
             });
         };
 
-        // ROUTE TO PROVIDER
+        // 5. Route to provider
         if (aiProvider === 'groq') {
             const systemPrompt = `You are Sparkle AI, a friendly and helpful AI assistant. Your name is Sparkle AI. You must NEVER identify as Claude or any other AI. Provide concise, clear, and professional responses. If asked for your name, always say "I am Sparkle AI".`;
             const groqMessages = [
@@ -347,47 +422,72 @@ export function AiChatProvider({ children, socket }) {
                     role: m.user_id === 'ai-assistant' || m.meta?.ai ? 'assistant' : 'user',
                     content: m.content
                 })),
-                { role: 'user', content: content }
+                { role: 'user', content }
             ];
-            groqService.generateStream(groqMessages, onToken, onDone, onError, abortControllerRef.current.signal);
+            groqService.generateStream(
+                groqMessages,
+                onToken,
+                onDone,
+                onError,
+                generationAbortRef.current.signal
+            );
         } else {
-            transformersService.generateStream(conversationPrompt, onToken, onDone, onError, abortControllerRef.current.signal);
+            // Local: build ChatML prompt
+            let conversationPrompt = `<|im_start|>system\nYou are Sparkle AI, a friendly and helpful AI assistant. Your name is Sparkle AI. Provide concise, clear responses. If asked your name, say "I am Sparkle AI".<|im_end|>\n`;
+
+            for (const msg of recentMessages) {
+                const isAiMsg = msg.user_id === 'ai-assistant' || msg.meta?.ai;
+                const role = isAiMsg ? 'assistant' : 'user';
+                if (msg.content) {
+                    conversationPrompt += `<|im_start|>${role}\n${msg.content}<|im_end|>\n`;
+                }
+            }
+
+            // Add current user message
+            conversationPrompt += `<|im_start|>user\n${content}<|im_end|>\n<|im_start|>assistant\n`;
+
+            transformersService.generateStream(
+                conversationPrompt,
+                onToken,
+                onDone,
+                onError,
+                generationAbortRef.current.signal
+            );
         }
     };
 
+    // ─── Save AI Message to Server ───────────────────────────────────────────────
     const saveAiMessage = async (roomId, content, operationId) => {
-         try {
+        try {
             const res = await fetch(`${import.meta.env.VITE_API_URL}/api/ai/save`, {
                 method: 'POST',
-                headers: { 
+                headers: {
                     'Content-Type': 'application/json',
-                    Authorization: `Bearer ${token}` 
+                    Authorization: `Bearer ${token}`
                 },
                 body: JSON.stringify({ roomId, content, operationId })
             });
             const data = await res.json();
-            
+
             if (data.ok) {
-                // [FIX] After save, add the AI message to messages array and clear currentAiOp
                 setChats(prev => {
                     if (!prev[roomId]) return prev;
-                    
-                    // [FIX] Deduplicate before adding! 
-                    // This prevents duplication on the sender tab if the socket arrives before the fetch response.
-                    const exists = prev[roomId].messages.some(m => 
-                        String(m.id) === String(data.id) || 
+
+                    const exists = prev[roomId].messages.some(m =>
+                        String(m.id) === String(data.id) ||
                         (m.meta?.operationId === operationId && (m.user_id === 'ai-assistant' || m.meta?.ai))
                     );
-                    
+
                     if (exists) {
                         return {
                             ...prev,
                             [roomId]: {
                                 ...prev[roomId],
-                                currentAiOp: null, // Still clear the streaming op
+                                currentAiOp: null,
                                 messages: prev[roomId].messages.map(m => {
-                                    const isMatch = String(m.id) === String(data.id) || 
-                                                   (m.meta?.operationId === operationId && (m.user_id === 'ai-assistant' || m.meta?.ai));
+                                    const isMatch =
+                                        String(m.id) === String(data.id) ||
+                                        (m.meta?.operationId === operationId && (m.user_id === 'ai-assistant' || m.meta?.ai));
                                     return isMatch ? { ...m, id: data.id, content } : m;
                                 })
                             }
@@ -404,77 +504,103 @@ export function AiChatProvider({ children, socket }) {
                         type: 'text',
                         meta: { ai: true, operationId }
                     };
+
                     return {
                         ...prev,
                         [roomId]: {
                             ...prev[roomId],
-                            currentAiOp: null, // Clear the streaming op
+                            currentAiOp: null,
                             messages: [...prev[roomId].messages, newMsg]
                         }
                     };
                 });
             }
-         } catch(e) {
-             console.error("Failed to save AI message:", e);
-         }
+        } catch (e) {
+            console.error('Failed to save AI message:', e);
+            // Even if save fails, clear the streaming op so UI doesn't hang
+            setChats(prev => {
+                if (!prev[roomId]) return prev;
+                return {
+                    ...prev,
+                    [roomId]: { ...prev[roomId], currentAiOp: null }
+                };
+            });
+        }
     };
 
-
+    // ─── Cancel / Pause / Stop ───────────────────────────────────────────────────
     const cancelAi = () => {
-        // [FIX] Use the AbortController to actually stop the model work
-        if (abortControllerRef.current) {
-            abortControllerRef.current.abort();
-            console.log("[AiChatContext] User clicked Stop/Cancel");
+        // [FIX] Only abort generation, not download
+        if (generationAbortRef.current) {
+            generationAbortRef.current.abort();
+            generationAbortRef.current = null;
+            console.log('[AiChatContext] User clicked Stop');
         }
 
         setChats(prev => {
-             // Clear any active thinking/streaming states across all rooms
-             const newState = { ...prev };
-             Object.keys(newState).forEach(roomId => {
-                 if (newState[roomId].currentAiOp || newState[roomId].isAiThinking) {
+            const newState = { ...prev };
+            Object.keys(newState).forEach(roomId => {
+                if (newState[roomId].currentAiOp || newState[roomId].isAiThinking) {
                     newState[roomId] = {
                         ...newState[roomId],
                         isAiThinking: false,
                         currentAiOp: null
                     };
-                 }
-             });
-             return newState;
+                }
+            });
+            return newState;
         });
     };
 
-    // Socket: We still listen for 'new_message' to sync history!
+    const cancelDownload = () => {
+        if (downloadAbortRef.current) {
+            downloadAbortRef.current.abort();
+            downloadAbortRef.current = null;
+        }
+        setIsModelLoading(false);
+        setModelProgress(null);
+        setIsDownloading(false);
+        setIsPaused(false);
+    };
+
+    const pauseDownload = () => {
+        if (downloadAbortRef.current) {
+            downloadAbortRef.current.abort();
+            downloadAbortRef.current = null;
+        }
+        setIsPaused(true);
+        setIsModelLoading(false);
+    };
+
+    // ─── Socket: sync new messages ───────────────────────────────────────────────
     useEffect(() => {
         if (!socket) return;
         const handleNewMessage = (msg) => {
             setChats(prev => {
                 const targetRoomId = msg.room_id;
                 if (!prev[targetRoomId]) return prev;
-                
+
                 const isAi = msg.meta?.ai || msg.author_name === 'Assistant';
-                
-                // [FIX] Strict Deduplication: Check ID OR (Operation ID + Role)
-                // This prevents "double-send" and "triple-response" by ensuring 
-                // we don't accidentally match a User Query against an AI Response.
+
                 const exists = prev[targetRoomId].messages.some(m => {
                     const mIsAi = m.meta?.ai || m.user_id === 'ai-assistant';
-                    return String(m.id) === String(msg.id) || 
-                           (msg.meta?.operationId && m.meta?.operationId === msg.meta.operationId && isAi === mIsAi);
+                    return (
+                        String(m.id) === String(msg.id) ||
+                        (msg.meta?.operationId && m.meta?.operationId === msg.meta.operationId && isAi === mIsAi)
+                    );
                 });
-                
-                // [FIX] Check if this message resolves the current AI operation
+
                 const currentOp = prev[targetRoomId].currentAiOp;
-                const matchesOp = currentOp && msg.meta && msg.meta.operationId === currentOp.id && isAi;
+                const matchesOp = currentOp && msg.meta?.operationId === currentOp.id && isAi;
 
                 if (exists) {
-                    // Update the existing message (replaces temp/optimistic with real canonical message)
                     const updatedMessages = prev[targetRoomId].messages.map(m => {
                         const mIsAi = m.meta?.ai || m.user_id === 'ai-assistant';
-                        const isMatch = String(m.id) === String(msg.id) || 
-                                       (msg.meta?.operationId && m.meta?.operationId === msg.meta.operationId && isAi === mIsAi);
+                        const isMatch =
+                            String(m.id) === String(msg.id) ||
+                            (msg.meta?.operationId && m.meta?.operationId === msg.meta.operationId && isAi === mIsAi);
                         return isMatch ? msg : m;
                     });
-
                     return {
                         ...prev,
                         [targetRoomId]: {
@@ -485,22 +611,22 @@ export function AiChatProvider({ children, socket }) {
                         }
                     };
                 }
-                
-                // [NEW] If this is an AI response, also mark the corresponding user query as 'seen'
-                // This ensures "Seen" status (double ticks) syncs across tabs instantly.
-                const finalMessages = isAi 
-                    ? [...prev[targetRoomId].messages.map(m => 
-                        (m.meta?.operationId === msg.meta?.operationId && !m.meta?.ai) 
-                        ? { ...m, status: 'seen' } 
-                        : m
-                      ), msg]
+
+                const finalMessages = isAi
+                    ? [
+                        ...prev[targetRoomId].messages.map(m =>
+                            m.meta?.operationId === msg.meta?.operationId && !m.meta?.ai
+                                ? { ...m, status: 'seen' }
+                                : m
+                        ),
+                        msg
+                    ]
                     : [...prev[targetRoomId].messages, msg];
 
                 return {
                     ...prev,
                     [targetRoomId]: {
                         ...prev[targetRoomId],
-                        // If it matches, clear the temp op because we now have the real message
                         currentAiOp: matchesOp ? null : prev[targetRoomId].currentAiOp,
                         isAiThinking: matchesOp ? false : prev[targetRoomId].isAiThinking,
                         messages: finalMessages
@@ -508,20 +634,19 @@ export function AiChatProvider({ children, socket }) {
                 };
             });
         };
+
         socket.on('new_message', handleNewMessage);
         return () => socket.off('new_message', handleNewMessage);
     }, [socket]);
-    
-    // ... Copy other helpers like syncMessages ...
+
+    // ─── Sync / Utilities ────────────────────────────────────────────────────────
     const syncMessages = useCallback(async (roomId) => {
-        // ... same implementation as before ...
-         try {
+        try {
             const res = await fetch(`${import.meta.env.VITE_API_URL}/api/rooms/${roomId}/messages`, {
                 headers: { Authorization: `Bearer ${token}` }
             });
             if (res.ok) {
                 const data = await res.json();
-                // [FIX] Deduplicate messages by ID
                 const seen = new Set();
                 const uniqueMessages = data.filter(m => {
                     if (seen.has(m.id)) return false;
@@ -536,26 +661,10 @@ export function AiChatProvider({ children, socket }) {
                     }
                 }));
             }
-        } catch(e) {}
+        } catch (e) {
+            console.error('syncMessages error:', e);
+        }
     }, [token]);
-
-
-    const cancelDownload = () => {
-        if (abortControllerRef.current) {
-            abortControllerRef.current.abort();
-            setIsModelLoading(false);
-            setModelProgress(null);
-        }
-    };
-
-    const pauseDownload = () => {
-        if (abortControllerRef.current) {
-            abortControllerRef.current.abort();
-            setIsPaused(true);
-            setIsModelLoading(false);
-            // We keep modelProgress so UI shows where we stopped
-        }
-    };
 
     const clearAiChat = (roomId) => {
         setChats(prev => {
@@ -572,42 +681,68 @@ export function AiChatProvider({ children, socket }) {
         });
     };
 
+    const setMessages = useCallback((roomId, msgs) => {
+        setChats(prev => ({
+            ...prev,
+            [roomId]: {
+                ...(prev[roomId] || {}),
+                messages: msgs
+            }
+        }));
+    }, []);
+
+    const deleteMessageLocal = useCallback((roomId, messageId) => {
+        setChats(prev => {
+            if (!prev[roomId]) return prev;
+            return {
+                ...prev,
+                [roomId]: {
+                    ...prev[roomId],
+                    messages: prev[roomId].messages.filter(m => m.id !== messageId)
+                }
+            };
+        });
+    }, []);
+
+    const regenerate = useCallback((roomId, prompt, _aiMsgIndex, _aiMessageId) => {
+        // Calls sendQuery without adding extra user message
+        // Since we already deleted the old AI message, just send the prompt
+        sendQuery(roomId, prompt, null);
+    }, [sendQuery]); // eslint-disable-line react-hooks/exhaustive-deps
+
     const resetAi = async () => {
         await transformersService.reset();
         setIsModelLoading(false);
         setModelProgress(null);
-        // Force reload of page to clear memory state?
+        setIsLocalModelSetupComplete(false);
         window.location.reload();
     };
 
     return (
-        <AiChatContext.Provider value={{ 
-            chats, 
-            getChatState, 
-            registerRoom, 
-            sendQuery, 
+        <AiChatContext.Provider value={{
+            chats,
+            getChatState,
+            registerRoom,
+            sendQuery,
             cancelAi,
-            clearAiChat,    // [FIX] Added
+            clearAiChat,
             syncMessages,
-            initEngine,     // [NEW]
-            isModelLoading, // [NEW]
-            modelProgress,   // [NEW]
-            isDownloading,   // [NEW]
-            isSetupComplete, 
-            setIsSetupComplete: (val) => {
-                setIsSetupComplete(val);
-                localStorage.setItem('sparkle_ai_setup_complete', val ? 'true' : 'false');
-            },
+            setMessages,
+            deleteMessageLocal,
+            regenerate,
+            initEngine,
+            isModelLoading,
+            modelProgress,
+            isDownloading,
+            isSetupComplete,
+            setIsSetupComplete,
             isLocalModelSetupComplete,
-            setIsLocalModelSetupComplete: (val) => {
-                setIsLocalModelSetupComplete(val);
-                localStorage.setItem('sparkle_ai_local_setup_complete', val ? 'true' : 'false');
-            },
-            isPaused,        // [NEW]
-            cancelDownload,  // [NEW]
-            pauseDownload,   // [NEW]
-            resetAi,         // [NEW]
-            aiProvider,      // [NEW]
+            setIsLocalModelSetupComplete,
+            isPaused,
+            cancelDownload,
+            pauseDownload,
+            resetAi,
+            aiProvider,
             setAiProvider: (p) => {
                 setAiProvider(p);
                 localStorage.setItem('sparkle_ai_provider', p);
