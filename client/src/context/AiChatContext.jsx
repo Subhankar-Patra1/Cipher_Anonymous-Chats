@@ -41,7 +41,7 @@ export function AiChatProvider({ children, socket }) {
     useEffect(() => {
         const existingKey = localStorage.getItem('groq_api_key');
         if (!existingKey || existingKey === 'undefined') {
-            groqService.setApiKey('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');
+            groqService.setApiKey(import.meta.env.VITE_GROQ_API_KEY);
         }
     }, []);
 
